@@ -2,15 +2,22 @@
 package api
 
 import (
+	"crypto/rsa"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/auth"
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
 	"github.com/konstpic/sharx-code/v2/node/xray"
@@ -29,12 +36,16 @@ func try(fn func()) {
 
 // Server provides REST API for managing the node.
 type Server struct {
-	port       int
-	apiKey     string
+	port        int
+	apiKey      string
 	xrayManager *xray.Manager
-	httpServer *http.Server
-	certFile   string
-	keyFile    string
+	httpServer  *http.Server
+	certFile    string
+	keyFile     string
+	// clientCAFile, if set with cert/key, enables mTLS (panel must present a cert signed by this CA).
+	clientCAFile string
+	// pairing, if set, enables HTTPS + mandatory mTLS + JWT (SECRET_KEY bundle); overrides file-based TLS.
+	pairing *auth.Bundle
 }
 
 // NewServer creates a new API server instance.
@@ -50,6 +61,17 @@ func NewServer(port int, apiKey string, xrayManager *xray.Manager) *Server {
 func (s *Server) SetTLS(certFile, keyFile string) {
 	s.certFile = certFile
 	s.keyFile = keyFile
+}
+
+// SetMTLSClientCA sets the PEM file with CA certificate(s) used to verify client certificates (panel).
+// Requires SetTLS; connections without a valid client cert are rejected before handlers run.
+func (s *Server) SetMTLSClientCA(caFile string) {
+	s.clientCAFile = caFile
+}
+
+// SetPairing configures TLS and JWT verification from a SECRET_KEY (base64 JSON) bundle.
+func (s *Server) SetPairing(b *auth.Bundle) {
+	s.pairing = b
 }
 
 // Start starts the HTTP server.
@@ -104,9 +126,53 @@ func (s *Server) Start() error {
 		IdleTimeout:  120 * time.Second, // Keep connections alive longer
 	}
 
+	if s.pairing != nil {
+		tlsCfg := &tls.Config{
+			Certificates: []tls.Certificate{s.pairing.TLSCert},
+			ClientCAs:    s.pairing.ClientCAPool,
+			ClientAuth:   tls.RequireAndVerifyClientCert,
+			MinVersion:   tls.VersionTLS12,
+		}
+		addr := fmt.Sprintf(":%d", s.port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		tlsLn := tls.NewListener(ln, tlsCfg)
+		logger.Infof("API server listening on port %d with HTTPS + mTLS + JWT (SECRET_KEY bundle)", s.port)
+		return s.httpServer.Serve(tlsLn)
+	}
+
 	if s.certFile != "" && s.keyFile != "" {
+		cert, err := tls.LoadX509KeyPair(s.certFile, s.keyFile)
+		if err != nil {
+			return fmt.Errorf("load TLS key pair: %w", err)
+		}
+		tlsCfg := &tls.Config{
+			Certificates: []tls.Certificate{cert},
+			MinVersion:   tls.VersionTLS12,
+		}
+		if s.clientCAFile != "" {
+			caPEM, err := os.ReadFile(s.clientCAFile)
+			if err != nil {
+				return fmt.Errorf("read client CA file: %w", err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(caPEM) {
+				return fmt.Errorf("no certificates parsed from client CA file %s", s.clientCAFile)
+			}
+			tlsCfg.ClientCAs = pool
+			tlsCfg.ClientAuth = tls.RequireAndVerifyClientCert
+			logger.Infof("API server mTLS enabled: client CA %s", s.clientCAFile)
+		}
+		addr := fmt.Sprintf(":%d", s.port)
+		ln, err := net.Listen("tcp", addr)
+		if err != nil {
+			return err
+		}
+		tlsLn := tls.NewListener(ln, tlsCfg)
 		logger.Infof("API server listening on port %d with HTTPS (cert: %s, key: %s)", s.port, s.certFile, s.keyFile)
-		return s.httpServer.ListenAndServeTLS(s.certFile, s.keyFile)
+		return s.httpServer.Serve(tlsLn)
 	}
 	
 	logger.Infof("API server listening on port %d", s.port)
@@ -141,6 +207,17 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		if s.pairing != nil {
+			if err := verifyBearerJWT(authHeader, s.pairing.JWTPublicKey); err != nil {
+				logger.Warningf("Request to %s rejected: JWT: %v", c.Request.URL.Path, err)
+				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+				c.Abort()
+				return
+			}
+			c.Next()
+			return
+		}
+
 		// Support both "Bearer <key>" and direct key
 		apiKey := authHeader
 		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
@@ -148,7 +225,7 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		}
 
 		if apiKey != s.apiKey {
-			logger.Warningf("Request to %s rejected: invalid API key (received: %s..., expected: %s...)", 
+			logger.Warningf("Request to %s rejected: invalid API key (received: %s..., expected: %s...)",
 				c.Request.URL.Path, apiKey[:min(8, len(apiKey))], s.apiKey[:min(8, len(s.apiKey))])
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
 			c.Abort()
@@ -158,6 +235,25 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 		logger.Debugf("Request to %s authenticated successfully", c.Request.URL.Path)
 		c.Next()
 	}
+}
+
+func verifyBearerJWT(authHeader string, pub *rsa.PublicKey) error {
+	if pub == nil {
+		return fmt.Errorf("jwt not configured")
+	}
+	if len(authHeader) < 8 || !strings.HasPrefix(authHeader, "Bearer ") {
+		return fmt.Errorf("missing bearer")
+	}
+	tokenStr := strings.TrimSpace(authHeader[7:])
+	parser := jwt.NewParser(
+		jwt.WithValidMethods([]string{jwt.SigningMethodRS256.Alg()}),
+		jwt.WithIssuer(auth.JWTIssuer),
+		jwt.WithAudience(auth.JWTAudience),
+	)
+	_, err := parser.Parse(tokenStr, func(t *jwt.Token) (interface{}, error) {
+		return pub, nil
+	})
+	return err
 }
 
 // min returns the minimum of two integers
@@ -320,9 +416,9 @@ func (s *Server) getServiceLogs(c *gin.Context) {
 // No authentication required - this is the initial setup step.
 func (s *Server) register(c *gin.Context) {
 	type RegisterRequest struct {
-		ApiKey      string `json:"apiKey" binding:"required"`      // API key generated by panel
-		PanelURL    string `json:"panelUrl,omitempty"`              // Panel URL (optional)
-		NodeAddress string `json:"nodeAddress,omitempty"`          // Node address (optional)
+		ApiKey      string `json:"apiKey"`             // Legacy: API key from panel; optional when JWT pairing is active
+		PanelURL    string `json:"panelUrl,omitempty"` // Panel URL (optional)
+		NodeAddress string `json:"nodeAddress,omitempty"`
 	}
 
 	var req RegisterRequest
@@ -332,34 +428,54 @@ func (s *Server) register(c *gin.Context) {
 		return
 	}
 
-	logger.Infof("Registration request received: API key length=%d, PanelURL=%s, NodeAddress=%s", 
+	if s.pairing != nil {
+		authHeader := c.GetHeader("Authorization")
+		if err := verifyBearerJWT(authHeader, s.pairing.JWTPublicKey); err != nil {
+			logger.Warningf("Registration rejected: invalid JWT: %v", err)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Registration requires valid Bearer JWT (RS256)"})
+			return
+		}
+	} else if req.ApiKey == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "apiKey is required"})
+		return
+	}
+
+	logger.Infof("Registration request received: API key length=%d, PanelURL=%s, NodeAddress=%s",
 		len(req.ApiKey), req.PanelURL, req.NodeAddress)
 
 	// Check if node is already registered
 	logger.Infof("Checking if node is already registered...")
 	existingConfig := nodeConfig.GetConfig()
 	logger.Infof("Existing config check complete. API key present: %v", existingConfig.ApiKey != "")
-	if existingConfig.ApiKey != "" {
+	if s.pairing != nil {
+		if existingConfig.PanelURL != "" {
+			logger.Warningf("Node pairing already completed (panel URL set). Rejecting registration")
+			c.JSON(http.StatusConflict, gin.H{
+				"error":   "Node is already registered",
+				"message": "Remove node-config.json or clear panelUrl to re-register",
+			})
+			return
+		}
+	} else if existingConfig.ApiKey != "" {
 		logger.Warningf("Node is already registered. Rejecting registration attempt to prevent overwriting existing API key")
 		c.JSON(http.StatusConflict, gin.H{
-			"error": "Node is already registered. API key cannot be overwritten",
+			"error":   "Node is already registered. API key cannot be overwritten",
 			"message": "This node has already been registered. If you need to re-register, please remove the node-config.json file first",
 		})
 		return
 	}
 
-	// Save API key to config file (only if not already registered)
-	logger.Infof("Saving API key to config file...")
-	if err := nodeConfig.SetApiKey(req.ApiKey, false); err != nil {
-		logger.Errorf("Failed to save API key: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save API key: " + err.Error()})
-		return
+	if req.ApiKey != "" {
+		logger.Infof("Saving API key to config file...")
+		if err := nodeConfig.SetApiKey(req.ApiKey, false); err != nil {
+			logger.Errorf("Failed to save API key: %v", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save API key: " + err.Error()})
+			return
+		}
+		logger.Infof("API key saved to config file")
+		s.apiKey = req.ApiKey
+		logger.Infof("API key updated in server")
 	}
-	logger.Infof("API key saved to config file")
-
-	// Update API key in server (for immediate use)
-	s.apiKey = req.ApiKey
-	logger.Infof("API key updated in server")
 
 	// Save panel URL to config if provided
 	if req.PanelURL != "" {
@@ -387,7 +503,9 @@ func (s *Server) register(c *gin.Context) {
 	// Send response immediately (before initializing pusher to avoid any blocking)
 	response := gin.H{
 		"message": "Node registered successfully",
-		"apiKey":  req.ApiKey, // Return API key for confirmation
+	}
+	if req.ApiKey != "" {
+		response["apiKey"] = req.ApiKey
 	}
 	logger.Infof("Sending registration response: %+v", response)
 	
@@ -405,15 +523,14 @@ func (s *Server) register(c *gin.Context) {
 	// This ensures response is sent immediately without any blocking
 	logger.Infof("Starting log pusher initialization in background...")
 	go try(func() {
-		// First, ensure API key is set in pusher (this initializes pusher if needed)
-		nodeLogs.UpdateApiKey(req.ApiKey)
-		logger.Infof("Log pusher API key updated")
-		
+		if req.ApiKey != "" {
+			nodeLogs.UpdateApiKey(req.ApiKey)
+			logger.Infof("Log pusher API key updated")
+		}
 		if req.PanelURL != "" {
-			// Set panel URL (pusher should be initialized now with API key)
 			nodeLogs.SetPanelURL(req.PanelURL)
 			logger.Infof("Log pusher enabled: sending logs to %s", req.PanelURL)
-		} else {
+		} else if req.ApiKey != "" {
 			logger.Infof("Log pusher API key set (panel URL will be set when config is applied)")
 		}
 	})

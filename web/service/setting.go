@@ -82,11 +82,6 @@ var defaultValueMap = map[string]string{
 	"subJsonNoises":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
-	"subEncryptHappV2RayTun":      "false",
-	"subOnlyHappV2RayTun":          "false",
-	"subShowOnlyHappV2RayTun":      "false",
-	"subHideConfigLinks":           "false",
-	"subAutoRotateKeys":            "false", // Automatically rotate client keys before subscription update interval
 	"subHeaders":                   "{}",   // JSON string for subscription headers
 	"subProviderID":                "",     // Provider ID for Happ extended headers
 	"subProviderIDMethod":          "url",  // Method to send Provider ID: "url" (query parameter), "header" (HTTP header), "none" (disabled)
@@ -715,38 +710,6 @@ func (s *SettingService) GetSubJsonRules() (string, error) {
 	return s.getString("subJsonRules")
 }
 
-func (s *SettingService) GetSubEncryptHappV2RayTun() (bool, error) {
-	return s.getBool("subEncryptHappV2RayTun")
-}
-
-func (s *SettingService) SetSubEncryptHappV2RayTun(value bool) error {
-	return s.setBool("subEncryptHappV2RayTun", value)
-}
-
-func (s *SettingService) GetSubOnlyHappV2RayTun() (bool, error) {
-	return s.getBool("subOnlyHappV2RayTun")
-}
-
-func (s *SettingService) SetSubOnlyHappV2RayTun(value bool) error {
-	return s.setBool("subOnlyHappV2RayTun", value)
-}
-
-func (s *SettingService) GetSubHideConfigLinks() (bool, error) {
-	return s.getBool("subHideConfigLinks")
-}
-
-func (s *SettingService) GetSubShowOnlyHappV2RayTun() (bool, error) {
-	return s.getBool("subShowOnlyHappV2RayTun")
-}
-
-func (s *SettingService) GetSubAutoRotateKeys() (bool, error) {
-	return s.getBool("subAutoRotateKeys")
-}
-
-func (s *SettingService) SetSubAutoRotateKeys(value bool) error {
-	return s.setBool("subAutoRotateKeys", value)
-}
-
 func (s *SettingService) GetSubProviderID() (string, error) {
 	return s.getString("subProviderID")
 }
@@ -805,10 +768,6 @@ func (s *SettingService) GetSubPageBackgroundUrl() (string, error) {
 
 func (s *SettingService) SetSubPageBackgroundUrl(url string) error {
 	return s.setString("subPageBackgroundUrl", url)
-}
-
-func (s *SettingService) SetSubHideConfigLinks(value bool) error {
-	return s.setBool("subHideConfigLinks", value)
 }
 
 // GetSubHeaders retrieves subscription headers configuration as JSON string

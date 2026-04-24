@@ -5,13 +5,11 @@ package sub
 import (
 	"context"
 	"crypto/tls"
-	"html/template"
 	"io"
 	"io/fs"
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -25,21 +23,6 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
-
-// setEmbeddedTemplates parses and sets embedded templates on the engine
-func setEmbeddedTemplates(engine *gin.Engine) error {
-	t, err := template.New("").Funcs(engine.FuncMap).ParseFS(
-		webpkg.EmbeddedHTML(),
-		"html/common/page.html",
-		"html/component/aThemeSwitch.html",
-		"html/settings/panel/subscription/subpage.html",
-	)
-	if err != nil {
-		return err
-	}
-	engine.SetHTMLTemplate(t)
-	return nil
-}
 
 // Server represents the subscription server that serves subscription links and JSON configurations.
 type Server struct {
@@ -108,51 +91,11 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		c.Set("base_path", basePath)
 	})
 
-	Encrypt, err := s.settingService.GetSubEncrypt()
-	if err != nil {
-		return nil, err
-	}
-
-	ShowInfo, err := s.settingService.GetSubShowInfo()
-	if err != nil {
-		return nil, err
-	}
-
 	RemarkModel, err := s.settingService.GetRemarkModel()
 	if err != nil {
 		RemarkModel = "-ieo"
 	}
 
-	SubUpdates, err := s.settingService.GetSubUpdates()
-	if err != nil {
-		SubUpdates = "10"
-	}
-
-	SubJsonFragment, err := s.settingService.GetSubJsonFragment()
-	if err != nil {
-		SubJsonFragment = ""
-	}
-
-	SubJsonNoises, err := s.settingService.GetSubJsonNoises()
-	if err != nil {
-		SubJsonNoises = ""
-	}
-
-	SubJsonMux, err := s.settingService.GetSubJsonMux()
-	if err != nil {
-		SubJsonMux = ""
-	}
-
-	SubJsonRules, err := s.settingService.GetSubJsonRules()
-	if err != nil {
-		SubJsonRules = ""
-	}
-
-	// Profile title is now only available in subscription headers (profileTitle)
-	// No longer using subTitle from base settings
-	SubTitle := ""
-
-	// set per-request localizer from headers/cookies
 	engine.Use(locale.LocalizerMiddleware())
 
 	// register i18n function similar to web server
@@ -161,15 +104,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	engine.SetFuncMap(map[string]any{"i18n": i18nWebFunc})
 
-	// Templates: prefer embedded; fallback to disk if necessary
-	if err := setEmbeddedTemplates(engine); err != nil {
-		logger.Warning("sub: failed to parse embedded templates:", err)
-		if files, derr := s.getHtmlFiles(); derr == nil {
-			engine.LoadHTMLFiles(files...)
-		} else {
-			logger.Error("sub: no templates available (embedded parse and disk load failed)", err, derr)
-		}
-	}
+	// Legacy subpage.html removed: HTML requests redirect to the React panel page.
 
 	// Assets: use disk if present, fallback to embedded
 	// Serve under both root (/assets) and under the subscription path prefix (LinksPath + "assets")
@@ -244,35 +179,9 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 
 	g := engine.Group("/")
 
-	s.sub = NewSUBController(
-		g, LinksPath, JsonPath, subJsonEnable, Encrypt, ShowInfo, RemarkModel, SubUpdates,
-		SubJsonFragment, SubJsonNoises, SubJsonMux, SubJsonRules, SubTitle)
+	s.sub = NewSUBController(g, LinksPath, JsonPath, subJsonEnable, RemarkModel)
 
 	return engine, nil
-}
-
-// getHtmlFiles loads templates from local folder (used in debug mode)
-func (s *Server) getHtmlFiles() ([]string, error) {
-	dir, _ := os.Getwd()
-	files := []string{}
-	// common layout
-	common := filepath.Join(dir, "web", "html", "common", "page.html")
-	if _, err := os.Stat(common); err == nil {
-		files = append(files, common)
-	}
-	// components used
-	theme := filepath.Join(dir, "web", "html", "component", "aThemeSwitch.html")
-	if _, err := os.Stat(theme); err == nil {
-		files = append(files, theme)
-	}
-	// page itself
-	page := filepath.Join(dir, "web", "html", "subpage.html")
-	if _, err := os.Stat(page); err == nil {
-		files = append(files, page)
-	} else {
-		return nil, err
-	}
-	return files, nil
 }
 
 // Start initializes and starts the subscription server with configured settings.

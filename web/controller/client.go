@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
@@ -23,6 +25,14 @@ type ClientController struct {
 	xrayService   service.XrayService
 }
 
+// clientShareLinksBuilder generates per-inbound protocol links for the panel (optional; set from main to avoid import cycles with sub).
+var clientShareLinksBuilder func(client *model.ClientEntity, host string) []model.ClientInboundShareLink
+
+// SetClientShareLinksBuilder registers the link builder (call from main after importing sub).
+func SetClientShareLinksBuilder(fn func(client *model.ClientEntity, host string) []model.ClientInboundShareLink) {
+	clientShareLinksBuilder = fn
+}
+
 // NewClientController creates a new ClientController and sets up its routes.
 func NewClientController(g *gin.RouterGroup) *ClientController {
 	a := &ClientController{
@@ -37,6 +47,7 @@ func NewClientController(g *gin.RouterGroup) *ClientController {
 func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.GET("/list", a.getClients)
 	g.GET("/get/:id", a.getClient)
+	g.GET("/links/:id", a.getClientShareLinks)
 	g.POST("/add", a.addClient)
 	g.POST("/update/:id", a.updateClient)
 	g.POST("/del/:id", a.deleteClient)
@@ -63,7 +74,19 @@ func (a *ClientController) getClients(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	jsonObj(c, clients, nil)
+	host := requestHostOnly(c)
+	tls := c.Request.TLS != nil
+	inboundSvc := service.InboundService{}
+	cards := make([]*model.ClientCardView, 0, len(clients))
+	for _, cl := range clients {
+		card, err := a.clientService.ClientToCardView(cl, inboundSvc, host, tls, true)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
+		cards = append(cards, card)
+	}
+	jsonObj(c, cards, nil)
 }
 
 // getClient retrieves a specific client by its ID.
@@ -83,7 +106,78 @@ func (a *ClientController) getClient(c *gin.Context) {
 		jsonMsg(c, "Client not found or access denied", nil)
 		return
 	}
-	jsonObj(c, client, nil)
+	inboundSvc := service.InboundService{}
+	card, err := a.clientService.ClientToCardView(client, inboundSvc, requestHostOnly(c), c.Request.TLS != nil, true)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, card, nil)
+}
+
+func requestHostOnly(c *gin.Context) string {
+	h := c.Request.Host
+	if i := strings.Index(h, ":"); i >= 0 {
+		return h[:i]
+	}
+	return h
+}
+
+// panelHostForShareLinks returns Host for building share links: request Host, then sub domain, then web domain setting.
+func panelHostForShareLinks(c *gin.Context) string {
+	h := strings.TrimSpace(requestHostOnly(c))
+	if h != "" {
+		return h
+	}
+	ss := service.SettingService{}
+	if d, err := ss.GetSubDomain(); err == nil {
+		d = strings.TrimSpace(d)
+		if d != "" {
+			return d
+		}
+	}
+	if d, err := ss.GetWebDomain(); err == nil {
+		d = strings.TrimSpace(d)
+		if d == "" {
+			return ""
+		}
+		if strings.Contains(d, "://") {
+			if u, err := url.Parse(d); err == nil && u.Host != "" {
+				host := u.Host
+				if i := strings.Index(host, ":"); i >= 0 {
+					host = host[:i]
+				}
+				return host
+			}
+		}
+		return d
+	}
+	return ""
+}
+
+// getClientShareLinks returns per-inbound protocol links for the client (panel admin).
+func (a *ClientController) getClientShareLinks(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid client ID", err)
+		return
+	}
+	user := session.GetLoginUser(c)
+	client, err := a.clientService.GetClient(id)
+	if err != nil {
+		jsonMsg(c, "Failed to get client", err)
+		return
+	}
+	if client.UserId != user.Id {
+		jsonMsg(c, "Client not found or access denied", nil)
+		return
+	}
+	host := panelHostForShareLinks(c)
+	if clientShareLinksBuilder == nil {
+		jsonObj(c, []model.ClientInboundShareLink{}, nil)
+		return
+	}
+	jsonObj(c, clientShareLinksBuilder(client, host), nil)
 }
 
 // addClient creates a new client.
@@ -356,6 +450,11 @@ func (a *ClientController) updateClient(c *gin.Context) {
 			if commentVal, exists := updateData["comment"]; exists {
 				if comment, ok := commentVal.(string); ok {
 					client.Comment = comment
+				}
+			}
+			if announceVal, exists := updateData["announce"]; exists {
+				if announce, ok := announceVal.(string); ok {
+					client.Announce = announce
 				}
 			}
 			// Handle reset - can be 0 (disabled), so check if key exists

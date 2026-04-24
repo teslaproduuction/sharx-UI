@@ -2273,6 +2273,9 @@ func (t *Tgbot) BuildInboundClientDataMessage(inbound_remark string, protocol mo
 	case model.Shadowsocks:
 		message = t.I18nBot("tgbot.messages.inbound_client_data_pass", "InboundRemark=="+inbound_remark, "ClientPass=="+client_ShPassword, "ClientEmail=="+client_Email, "ClientTraffic=="+traffic_value, "ClientExp=="+expiryTime, "ClientComment=="+client_Comment)
 
+	case model.Hysteria, model.Hysteria2:
+		message = t.I18nBot("tgbot.messages.inbound_client_data_pass", "InboundRemark=="+inbound_remark, "ClientPass=="+client_TrPassword, "ClientEmail=="+client_Email, "ClientTraffic=="+traffic_value, "ClientExp=="+expiryTime, "ClientComment=="+client_Comment)
+
 	default:
 		return "", errors.New("unknown protocol")
 	}
@@ -2350,6 +2353,21 @@ func (t *Tgbot) BuildJSONForProtocol(protocol model.Protocol) (string, error) {
             }]
         }`, client_Method, client_ShPassword, client_Email, client_TotalGB, client_ExpiryTime, client_Enable, client_TgID, client_SubID, client_Comment, client_Reset)
 
+	case model.Hysteria, model.Hysteria2:
+		jsonString = fmt.Sprintf(`{
+            "clients": [{
+                "auth": "%s",
+                "email": "%s",
+                "totalGB": %d,
+                "expiryTime": %d,
+                "enable": %t,
+                "tgId": "%s",
+                "subId": "%s",
+                "comment": "%s",
+                "reset": %d
+            }]
+        }`, client_TrPassword, client_Email, client_TotalGB, client_ExpiryTime, client_Enable, client_TgID, client_SubID, client_Comment, client_Reset)
+
 	default:
 		return "", errors.New("unknown protocol")
 	}
@@ -2409,6 +2427,8 @@ func (t *Tgbot) SubmitAddClient() (bool, error) {
 	// Set password based on protocol
 	switch inbound.Protocol {
 	case model.Trojan:
+		clientEntity.Password = client_TrPassword
+	case model.Hysteria, model.Hysteria2:
 		clientEntity.Password = client_TrPassword
 	case model.Shadowsocks:
 		clientEntity.Password = client_ShPassword
@@ -2568,24 +2588,13 @@ func (t *Tgbot) buildSubscriptionURLs(email string) (string, string, error) {
 		return "", "", errors.New("у клиента не установлен Subscription ID")
 	}
 
-	// Gather settings to construct absolute URLs
 	subDomain, _ := t.settingService.GetSubDomain()
-	subPort, _ := t.settingService.GetSubPort()
-	subPath, _ := t.settingService.GetSubPath()
-	subJsonPath, _ := t.settingService.GetSubJsonPath()
 	subJsonEnable, _ := t.settingService.GetSubJsonEnable()
 	subKeyFile, _ := t.settingService.GetSubKeyFile()
 	subCertFile, _ := t.settingService.GetSubCertFile()
-
 	tls := (subKeyFile != "" && subCertFile != "")
-	scheme := "http"
-	if tls {
-		scheme = "https"
-	}
 
-	// Fallbacks
 	if subDomain == "" {
-		// try panel domain, otherwise OS hostname
 		if d, err := t.settingService.GetWebDomain(); err == nil && d != "" {
 			subDomain = d
 		} else if hostname != "" {
@@ -2595,29 +2604,7 @@ func (t *Tgbot) buildSubscriptionURLs(email string) (string, string, error) {
 		}
 	}
 
-	host := subDomain
-	if (subPort == 443 && tls) || (subPort == 80 && !tls) {
-		// standard ports: no port in host
-	} else {
-		host = fmt.Sprintf("%s:%d", subDomain, subPort)
-	}
-
-	// Ensure paths
-	if !strings.HasPrefix(subPath, "/") {
-		subPath = "/" + subPath
-	}
-	if !strings.HasSuffix(subPath, "/") {
-		subPath = subPath + "/"
-	}
-	if !strings.HasPrefix(subJsonPath, "/") {
-		subJsonPath = "/" + subJsonPath
-	}
-	if !strings.HasSuffix(subJsonPath, "/") {
-		subJsonPath = subJsonPath + "/"
-	}
-
-	subURL := fmt.Sprintf("%s://%s%s%s", scheme, host, subPath, clientEntity.SubID)
-	subJsonURL := fmt.Sprintf("%s://%s%s%s", scheme, host, subJsonPath, clientEntity.SubID)
+	subURL, subJsonURL := SubscriptionURLsForClient(t.settingService, clientEntity.SubID, subDomain, tls)
 	if !subJsonEnable {
 		subJsonURL = ""
 	}

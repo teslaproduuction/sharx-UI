@@ -97,7 +97,10 @@
 "settings" = "Параметри панелі"
 "xray" = "Конфігурації Xray"
 "apiDocs" = "Документація API"
+"apiDocsDesc" = "Довідник HTTP API у Markdown (не OpenAPI) для цієї збірки."
+"apiDocsTocTitle" = "На цій сторінці"
 "logout" = "Вийти"
+"openNavigation" = "Open menu"
 "link" = "Керувати"
 
 [pages.login]
@@ -487,6 +490,25 @@
 "statsOutboundUplinkDesc" = "Увімкнення збору статистики для вхідного трафіку всіх вихідних проксі."
 "statsOutboundDownlink" = "Статистика вихідного даунлінку"
 "statsOutboundDownlinkDesc" = "Увімкнення збору статистики для вихідного трафіку всіх вихідних проксі."
+"editorSimple" = "Simple"
+"editorJson" = "JSON (advanced)"
+"simpleSectionTitle" = "Core (quick setup)"
+"simpleSectionHint" = "Adjust common options without editing JSON. Switch to JSON for inbound routing, DNS, and full control."
+"accessLogToFile" = "Write access log to a file"
+"customValue" = "custom"
+"simpleJsonFooter" = "Need inbound rules, routing rules, or DNS? Switch to JSON."
+"dnsLogEnable" = "Enable DNS query logging"
+"navAria" = "Xray template sections"
+"navGeneral" = "General"
+"navFullTemplate" = "Entire template (JSON)"
+"inboundsTemplateHint" = "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound."
+
+[pages.xray.navGroup]
+"core" = "Core"
+"network" = "Network"
+"endpoints" = "Endpoints"
+"advanced" = "Advanced"
+"misc" = "Other"
 
 [pages.xray.rules]
 "first" = "Перший"

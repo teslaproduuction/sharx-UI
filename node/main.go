@@ -12,7 +12,9 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/api"
+	"github.com/konstpic/sharx-code/v2/node/auth"
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
+	"github.com/konstpic/sharx-code/v2/node/defaults"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/op/go-logging"
@@ -22,7 +24,7 @@ import (
 func main() {
 	var port int
 	var apiKey string
-	flag.IntVar(&port, "port", 8080, "API server port")
+	flag.IntVar(&port, "port", defaults.APIListenPort, "API server port (default "+fmt.Sprint(defaults.APIListenPort)+", host network)")
 	flag.StringVar(&apiKey, "api-key", "", "API key for authentication (optional, can be set via registration)")
 	flag.Parse()
 
@@ -62,12 +64,22 @@ func main() {
 		}
 	}
 
-	// If still no API key, node can start but will need registration
-	if apiKey == "" {
-		log.Printf("WARNING: No API key found. Node will need to be registered via /api/v1/register endpoint")
-		log.Printf("You can set NODE_API_KEY environment variable or use -api-key flag for immediate use")
-		// Use a temporary key that will be replaced during registration
-		apiKey = "temp-unregistered"
+	bundle, err := auth.LoadBundleFromEnv()
+	if err != nil {
+		log.Fatalf("SECRET_KEY / SHARX_NODE_SECRET_KEY: %v", err)
+	}
+
+	if bundle == nil {
+		// No SECRET_KEY: legacy mode — need API key or /api/v1/register
+		if apiKey == "" {
+			log.Printf("WARNING: No API key found. Register once via /api/v1/register or set NODE_API_KEY / -api-key")
+			apiKey = "temp-unregistered"
+		}
+	} else {
+		// SECRET_KEY bundle: panel uses JWT + mTLS; no registration call required
+		if apiKey == "" {
+			apiKey = "temp-unregistered"
+		}
 	}
 
 	// Initialize log pusher if panel URL is configured
@@ -98,12 +110,20 @@ func main() {
 	xrayManager := xray.NewManager()
 	server := api.NewServer(port, apiKey, xrayManager)
 
-	// Get TLS certificate paths from environment variables
-	certFile := os.Getenv("NODE_TLS_CERT_FILE")
-	keyFile := os.Getenv("NODE_TLS_KEY_FILE")
-	if certFile != "" && keyFile != "" {
-		server.SetTLS(certFile, keyFile)
-		log.Printf("HTTPS enabled: cert=%s, key=%s", certFile, keyFile)
+	if bundle != nil {
+		server.SetPairing(bundle)
+		log.Printf("SECRET_KEY: serving API with TLS + mTLS + JWT (no panel registration required); optional NODE_API_KEY / PANEL_URL for logs")
+	} else {
+		certFile := os.Getenv("NODE_TLS_CERT_FILE")
+		keyFile := os.Getenv("NODE_TLS_KEY_FILE")
+		if certFile != "" && keyFile != "" {
+			server.SetTLS(certFile, keyFile)
+			log.Printf("HTTPS enabled: cert=%s, key=%s", certFile, keyFile)
+			if clientCA := os.Getenv("NODE_TLS_CLIENT_CA_FILE"); clientCA != "" {
+				server.SetMTLSClientCA(clientCA)
+				log.Printf("mTLS: panel client certs must chain to CA file %s", clientCA)
+			}
+		}
 	}
 
 	log.Printf("Starting SharX Node Service on port %d", port)

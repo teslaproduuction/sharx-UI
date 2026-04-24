@@ -147,6 +147,7 @@ func InitDB(dbConnectionString string) error {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 
+
 	// Step 3.5: Clean up invalid group_id references (safety check)
 	// This ensures data integrity even if migrations didn't run or were applied before cleanup was added
 	// This is idempotent and safe to run multiple times

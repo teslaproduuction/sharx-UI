@@ -1,0 +1,33 @@
+const ONE_GB = 1073741824;
+
+export function sizeFormat(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return "0 B";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let b = bytes;
+  let i = 0;
+  while (b >= 1024 && i < u.length - 1) {
+    b /= 1024;
+    i++;
+  }
+  return `${b.toFixed(i === 0 ? 0 : 2)} ${u[i]}`;
+}
+
+export function toFixed(n: number, d: number) {
+  return Number(n).toFixed(d);
+}
+
+export function formatSecond(s: number): string {
+  if (!s || s < 0) return "0s";
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = Math.floor(s % 60);
+  const parts: string[] = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (mins) parts.push(`${mins}m`);
+  if (secs || parts.length === 0) parts.push(`${secs}s`);
+  return parts.join(" ");
+}
+
+export { ONE_GB };

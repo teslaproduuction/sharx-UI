@@ -2403,20 +2403,35 @@ curl -X GET "http://localhost:2053/panel/node/get/1" \
 
 ### POST `/panel/node/add`
 
-Add a new node (automatically registers with the panel).
+Add a new node. By default the panel generates **pairing** (`authMode`: `pairing`): a `SECRET_KEY` value (base64 JSON with CA, JWT public key, node TLS cert/key). The autonomous worker uses env `SECRET_KEY` or `SHARX_NODE_SECRET_KEY`, serves HTTPS with **mandatory mTLS** on the host (default **8080**), and accepts API calls with **Bearer JWT (RS256)** signed by the panel. Set `legacyAuth: true` for the previous flow (panel-generated API key and `POST /api/v1/register` without JWT).
 
 **Request Body** (form-urlencoded or JSON):
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `name` | string | Yes | Node name |
-| `address` | string | Yes | Node API address (e.g., `http://192.168.1.100:8080`) |
-| `useTls` | boolean | No | Use HTTPS for API calls |
-| `certPath` | string | No | Path to CA certificate (for custom CA) |
-| `keyPath` | string | No | Path to private key |
-| `insecureTls` | boolean | No | Skip certificate verification |
+| `address` | string | Yes | Node API URL; you can store `http://` in the database — the panel still uses TLS for requests in pairing mode |
+| `legacyAuth` | boolean | No | If true, legacy API-key registration only |
+| `useTls` | boolean | No | Use HTTPS for API calls (legacy mode) |
+| `certPath` | string | No | Path to CA certificate (for custom CA, legacy) |
+| `keyPath` | string | No | Path to private key (legacy) |
+| `insecureTls` | boolean | No | Skip certificate verification (legacy) |
 
-**Example Request:**
+**Example Request (pairing, default):**
+
+```bash
+curl -X POST "http://localhost:2053/panel/node/add" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{
+    "name": "Node-2",
+    "address": "https://192.168.1.101:8443"
+  }'
+```
+
+**Response (pairing):** `obj` includes node fields (e.g. `authMode`: `pairing`) and **`secretKey`** — the value to set on the worker. This is only returned at creation.
+
+**Example Request (legacy):**
 
 ```bash
 curl -X POST "http://localhost:2053/panel/node/add" \
@@ -2425,6 +2440,7 @@ curl -X POST "http://localhost:2053/panel/node/add" \
   -d '{
     "name": "Node-2",
     "address": "http://192.168.1.101:8080",
+    "legacyAuth": true,
     "useTls": false
   }'
 ```
@@ -2434,12 +2450,14 @@ curl -X POST "http://localhost:2053/panel/node/add" \
 ```json
 {
   "success": true,
-  "msg": "Node added and registered successfully",
+  "msg": "Node added successfully",
   "obj": {
     "id": 2,
     "name": "Node-2",
-    "address": "http://192.168.1.101:8080",
-    "apiKey": "generated-api-key",
+    "address": "https://192.168.1.101:8443",
+    "authMode": "pairing",
+    "apiKey": "internal-placeholder-not-used-for-auth",
+    "secretKey": "<base64-json-bundle>",
     "status": "unknown"
   }
 }

@@ -65,6 +65,8 @@ func (a *APIController) checkAPIAuth(c *gin.Context) {
 
 // initRouter sets up the API routes for inbounds, server, and other endpoints.
 func (a *APIController) initRouter(g *gin.RouterGroup) {
+	registerPublicSubscriptionRoutes(g, nil)
+
 	// Node push-logs endpoint (no session auth, uses API key)
 	// Register in separate group without session auth middleware
 	nodeAPI := g.Group("/panel/api/node")

@@ -1,5 +1,5 @@
 # Build stage
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /build
 ARG BUILDKIT_INLINE_CACHE=1
@@ -55,7 +55,7 @@ RUN mkdir -p bin && \
             ;; \
     esac && \
     echo "Downloading Xray for ${TARGETARCH} (ARCH=${ARCH}, FNAME=${FNAME})" && \
-    curl -sfLRO "https://github.com/XTLS/Xray-core/releases/download/v25.12.8/Xray-linux-${ARCH}.zip" && \
+    curl -sfLRO "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-${ARCH}.zip" && \
     echo "Unzipping..." && \
     unzip -q "Xray-linux-${ARCH}.zip" && \
     echo "Files after unzip:" && \

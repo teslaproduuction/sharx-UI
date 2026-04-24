@@ -21,6 +21,34 @@ import (
 // ClientService provides business logic for managing clients.
 type ClientService struct{}
 
+// normalizeClientUUID parses s as a UUID and returns the canonical string form, or an error.
+func normalizeClientUUID(s string) (string, error) {
+	trimmed := strings.TrimSpace(s)
+	if trimmed == "" {
+		return "", common.NewError("UUID is empty")
+	}
+	parsed, err := uuid.Parse(trimmed)
+	if err != nil {
+		return "", common.NewError("Invalid UUID: ", err.Error())
+	}
+	return parsed.String(), nil
+}
+
+// isClientUUIDTaken returns true if another client of this user already has the given uuid.
+// For inserts use excludeId 0. For updates pass the current client's id to exclude.
+func (s *ClientService) isClientUUIDTaken(userId int, u string, excludeId int) (bool, error) {
+	db := database.GetDB()
+	q := db.Model(&model.ClientEntity{}).Where("user_id = ? AND LOWER(uuid) = LOWER(?)", userId, u)
+	if excludeId > 0 {
+		q = q.Where("id != ?", excludeId)
+	}
+	var count int64
+	if err := q.Count(&count).Error; err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 // GetClients retrieves all clients for a specific user.
 // Also loads traffic statistics and last online time for each client.
 // NOTE: No caching - data should be real-time (traffic, HWID, online status change frequently).
@@ -208,13 +236,26 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 		return false, common.NewError("Client with email already exists: ", client.Email)
 	}
 
-	// Generate UUID if not provided and needed
+	// Generate or normalize UUID, then ensure uniqueness for this user
 	if client.UUID == "" {
 		newUUID, err := uuid.NewRandom()
 		if err != nil {
 			return false, common.NewError("Failed to generate UUID: ", err.Error())
 		}
 		client.UUID = newUUID.String()
+	} else {
+		canon, err := normalizeClientUUID(client.UUID)
+		if err != nil {
+			return false, err
+		}
+		client.UUID = canon
+	}
+	taken, err := s.isClientUUIDTaken(userId, client.UUID, 0)
+	if err != nil {
+		return false, err
+	}
+	if taken {
+		return false, common.NewError("This UUID is already used by another client for your account")
 	}
 
 	// Generate SubID if not provided
@@ -226,9 +267,13 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	if len(client.Comment) > 100 {
 		return false, common.NewError("Client comment exceeds maximum length of 100 characters (spaces count as characters)")
 	}
+	if len(client.Announce) > 200 {
+		return false, common.NewError("Client announce exceeds maximum length of 200 characters")
+	}
 	
 	// Trim whitespace from comment
 	client.Comment = strings.TrimSpace(client.Comment)
+	client.Announce = strings.TrimSpace(client.Announce)
 	
 	// Normalize email to lowercase
 	client.Email = strings.ToLower(client.Email)
@@ -272,9 +317,10 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	// This ensures that nil GroupId is properly handled as NULL
 	fieldsToInsert := []string{
 		"user_id", "email", "uuid", "security", "password", "flow",
-		"limit_ip", "total_gb", "expiry_time", "enable", "status",
+		"total_gb", "expiry_time", "enable", "status",
 		"tg_id", "sub_id", "comment", "reset", "created_at", "updated_at",
 		"up", "down", "all_time", "last_online", "hwid_enabled", "max_hwid",
+		"announce",
 	}
 	// Add group_id only if it's not nil
 	if client.GroupId != nil {
@@ -374,6 +420,27 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		}
 	}
 
+	// Normalize and validate UUID when client supplies one; ensure uniqueness on change
+	if client.UUID != "" {
+		canon, err := normalizeClientUUID(client.UUID)
+		if err != nil {
+			return false, err
+		}
+		if !strings.EqualFold(canon, existing.UUID) {
+			taken, err := s.isClientUUIDTaken(userId, canon, client.Id)
+			if err != nil {
+				return false, err
+			}
+			if taken {
+				return false, common.NewError("This UUID is already used by another client for your account")
+			}
+		}
+		client.UUID = canon
+	} else {
+		// keep existing UUID in model so downstream logic is consistent
+		client.UUID = existing.UUID
+	}
+
 	// Validate comment length if provided (spaces count as characters)
 	if client.Comment != "" && len(client.Comment) > 100 {
 		return false, common.NewError("Client comment exceeds maximum length of 100 characters (spaces count as characters)")
@@ -383,7 +450,11 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if client.Comment != "" {
 		client.Comment = strings.TrimSpace(client.Comment)
 	}
-	
+	if len(client.Announce) > 200 {
+		return false, common.NewError("Client announce exceeds maximum length of 200 characters")
+	}
+	client.Announce = strings.TrimSpace(client.Announce)
+
 	// Normalize email to lowercase if provided
 	if client.Email != "" {
 		client.Email = strings.ToLower(client.Email)
@@ -437,6 +508,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	updates["tg_id"] = client.TgID
 	updates["sub_id"] = client.SubID
 	updates["comment"] = client.Comment
+	updates["announce"] = client.Announce
 	updates["flow"] = client.Flow
 	updates["reset"] = client.Reset
 	// Update group_id - can be nil (no group)
@@ -632,6 +704,8 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 							switch inbound.Protocol {
 							case model.Trojan:
 								clientData["password"] = finalClient.Password
+							case model.Hysteria, model.Hysteria2:
+								clientData["auth"] = finalClient.Password
 							case model.Shadowsocks:
 								var settings map[string]interface{}
 								json.Unmarshal([]byte(inbound.Settings), &settings)
@@ -671,16 +745,16 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 			}
 		}
 		
-		// Always need restart when enable status changes or client needs re-add
-		if enableChanged || needsReAdd {
-			needRestart = true
-		}
-		
-		// Also need restart if client data changed (UUID, password, etc.)
-		// because Settings need to be rebuilt with new client data
-		if existing.UUID != finalClient.UUID || existing.Password != finalClient.Password || 
-		   existing.Security != finalClient.Security || existing.Flow != finalClient.Flow {
-			needRestart = true
+		// Single-node: local Xray needs process restart after config.json patches / credential changes.
+		// Multi-node: inbound sync is done via updateInboundWithRetry -> UpdateInboundOnNode (no full apply-config).
+		if !multiMode {
+			if enableChanged || needsReAdd {
+				needRestart = true
+			}
+			if existing.UUID != finalClient.UUID || existing.Password != finalClient.Password ||
+				existing.Security != finalClient.Security || existing.Flow != finalClient.Flow {
+				needRestart = true
+			}
 		}
 		
 		// Update Settings for affected inbounds (needed to keep DB in sync)
@@ -1008,12 +1082,16 @@ func (s *ClientService) ConvertClientToEntity(client *model.Client, userId int) 
 			status = "expired_time"
 		}
 	}
+	password := client.Password
+	if client.Auth != "" {
+		password = client.Auth
+	}
 	return &model.ClientEntity{
 		UserId:      userId,
 		Email:       strings.ToLower(client.Email),
 		UUID:        client.ID,
 		Security:    client.Security,
-		Password:    client.Password,
+		Password:    password,
 		Flow:        client.Flow,
 		TotalGB:     float64(client.TotalGB), // Convert int64 to float64
 		ExpiryTime:  client.ExpiryTime,
@@ -1270,6 +1348,8 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Hysteria, model.Hysteria2:
+						clientData["auth"] = client.Password
 					case model.Shadowsocks:
 						if method != "" {
 							clientData["method"] = method
@@ -1393,6 +1473,8 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Hysteria, model.Hysteria2:
+						clientData["auth"] = client.Password
 					case model.Shadowsocks:
 						var settings map[string]any
 						json.Unmarshal([]byte(inbound.Settings), &settings)
@@ -1744,6 +1826,8 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Hysteria, model.Hysteria2:
+						clientData["auth"] = client.Password
 					case model.Shadowsocks:
 						var settings map[string]any
 						json.Unmarshal([]byte(inbound.Settings), &settings)
@@ -2015,6 +2099,8 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 						switch inbound.Protocol {
 						case model.Trojan:
 							clientData["password"] = client.Password
+						case model.Hysteria, model.Hysteria2:
+							clientData["auth"] = client.Password
 						case model.Shadowsocks:
 							var settings map[string]interface{}
 							json.Unmarshal([]byte(inbound.Settings), &settings)

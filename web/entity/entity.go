@@ -52,7 +52,6 @@ type AllSetting struct {
 	TimeLocation    string `json:"timeLocation" form:"timeLocation"`       // Time zone location
 	TwoFactorEnable bool   `json:"twoFactorEnable" form:"twoFactorEnable"` // Enable two-factor authentication
 	TwoFactorToken  string `json:"twoFactorToken" form:"twoFactorToken"`   // Two-factor authentication token
-
 	// Subscription server settings
 	SubEnable                   bool   `json:"subEnable" form:"subEnable"`                                     // Enable subscription server
 	SubJsonEnable               bool   `json:"subJsonEnable" form:"subJsonEnable"`                             // Enable JSON subscription endpoint
@@ -75,11 +74,6 @@ type AllSetting struct {
 	SubJsonNoises               string `json:"subJsonNoises" form:"subJsonNoises"`                             // JSON subscription noise configuration
 	SubJsonMux                  string `json:"subJsonMux" form:"subJsonMux"`                                   // JSON subscription mux configuration
 	SubJsonRules                string `json:"subJsonRules" form:"subJsonRules"`                               // JSON subscription rules configuration
-	SubEncryptHappV2RayTun      bool   `json:"subEncryptHappV2RayTun" form:"subEncryptHappV2RayTun"`           // Encrypt subscription for Happ and V2RayTun
-	SubOnlyHappV2RayTun         bool   `json:"subOnlyHappV2RayTun" form:"subOnlyHappV2RayTun"`                // Only include Happ and V2RayTun compatible links
-	SubHideConfigLinks          bool   `json:"subHideConfigLinks" form:"subHideConfigLinks"`                  // Hide configuration links on subscription page
-	SubShowOnlyHappV2RayTun     bool   `json:"subShowOnlyHappV2RayTun" form:"subShowOnlyHappV2RayTun"`        // Show only Happ and V2RayTun applications on subscription page
-	SubAutoRotateKeys           bool   `json:"subAutoRotateKeys" form:"subAutoRotateKeys"`                     // Automatically rotate client keys before subscription update interval
 	SubHeaders                  string `json:"subHeaders" form:"subHeaders"`                                    // JSON string containing subscription headers configuration
 	SubProviderID               string `json:"subProviderID" form:"subProviderID"`                             // Provider ID for Happ extended headers (required for new-url, new-domain, etc.)
 	SubProviderIDMethod         string `json:"subProviderIDMethod" form:"subProviderIDMethod"`                 // Method to send Provider ID: "url" (query parameter), "header" (HTTP header), "none" (disabled)

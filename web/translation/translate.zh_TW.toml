@@ -97,7 +97,10 @@
 "settings" = "面板設定"
 "xray" = "Xray 設定"
 "apiDocs" = "API 文件"
+"apiDocsDesc" = "此版本附帶的 HTTP API 說明（Markdown，非 OpenAPI）。"
+"apiDocsTocTitle" = "本頁目錄"
 "logout" = "退出登入"
+"openNavigation" = "Open menu"
 "link" = "管理"
 
 [pages.login]
@@ -487,6 +490,25 @@
 "statsOutboundUplinkDesc" = "啟用所有出站代理的上行流量統計收集。"
 "statsOutboundDownlink" = "出站下載統計"
 "statsOutboundDownlinkDesc" = "啟用所有出站代理的下行流量統計收集。"
+"editorSimple" = "Simple"
+"editorJson" = "JSON (advanced)"
+"simpleSectionTitle" = "Core (quick setup)"
+"simpleSectionHint" = "Adjust common options without editing JSON. Switch to JSON for inbound routing, DNS, and full control."
+"accessLogToFile" = "Write access log to a file"
+"customValue" = "custom"
+"simpleJsonFooter" = "Need inbound rules, routing rules, or DNS? Switch to JSON."
+"dnsLogEnable" = "Enable DNS query logging"
+"navAria" = "Xray template sections"
+"navGeneral" = "General"
+"navFullTemplate" = "Entire template (JSON)"
+"inboundsTemplateHint" = "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound."
+
+[pages.xray.navGroup]
+"core" = "Core"
+"network" = "Network"
+"endpoints" = "Endpoints"
+"advanced" = "Advanced"
+"misc" = "Other"
 
 [pages.xray.rules]
 "first" = "置頂"

@@ -6,8 +6,6 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
-	"fmt"
-	"html/template"
 	"io"
 	"io/fs"
 	"net"
@@ -38,9 +36,6 @@ import (
 
 //go:embed assets
 var assetsFS embed.FS
-
-//go:embed html/*
-var htmlFS embed.FS
 
 //go:embed translation/*
 var i18nFS embed.FS
@@ -86,10 +81,6 @@ func (f *wrapAssetsFileInfo) ModTime() time.Time {
 	return startTime
 }
 
-// EmbeddedHTML returns the embedded HTML templates filesystem for reuse by other servers.
-func EmbeddedHTML() embed.FS {
-	return htmlFS
-}
 
 // EmbeddedAssets returns the embedded assets filesystem for reuse by other servers.
 func EmbeddedAssets() embed.FS {
@@ -132,55 +123,8 @@ func NewServer() *Server {
 	}
 }
 
-// getHtmlFiles walks the local `web/html` directory and returns a list of
-// template file paths. Used only in debug/development mode.
-func (s *Server) getHtmlFiles() ([]string, error) {
-	files := make([]string, 0)
-	dir, _ := os.Getwd()
-	err := fs.WalkDir(os.DirFS(dir), "web/html", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return files, nil
-}
-
-// getHtmlTemplate parses embedded HTML templates from the bundled `htmlFS`
-// using the provided template function map and returns the resulting
-// template set for production usage.
-func (s *Server) getHtmlTemplate(funcMap template.FuncMap) (*template.Template, error) {
-	t := template.New("").Funcs(funcMap)
-	err := fs.WalkDir(htmlFS, "html", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-
-		if d.IsDir() {
-			newT, err := t.ParseFS(htmlFS, path+"/*.html")
-			if err != nil {
-				// ignore
-				return nil
-			}
-			t = newT
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return t, nil
-}
-
-// initRouter initializes Gin, registers middleware, templates, static
-// assets, controllers and returns the configured engine.
+// initRouter initializes Gin, registers middleware, static assets,
+// controllers and returns the configured engine.
 func (s *Server) initRouter() (*gin.Engine, error) {
 	if config.IsDebug() {
 		gin.SetMode(gin.DebugMode)
@@ -190,7 +134,11 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		gin.SetMode(gin.ReleaseMode)
 	}
 
-	engine := gin.Default()
+	engine := gin.New()
+	engine.Use(gin.Logger(), gin.Recovery())
+	// Avoid Gin's trailing-slash / case-fix redirects; they can emit relative Location (e.g. ./) and loops.
+	engine.RedirectTrailingSlash = false
+	engine.RedirectFixedPath = false
 
 	webDomain, err := s.settingService.GetWebDomain()
 	if err != nil {
@@ -242,58 +190,59 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	engine.Use(func(c *gin.Context) {
 		uri := c.Request.RequestURI
 		if strings.HasPrefix(uri, assetsBasePath) {
-			// Cache static assets for 1 year with immutable flag
+			c.Header("Cache-Control", "max-age=31536000, public, immutable")
+		} else if strings.HasPrefix(uri, basePath+"_next/") || strings.HasPrefix(uri, basePath+"locales/") {
+			c.Header("Cache-Control", "max-age=31536000, public, immutable")
+		} else if strings.HasPrefix(uri, basePath+"custom.min.css") {
 			c.Header("Cache-Control", "max-age=31536000, public, immutable")
 		} else if strings.HasPrefix(uri, basePath+"panel/") {
-			// For all panel requests (HTML pages, API calls, settings), disable caching
-			// This ensures that settings and dynamic content are always fresh
 			c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
 			c.Header("Pragma", "no-cache")
 			c.Header("Expires", "0")
 		}
 	})
 
-	// init i18n
 	err = locale.InitLocalizer(i18nFS, &s.settingService)
 	if err != nil {
 		return nil, err
 	}
-
-	// Apply locale middleware for i18n
-	i18nWebFunc := func(key string, params ...string) string {
-		return locale.I18n(locale.Web, key, params...)
-	}
-	// Register template functions before loading templates
-	funcMap := template.FuncMap{
-		"i18n": i18nWebFunc,
-	}
-	engine.SetFuncMap(funcMap)
 	engine.Use(locale.LocalizerMiddleware())
 
-	// set static files and template
-	if config.IsDebug() {
-		// for development
-		files, err := s.getHtmlFiles()
-		if err != nil {
-			return nil, err
+	if err = initPanelFileSystem(); err != nil {
+		return nil, err
+	}
+
+	// If the app is served under a subpath (e.g. /xui/), send bare GET/HEAD / to the panel base.
+	if basePath != "/" {
+		toBase := func(c *gin.Context) {
+			c.Redirect(http.StatusFound, basePath)
 		}
-		// Use the registered func map with the loaded templates
-		engine.LoadHTMLFiles(files...)
+		engine.GET("/", toBase)
+		engine.HEAD("/", toBase)
+	}
+
+	if config.IsDebug() {
 		engine.StaticFS(basePath+"assets", http.FS(os.DirFS("web/assets")))
 	} else {
-		// for production
-		template, err := s.getHtmlTemplate(funcMap)
-		if err != nil {
-			return nil, err
-		}
-		engine.SetHTMLTemplate(template)
 		engine.StaticFS(basePath+"assets", http.FS(&wrapAssetsFS{FS: assetsFS}))
 	}
 
-	// Apply the redirect middleware (`/xui` to `/panel`)
 	engine.Use(middleware.RedirectMiddleware(basePath))
 
 	g := engine.Group(basePath)
+	if nxt, err := fs.Sub(panelFsys, "_next"); err == nil {
+		g.StaticFS("/_next", http.FS(nxt))
+	} else {
+		logger.Warning("panel: _next not found in static export: ", err)
+	}
+	if loc, err := fs.Sub(panelFsys, "locales"); err == nil {
+		g.StaticFS("/locales", http.FS(loc))
+	} else {
+		logger.Warning("panel: locales not found: ", err)
+	}
+	g.GET("/custom.min.css", func(c *gin.Context) {
+		c.FileFromFS("custom.min.css", panelRootHTTP)
+	})
 
 	// Prometheus metrics endpoint (no auth required for scraping)
 	panelMetrics := g.Group("/panel")
@@ -303,8 +252,8 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		c.String(http.StatusOK, metrics)
 	})
 
-	s.index = controller.NewIndexController(g)
-	s.panel = controller.NewXUIController(g)
+	s.index = controller.NewIndexController(g, ServePanelLoginPage)
+	s.panel = controller.NewXUIController(g, ServePanelReactPage)
 	s.api = controller.NewAPIController(g)
 	// Set embedded docs filesystem for API controller
 	s.api.SetDocsFS(docsFS)
@@ -323,10 +272,26 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		c.JSON(http.StatusOK, gin.H{})
 	})
 
-	// Add a catch-all route to handle undefined paths and return 404
+	// SPA deep links: Gin cannot register /panel/*filepath next to /panel/xray, /panel/setting, etc.
+	bt := strings.TrimSuffix(basePath, "/")
+	panelRoot := bt + "/panel"
 	engine.NoRoute(func(c *gin.Context) {
+		if c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead {
+			p := c.Request.URL.Path
+			if p == panelRoot || p == panelRoot+"/" || strings.HasPrefix(p, panelRoot+"/") {
+				s.panel.ServeSPAFallback(c)
+				return
+			}
+		}
 		c.AbortWithStatus(http.StatusNotFound)
 	})
+
+	if err := (&service.SubscriptionPageConfigService{}).EnsureDefault(); err != nil {
+		logger.Warningf("default subscription page config: %v", err)
+	}
+	if err := (&service.SubscriptionPageConfigService{}).UpgradeDefaultIfLegacy(); err != nil {
+		logger.Warningf("subscription page config legacy upgrade: %v", err)
+	}
 
 	return engine, nil
 }
@@ -390,59 +355,6 @@ func (s *Server) startTask() {
 	s.cron.AddJob("@every 1s", job.NewCheckNodeHealthJob())
 	// Collect node statistics (traffic and online clients) every 1 second for real-time updates
 	s.cron.AddJob("@every 1s", job.NewCollectNodeStatsJob())
-
-	// Client keys rotation job (runs before subscription update interval)
-	// Schedule dynamically based on subscription update interval
-	// Priority: 1) Custom header ProfileUpdateInterval (in hours) - takes precedence
-	//           2) Base subUpdates setting (in minutes)
-	go func() {
-		// Wait a bit for settings to be loaded
-		time.Sleep(time.Second * 2)
-		
-		autoRotate, err := s.settingService.GetSubAutoRotateKeys()
-		if err == nil && autoRotate {
-			var subUpdatesMinutes int
-			
-			// Check custom headers first
-			customHeaders, err := s.settingService.GetSubHeadersParsed()
-			if err == nil && customHeaders != nil && customHeaders.ProfileUpdateInterval != "" {
-				// Use custom header value (in hours, convert to minutes)
-				profileUpdateIntervalHours, err := strconv.Atoi(customHeaders.ProfileUpdateInterval)
-				if err == nil && profileUpdateIntervalHours > 0 {
-					subUpdatesMinutes = profileUpdateIntervalHours * 60
-					logger.Infof("Client keys auto-rotation: using custom ProfileUpdateInterval: %d hours (%d minutes)", 
-						profileUpdateIntervalHours, subUpdatesMinutes)
-				}
-			}
-			
-			// If custom header not set, use base subUpdates
-			if subUpdatesMinutes == 0 {
-				subUpdatesStr, err := s.settingService.GetSubUpdates()
-				if err == nil && subUpdatesStr != "" {
-					subUpdates, err := strconv.Atoi(subUpdatesStr)
-					if err == nil && subUpdates > 0 {
-						subUpdatesMinutes = subUpdates
-						logger.Infof("Client keys auto-rotation: using base subUpdates: %d minutes", subUpdatesMinutes)
-					}
-				}
-			}
-			
-			if subUpdatesMinutes > 1 {
-				// Rotate keys 1 minute before subscription update interval
-				// If subUpdates is 60 minutes, rotate every 59 minutes
-				rotateInterval := subUpdatesMinutes - 1
-				if rotateInterval < 1 {
-					rotateInterval = 1
-				}
-				cronSpec := fmt.Sprintf("@every %dm", rotateInterval)
-				s.cron.AddJob(cronSpec, job.NewRotateClientKeysJob())
-				logger.Infof("Client keys auto-rotation enabled: rotating keys every %d minutes (subscription update: %d minutes)", 
-					rotateInterval, subUpdatesMinutes)
-			} else {
-				logger.Warning("Client keys auto-rotation: subscription update interval is too small or not set, skipping")
-			}
-		}
-	}()
 
 	// Make a traffic condition every day, 8:30
 	var entry cron.EntryID

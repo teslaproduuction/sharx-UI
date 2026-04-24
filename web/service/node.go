@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -54,6 +55,26 @@ func (s *NodeService) GetNode(id int) (*model.Node, error) {
 		return nil, err
 	}
 	return &node, nil
+}
+
+// nodeRequestBaseURL is the base URL the panel uses for HTTP requests to a node. For pairing (mTLS)
+// the connection is always TLS; a stored http:// address is only upgraded for the request URL.
+func nodeRequestBaseURL(n *model.Node) string {
+	if n == nil {
+		return ""
+	}
+	if !n.IsPairingMode() {
+		return n.Address
+	}
+	u, err := url.Parse(n.Address)
+	if err != nil {
+		return n.Address
+	}
+	if u.Scheme == "http" {
+		u.Scheme = "https"
+		return u.String()
+	}
+	return n.Address
 }
 
 // AddNode creates a new node.
@@ -127,6 +148,25 @@ func (s *NodeService) RegisterNode(node *model.Node, panelURL string) (string, e
 
 	logger.Infof("[Node: %s] Successfully registered node with API key", node.Name)
 	return apiKey, nil
+}
+
+func (s *NodeService) setNodeAuthHeader(node *model.Node, req *http.Request) error {
+	tok, err := s.bearerTokenForNode(node)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+tok)
+	return nil
+}
+
+func authDebugPrefix(node *model.Node) string {
+	if node.IsPairingMode() {
+		return "jwt"
+	}
+	if len(node.ApiKey) >= 8 {
+		return node.ApiKey[:8]
+	}
+	return node.ApiKey
 }
 
 // UpdateNode updates an existing node.
@@ -296,6 +336,16 @@ func (s *NodeService) notifyNodeStatusChange(node *model.Node, oldStatus, newSta
 
 // createHTTPClient creates an HTTP client configured for the node's TLS settings.
 func (s *NodeService) createHTTPClient(node *model.Node, timeout time.Duration) (*http.Client, error) {
+	if node.IsPairingMode() {
+		pairing := &PanelPairingService{}
+		cfg, err := pairing.GetClientTLSConfig()
+		if err != nil {
+			return nil, err
+		}
+		transport := &http.Transport{TLSClientConfig: cfg}
+		return &http.Client{Timeout: timeout, Transport: transport}, nil
+	}
+
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: node.InsecureTLS,
@@ -345,7 +395,7 @@ func (s *NodeService) CheckNodeStatus(node *model.Node) (string, int64, error) {
 		return "error", 0, err
 	}
 
-	url := fmt.Sprintf("%s/health", node.Address)
+	url := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 	
 	// Measure response time
 	startTime := time.Now()
@@ -360,17 +410,18 @@ func (s *NodeService) CheckNodeStatus(node *model.Node) (string, int64, error) {
 	if resp.StatusCode == http.StatusOK {
 		// Health check passed, but if node has API key, verify it's still valid
 		// by checking if we can access status endpoint
-		if node.ApiKey != "" {
-			statusURL := fmt.Sprintf("%s/api/v1/status", node.Address)
+		if node.IsPairingMode() || node.ApiKey != "" {
+			statusURL := fmt.Sprintf("%s/api/v1/status", nodeRequestBaseURL(node))
 			statusReq, err := http.NewRequest("GET", statusURL, nil)
 			if err == nil {
-				statusReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
-				statusResp, statusErr := client.Do(statusReq)
-				if statusErr == nil {
-					statusResp.Body.Close()
-					if statusResp.StatusCode == http.StatusUnauthorized {
-						// Node is online but API key is invalid - needs re-registration
-						return "error", responseTime, &ErrNodeNeedsReregistration{NodeName: node.Name}
+				if err := s.setNodeAuthHeader(node, statusReq); err == nil {
+					statusResp, statusErr := client.Do(statusReq)
+					if statusErr == nil {
+						statusResp.Body.Close()
+						if statusResp.StatusCode == http.StatusUnauthorized {
+							// Node is online but API key is invalid - needs re-registration
+							return "error", responseTime, &ErrNodeNeedsReregistration{NodeName: node.Name}
+						}
 					}
 				}
 			}
@@ -514,7 +565,7 @@ func (s *NodeService) GetNodeStats(node *model.Node, reset bool) (*NodeStatsResp
 		}
 	}
 	
-	url := fmt.Sprintf("%s/api/v1/stats", node.Address)
+	url := fmt.Sprintf("%s/api/v1/stats", nodeRequestBaseURL(node))
 	if reset {
 		url += "?reset=true"
 	}
@@ -570,7 +621,10 @@ func (s *NodeService) GetNodeStats(node *model.Node, reset bool) (*NodeStatsResp
 			continue
 		}
 
-		req.Header.Set("Authorization", "Bearer "+node.ApiKey)
+		if err := s.setNodeAuthHeader(node, req); err != nil {
+			lastErr = err
+			continue
+		}
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -1170,7 +1224,7 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte) err
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/apply-config", node.Address)
+	url := fmt.Sprintf("%s/api/v1/apply-config", nodeRequestBaseURL(node))
 	logger.Infof("[Node: %s] Sending config to %s (config size: %d bytes, panelURL: %s)", node.Name, url, len(xrayConfig), panelURL)
 	
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
@@ -1179,8 +1233,10 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte) err
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
-	logger.Debugf("[Node: %s] Request headers: Content-Type=%s, Authorization=Bearer %s...", node.Name, req.Header.Get("Content-Type"), node.ApiKey[:8])
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	logger.Debugf("[Node: %s] Request headers: Content-Type=%s, Authorization=Bearer %s...", node.Name, req.Header.Get("Content-Type"), authDebugPrefix(node))
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1214,7 +1270,7 @@ func (s *NodeService) AddUserToNode(node *model.Node, protocol, inboundTag strin
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/add-user", node.Address)
+	url := fmt.Sprintf("%s/api/v1/add-user", nodeRequestBaseURL(node))
 	logger.Debugf("[Node: %s] Adding user via API: %s in inbound %s", node.Name, user["email"], inboundTag)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
@@ -1223,7 +1279,9 @@ func (s *NodeService) AddUserToNode(node *model.Node, protocol, inboundTag strin
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1263,7 +1321,7 @@ func (s *NodeService) RemoveUserFromNode(node *model.Node, inboundTag, email str
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/remove-user", node.Address)
+	url := fmt.Sprintf("%s/api/v1/remove-user", nodeRequestBaseURL(node))
 	logger.Debugf("[Node: %s] Removing user via API: %s from inbound %s", node.Name, email, inboundTag)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
@@ -1272,7 +1330,9 @@ func (s *NodeService) RemoveUserFromNode(node *model.Node, inboundTag, email str
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1320,7 +1380,7 @@ func (s *NodeService) UpdateInboundOnNode(node *model.Node, inboundConfig []byte
 		}
 	}
 
-	url := fmt.Sprintf("%s/api/v1/update-inbound", node.Address)
+	url := fmt.Sprintf("%s/api/v1/update-inbound", nodeRequestBaseURL(node))
 	logger.Debugf("[Node: %s] Updating inbound via API: %s", node.Name, tag)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
@@ -1329,7 +1389,9 @@ func (s *NodeService) UpdateInboundOnNode(node *model.Node, inboundConfig []byte
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1362,7 +1424,7 @@ func (s *NodeService) RemoveInboundFromNode(node *model.Node, tag string) error 
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/remove-inbound", node.Address)
+	url := fmt.Sprintf("%s/api/v1/remove-inbound", nodeRequestBaseURL(node))
 	logger.Debugf("[Node: %s] Removing inbound via API: %s", node.Name, tag)
 
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
@@ -1371,7 +1433,9 @@ func (s *NodeService) RemoveInboundFromNode(node *model.Node, tag string) error 
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1465,13 +1529,15 @@ func (s *NodeService) ReloadNode(node *model.Node) error {
 		return fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/reload", node.Address)
+	url := fmt.Sprintf("%s/api/v1/reload", nodeRequestBaseURL(node))
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1481,7 +1547,7 @@ func (s *NodeService) ReloadNode(node *model.Node) error {
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Check if node is reachable via health endpoint
-		healthURL := fmt.Sprintf("%s/health", node.Address)
+		healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 		healthResp, healthErr := client.Get(healthURL)
 		if healthErr == nil {
 			healthResp.Body.Close()
@@ -1507,13 +1573,15 @@ func (s *NodeService) ForceReloadNode(node *model.Node) error {
 		return fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/force-reload", node.Address)
+	url := fmt.Sprintf("%s/api/v1/force-reload", nodeRequestBaseURL(node))
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		return err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1523,7 +1591,7 @@ func (s *NodeService) ForceReloadNode(node *model.Node) error {
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Check if node is reachable via health endpoint
-		healthURL := fmt.Sprintf("%s/health", node.Address)
+		healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 		healthResp, healthErr := client.Get(healthURL)
 		if healthErr == nil {
 			healthResp.Body.Close()
@@ -1585,7 +1653,7 @@ func (s *NodeService) ValidateApiKey(node *model.Node) error {
 	}
 
 	// First, check if node is reachable via health endpoint
-	healthURL := fmt.Sprintf("%s/health", node.Address)
+	healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 	healthResp, err := client.Get(healthURL)
 	if err != nil {
 		logger.Errorf("[Node: %s] Failed to connect at %s: %v", node.Name, healthURL, err)
@@ -1597,15 +1665,16 @@ func (s *NodeService) ValidateApiKey(node *model.Node) error {
 		return fmt.Errorf("node health check failed with status %d", healthResp.StatusCode)
 	}
 
-	// Try to get node status - this will validate the API key
-	url := fmt.Sprintf("%s/api/v1/status", node.Address)
+	// Try to get node status - this will validate the API key or JWT
+	url := fmt.Sprintf("%s/api/v1/status", nodeRequestBaseURL(node))
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %v", err)
 	}
 
-	authHeader := fmt.Sprintf("Bearer %s", node.ApiKey)
-	req.Header.Set("Authorization", authHeader)
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 	
 	logger.Debugf("[Node: %s] Validating API key at %s", node.Name, url)
 
@@ -1639,13 +1708,15 @@ func (s *NodeService) GetNodeStatus(node *model.Node) (map[string]interface{}, e
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/status", node.Address)
+	url := fmt.Sprintf("%s/api/v1/status", nodeRequestBaseURL(node))
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1657,7 +1728,7 @@ func (s *NodeService) GetNodeStatus(node *model.Node) (map[string]interface{}, e
 	// This typically means node was recreated and needs re-registration
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Verify node is reachable via health endpoint (doesn't require API key)
-		healthURL := fmt.Sprintf("%s/health", node.Address)
+		healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 		healthResp, healthErr := client.Get(healthURL)
 		if healthErr == nil {
 			healthResp.Body.Close()
@@ -1708,7 +1779,7 @@ func (s *NodeService) GetNodeLogs(node *model.Node, count int, filter string) ([
 		return nil, fmt.Errorf("failed to create HTTP client: %w", err)
 	}
 
-	url := fmt.Sprintf("%s/api/v1/logs?count=%d", node.Address, count)
+	url := fmt.Sprintf("%s/api/v1/logs?count=%d", nodeRequestBaseURL(node), count)
 	if filter != "" {
 		url += "&filter=" + filter
 	}
@@ -1718,7 +1789,9 @@ func (s *NodeService) GetNodeLogs(node *model.Node, count int, filter string) ([
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", "Bearer "+node.ApiKey)
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return nil, err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1728,7 +1801,7 @@ func (s *NodeService) GetNodeLogs(node *model.Node, count int, filter string) ([
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Check if node is reachable via health endpoint
-		healthURL := fmt.Sprintf("%s/health", node.Address)
+		healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 		healthResp, healthErr := client.Get(healthURL)
 		if healthErr == nil {
 			healthResp.Body.Close()
@@ -1766,13 +1839,15 @@ func (s *NodeService) InstallXrayVersion(node *model.Node, version string) error
 		version = version[1:]
 	}
 
-	url := fmt.Sprintf("%s/api/v1/install-xray/%s", node.Address, version)
+	url := fmt.Sprintf("%s/api/v1/install-xray/%s", nodeRequestBaseURL(node), version)
 	req, err := http.NewRequest("POST", url, nil)
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
 	}
 
-	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", node.ApiKey))
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -1782,7 +1857,7 @@ func (s *NodeService) InstallXrayVersion(node *model.Node, version string) error
 
 	if resp.StatusCode == http.StatusUnauthorized {
 		// Check if node is reachable via health endpoint
-		healthURL := fmt.Sprintf("%s/health", node.Address)
+		healthURL := fmt.Sprintf("%s/health", nodeRequestBaseURL(node))
 		healthResp, healthErr := client.Get(healthURL)
 		if healthErr == nil {
 			healthResp.Body.Close()

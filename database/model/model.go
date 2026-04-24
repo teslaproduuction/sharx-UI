@@ -3,6 +3,7 @@ package model
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/konstpic/sharx-code/v2/util/json_util"
 	"github.com/konstpic/sharx-code/v2/xray"
@@ -21,7 +22,15 @@ const (
 	Shadowsocks Protocol = "shadowsocks"
 	Mixed       Protocol = "mixed"
 	WireGuard   Protocol = "wireguard"
+	// Hysteria is the Xray/panel protocol name; v1 vs v2 is stored in settings.version.
+	Hysteria  Protocol = "hysteria"
+	Hysteria2 Protocol = "hysteria2"
 )
+
+// IsHysteria returns true for both "hysteria" and "hysteria2" (imports may use the v2 literal).
+func IsHysteria(p Protocol) bool {
+	return p == Hysteria || p == Hysteria2
+}
 
 // User represents a user account in the SharX panel.
 type User struct {
@@ -85,10 +94,15 @@ func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	if listen != "" {
 		listen = fmt.Sprintf("\"%v\"", listen)
 	}
+	protocol := string(i.Protocol)
+	// Xray expects "hysteria" as protocol id; v1/v2 is controlled by settings.version.
+	if i.Protocol == Hysteria2 {
+		protocol = string(Hysteria)
+	}
 	return &xray.InboundConfig{
 		Listen:         json_util.RawMessage(listen),
 		Port:           i.Port,
-		Protocol:       string(i.Protocol),
+		Protocol:       protocol,
 		Settings:       json_util.RawMessage(i.Settings),
 		StreamSettings: json_util.RawMessage(i.StreamSettings),
 		Tag:            i.Tag,
@@ -110,6 +124,7 @@ type Client struct {
 	ID          string `json:"id"`                           // Unique client identifier
 	Security    string `json:"security"`                     // Security method (e.g., "auto", "aes-128-gcm")
 	Password    string `json:"password"`                     // Client password
+	Auth        string `json:"auth,omitempty"`               // Hysteria / Hysteria2 auth (also stored in Password via UI)
 	Flow        string `json:"flow"`                         // Flow control (XTLS)
 	Email       string `json:"email"`                        // Client email identifier
 	TotalGB     int64  `json:"totalGB" form:"totalGB"`       // Total traffic limit in GB
@@ -171,6 +186,32 @@ type ClientEntity struct {
 	Announce string `json:"announce,omitempty" form:"announce" gorm:"column:announce"` // Custom announcement text for this client (overrides subscription header, max 200 chars, supports base64)
 }
 
+// ClientCardInboundBrief is inbound metadata attached to panel client cards.
+type ClientCardInboundBrief struct {
+	Id       int    `json:"id"`
+	Remark   string `json:"remark"`
+	Protocol string `json:"protocol"`
+	Port     int    `json:"port"`
+	Tag      string `json:"tag"`
+}
+
+// ClientInboundShareLink is one share link for a client on a specific inbound.
+type ClientInboundShareLink struct {
+	InboundId int    `json:"inboundId"`
+	Remark    string `json:"remark"`
+	Protocol  string `json:"protocol"`
+	Link      string `json:"link"`
+}
+
+// ClientCardView is the unified API model for client list and detail in the panel.
+type ClientCardView struct {
+	ClientEntity
+	ActiveHwidCount     int                      `json:"activeHwidCount"`
+	Inbounds            []ClientCardInboundBrief `json:"inbounds"`
+	SubscriptionURL     string                   `json:"subscriptionUrl,omitempty"`
+	SubscriptionJsonURL string                 `json:"subscriptionJsonUrl,omitempty"`
+}
+
 // Node represents a worker node in multi-node architecture.
 type Node struct {
 	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"` // Unique identifier
@@ -186,13 +227,54 @@ type Node struct {
 	InsecureTLS bool   `json:"insecureTls" form:"insecureTls" gorm:"column:insecure_tls;default:false"` // Skip certificate verification (not recommended)
 	CreatedAt    int64  `json:"createdAt" gorm:"autoCreateTime"`  // Creation timestamp
 	UpdatedAt   int64  `json:"updatedAt" gorm:"autoUpdateTime"`   // Last update timestamp
-	
+
+	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy DB value "remna" is treated the same.
+	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing
+	JwtPrivateKeyPem   string `json:"-" gorm:"column:jwt_private_key_pem;type:text"`
+	PanelClientCertPem string `json:"-" gorm:"column:panel_client_cert_pem;type:text"`
+	PanelClientKeyPem  string `json:"-" gorm:"column:panel_client_key_pem;type:text"`
+	CaCertPem          string `json:"-" gorm:"column:ca_cert_pem;type:text"` // CA: trust node server cert + issue client certs
+
 	// Traffic statistics
 	Up           int64   `json:"up" gorm:"default:0"`                    // Upload traffic in bytes
 	Down         int64   `json:"down" gorm:"default:0"`                  // Download traffic in bytes
 	AllTime      int64   `json:"allTime" gorm:"default:0"`              // All-time traffic usage in bytes
 	TrafficLimitGB float64 `json:"trafficLimitGB" form:"trafficLimitGB" gorm:"column:traffic_limit_gb;default:0"` // Traffic limit in GB (0 = unlimited)
 }
+
+// IsPairingMode reports SECRET_KEY + JWT + mTLS auth. "remna" is a legacy stored value.
+func (n *Node) IsPairingMode() bool {
+	if n == nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(n.AuthMode)) {
+	case "pairing", "remna":
+		return true
+	default:
+		return false
+	}
+}
+
+// PanelPairing holds the panel-wide material used to pair with SharX nodes.
+// The same SECRET_KEY is shared by every node; nodes receive it via the SECRET_KEY env var.
+// Only id=1 is stored — it is a singleton.
+type PanelPairing struct {
+	Id                   int    `json:"id" gorm:"primaryKey"`
+	SecretKey            string `json:"-" gorm:"column:secret_key;type:text;not null"`
+	CaCertPem            string `json:"-" gorm:"column:ca_cert_pem;type:text;not null"`
+	CaKeyPem             string `json:"-" gorm:"column:ca_key_pem;type:text;not null"`
+	NodeCertPem          string `json:"-" gorm:"column:node_cert_pem;type:text;not null"`
+	NodeKeyPem           string `json:"-" gorm:"column:node_key_pem;type:text;not null"`
+	PanelClientCertPem   string `json:"-" gorm:"column:panel_client_cert_pem;type:text;not null"`
+	PanelClientKeyPem    string `json:"-" gorm:"column:panel_client_key_pem;type:text;not null"`
+	JwtPrivateKeyPem     string `json:"-" gorm:"column:jwt_private_key_pem;type:text;not null"`
+	JwtPublicKeyPem      string `json:"-" gorm:"column:jwt_public_key_pem;type:text;not null"`
+	CreatedAt            int64  `json:"createdAt" gorm:"column:created_at"`
+	UpdatedAt            int64  `json:"updatedAt" gorm:"column:updated_at"`
+}
+
+// TableName returns the DB table name for PanelPairing.
+func (PanelPairing) TableName() string { return "panel_pairing" }
 
 // InboundNodeMapping maps inbounds to nodes in multi-node mode.
 type InboundNodeMapping struct {

@@ -97,7 +97,10 @@
 "settings" = "Cài đặt bảng điều khiển"
 "xray" = "Cài đặt Xray"
 "apiDocs" = "Tài liệu API"
+"apiDocsDesc" = "Tài liệu tham khảo HTTP API dạng Markdown (không phải OpenAPI) đi kèm bản build này."
+"apiDocsTocTitle" = "Trên trang này"
 "logout" = "Đăng xuất"
+"openNavigation" = "Open menu"
 "link" = "Quản lý"
 
 [pages.login]
@@ -487,6 +490,25 @@
 "statsOutboundUplinkDesc" = "Kích hoạt thu thập thống kê cho lưu lượng tải lên của tất cả các proxy đầu ra."
 "statsOutboundDownlink" = "Thống kê tải xuống đầu ra"
 "statsOutboundDownlinkDesc" = "Kích hoạt thu thập thống kê cho lưu lượng tải xuống của tất cả các proxy đầu ra."
+"editorSimple" = "Simple"
+"editorJson" = "JSON (advanced)"
+"simpleSectionTitle" = "Core (quick setup)"
+"simpleSectionHint" = "Adjust common options without editing JSON. Switch to JSON for inbound routing, DNS, and full control."
+"accessLogToFile" = "Write access log to a file"
+"customValue" = "custom"
+"simpleJsonFooter" = "Need inbound rules, routing rules, or DNS? Switch to JSON."
+"dnsLogEnable" = "Enable DNS query logging"
+"navAria" = "Xray template sections"
+"navGeneral" = "General"
+"navFullTemplate" = "Entire template (JSON)"
+"inboundsTemplateHint" = "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound."
+
+[pages.xray.navGroup]
+"core" = "Core"
+"network" = "Network"
+"endpoints" = "Endpoints"
+"advanced" = "Advanced"
+"misc" = "Other"
 
 [pages.xray.rules]
 "first" = "Đầu tiên"
