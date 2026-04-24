@@ -34,6 +34,16 @@ type SubJsonService struct {
 
 // NewSubJsonService creates a new JSON subscription service with the given configuration.
 func NewSubJsonService(fragment string, noises string, mux string, rules string, subService *SubService) *SubJsonService {
+	s := &SubJsonService{SubService: subService}
+	s.applyTemplates(fragment, noises, mux, rules)
+	return s
+}
+
+// applyTemplates rebuilds the inline default config from the given Xray JSON
+// fragments (fragment / noises / mux / rules). Called on first construction
+// and on every request so edits in the subscription builder apply without
+// restarting the server.
+func (s *SubJsonService) applyTemplates(fragment string, noises string, mux string, rules string) {
 	var configJson map[string]any
 	var defaultOutbounds []json_util.RawMessage
 	json.Unmarshal([]byte(defaultJson), &configJson)
@@ -62,14 +72,11 @@ func NewSubJsonService(fragment string, noises string, mux string, rules string,
 		defaultOutbounds = append(defaultOutbounds, json_util.RawMessage(noises))
 	}
 
-	return &SubJsonService{
-		configJson:       configJson,
-		defaultOutbounds: defaultOutbounds,
-		fragment:         fragment,
-		noises:           noises,
-		mux:              mux,
-		SubService:       subService,
-	}
+	s.configJson = configJson
+	s.defaultOutbounds = defaultOutbounds
+	s.fragment = fragment
+	s.noises = noises
+	s.mux = mux
 }
 
 // GetJson generates a JSON subscription configuration for the given subscription ID and host.
@@ -212,6 +219,8 @@ func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, 
 			newOutbounds = append(newOutbounds, s.genVless(inbound, streamSettings, client))
 		case "trojan", "shadowsocks":
 			newOutbounds = append(newOutbounds, s.genServer(inbound, streamSettings, client))
+		case "hysteria", "hysteria2":
+			newOutbounds = append(newOutbounds, s.genHy(inbound, newStream, client))
 		}
 
 		newOutbounds = append(newOutbounds, s.defaultOutbounds...)
@@ -397,6 +406,56 @@ func (s *SubJsonService) genServer(inbound *model.Inbound, streamSettings json_u
 	outbound.Settings = map[string]any{
 		"servers": serverData,
 	}
+
+	result, _ := json.MarshalIndent(outbound, "", "  ")
+	return result
+}
+
+func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any, client model.Client) json_util.RawMessage {
+	outbound := Outbound{}
+
+	outbound.Protocol = string(inbound.Protocol)
+	outbound.Tag = "proxy"
+
+	if s.mux != "" {
+		outbound.Mux = json_util.RawMessage(s.mux)
+	}
+
+	var settings map[string]any
+	json.Unmarshal([]byte(inbound.Settings), &settings)
+	version, _ := settings["version"].(float64)
+	outbound.Settings = map[string]any{
+		"version": int(version),
+		"address": inbound.Listen,
+		"port":    inbound.Port,
+	}
+
+	auth := client.Password
+	if client.Auth != "" {
+		auth = client.Auth
+	}
+
+	hyStream, ok := newStream["hysteriaSettings"].(map[string]any)
+	if !ok {
+		hyStream = map[string]any{}
+	}
+	outHyStream := map[string]any{
+		"version": int(version),
+		"auth":    auth,
+	}
+	if udpIdleTimeout, ok := hyStream["udpIdleTimeout"].(float64); ok {
+		outHyStream["udpIdleTimeout"] = int(udpIdleTimeout)
+	}
+	newStream["hysteriaSettings"] = outHyStream
+
+	if finalmask, ok := hyStream["finalmask"].(map[string]any); ok {
+		newStream["finalmask"] = finalmask
+	}
+
+	newStream["network"] = "hysteria"
+	newStream["security"] = "tls"
+
+	outbound.StreamSettings, _ = json.MarshalIndent(newStream, "", "  ")
 
 	result, _ := json.MarshalIndent(outbound, "", "  ")
 	return result

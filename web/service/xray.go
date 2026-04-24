@@ -210,6 +210,8 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	if err != nil {
 		return nil, err
 	}
+	hyCert, _ := s.settingService.GetCertFile()
+	hyKey, _ := s.settingService.GetKeyFile()
 	for _, inbound := range inbounds {
 		if !inbound.Enable {
 			continue
@@ -289,7 +291,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			inbound.StreamSettings = string(newStream)
 		}
 
-		inboundConfig := inbound.GenXrayInboundConfig()
+		inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
 		xrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, *inboundConfig)
 	}
 	return xrayConfig, nil
@@ -430,6 +432,9 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 		}
 	}
 
+	hyCert, _ := s.settingService.GetCertFile()
+	hyKey, _ := s.settingService.GetKeyFile()
+
 	// Send config to each node in parallel for better performance
 	var wg sync.WaitGroup
 	var mu sync.Mutex
@@ -562,7 +567,7 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 				inbound.StreamSettings = string(newStream)
 			}
 
-			inboundConfig := inbound.GenXrayInboundConfig()
+			inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
 			nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, *inboundConfig)
 		}
 

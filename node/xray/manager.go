@@ -577,20 +577,10 @@ func (m *Manager) AddUser(protocol, inboundTag string, user map[string]interface
 		return fmt.Errorf("failed to add user: %w", err)
 	}
 
-	// Update config file and restart Xray asynchronously in background to sync config
-	// This ensures config file is fully synchronized without blocking the response
-	go func() {
-		// Update config file first
-		if err := m.updateConfigFileAfterUserAddition(inboundTag, user); err != nil {
-			logger.Warningf("Failed to update config file after adding user: %v", err)
-		}
-		// Then reload to apply updated config
-		if err := m.Reload(); err != nil {
-			logger.Warningf("Failed to reload Xray after adding user: %v", err)
-		} else {
-			logger.Debugf("Xray reloaded successfully after adding user (config synced)")
-		}
-	}()
+	// Persist to config.json only; running core already has the user via gRPC.
+	if err := m.updateConfigFileAfterUserAddition(inboundTag, user); err != nil {
+		logger.Warningf("Failed to update config file after adding user: %v", err)
+	}
 
 	return nil
 }
@@ -625,20 +615,9 @@ func (m *Manager) RemoveUser(inboundTag, email string) error {
 		return fmt.Errorf("failed to remove user: %w", err)
 	}
 
-	// Update config file and restart Xray asynchronously in background to sync config
-	// This ensures config file is fully synchronized without blocking the response
-	go func() {
-		// Update config file first
-		if err := m.updateConfigFileAfterUserRemoval(inboundTag, email); err != nil {
-			logger.Warningf("Failed to update config file after removing user %s: %v", email, err)
-		}
-		// Then reload to apply updated config
-		if err := m.Reload(); err != nil {
-			logger.Warningf("Failed to reload Xray after removing user %s: %v", email, err)
-		} else {
-			logger.Debugf("Xray reloaded successfully after removing user %s (config synced)", email)
-		}
-	}()
+	if err := m.updateConfigFileAfterUserRemoval(inboundTag, email); err != nil {
+		logger.Warningf("Failed to update config file after removing user %s: %v", email, err)
+	}
 
 	return nil
 }
@@ -687,6 +666,27 @@ func (m *Manager) UpdateInbound(inboundConfig []byte) error {
 		return fmt.Errorf("failed to add updated inbound: %w", err)
 	}
 
+	var ic xray.InboundConfig
+	if err := json.Unmarshal(inboundConfig, &ic); err != nil {
+		return fmt.Errorf("failed to parse inbound for persistence: %w", err)
+	}
+	if m.config != nil {
+		replaced := false
+		for i := range m.config.InboundConfigs {
+			if m.config.InboundConfigs[i].Tag == tag {
+				m.config.InboundConfigs[i] = ic
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			m.config.InboundConfigs = append(m.config.InboundConfigs, ic)
+		}
+		if err := m.saveConfigToFile(); err != nil {
+			logger.Warningf("Failed to save config after inbound update %s: %v", tag, err)
+		}
+	}
+
 	logger.Infof("Inbound %s updated successfully via API (instant)", tag)
 	return nil
 }
@@ -720,6 +720,19 @@ func (m *Manager) DelInbound(tag string) error {
 			return nil // Already removed, consider it success
 		}
 		return fmt.Errorf("failed to remove inbound: %w", err)
+	}
+
+	if m.config != nil {
+		out := m.config.InboundConfigs[:0]
+		for _, ib := range m.config.InboundConfigs {
+			if ib.Tag != tag {
+				out = append(out, ib)
+			}
+		}
+		m.config.InboundConfigs = out
+		if err := m.saveConfigToFile(); err != nil {
+			logger.Warningf("Failed to save config after inbound removal %s: %v", tag, err)
+		}
 	}
 
 	logger.Infof("Inbound %s removed successfully via API (instant)", tag)

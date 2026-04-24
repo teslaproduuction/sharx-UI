@@ -97,7 +97,10 @@
 "settings" = "パネル設定"
 "xray" = "Xray設定"
 "apiDocs" = "API ドキュメント"
+"apiDocsDesc" = "このビルドに同梱の HTTP API リファレンス（Markdown・OpenAPI ではありません）。"
+"apiDocsTocTitle" = "このページ"
 "logout" = "ログアウト"
+"openNavigation" = "Open menu"
 "link" = "リンク管理"
 
 [pages.login]
@@ -487,6 +490,25 @@
 "statsOutboundUplinkDesc" = "すべてのアウトバウンドプロキシのアップストリームトラフィックの統計収集を有効にします。"
 "statsOutboundDownlink" = "アウトバウンドダウンロード統計"
 "statsOutboundDownlinkDesc" = "すべてのアウトバウンドプロキシのダウンストリームトラフィックの統計収集を有効にします。"
+"editorSimple" = "Simple"
+"editorJson" = "JSON (advanced)"
+"simpleSectionTitle" = "Core (quick setup)"
+"simpleSectionHint" = "Adjust common options without editing JSON. Switch to JSON for inbound routing, DNS, and full control."
+"accessLogToFile" = "Write access log to a file"
+"customValue" = "custom"
+"simpleJsonFooter" = "Need inbound rules, routing rules, or DNS? Switch to JSON."
+"dnsLogEnable" = "Enable DNS query logging"
+"navAria" = "Xray template sections"
+"navGeneral" = "General"
+"navFullTemplate" = "Entire template (JSON)"
+"inboundsTemplateHint" = "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound."
+
+[pages.xray.navGroup]
+"core" = "Core"
+"network" = "Network"
+"endpoints" = "Endpoints"
+"advanced" = "Advanced"
+"misc" = "Other"
 
 [pages.xray.rules]
 "first" = "最初"

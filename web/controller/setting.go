@@ -47,6 +47,10 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.GET("/getDefaultJsonConfig", a.getDefaultXrayConfig)
 	g.GET("/grafana/dashboard", a.getGrafanaDashboard)
 
+	g.POST("/subscriptionPageConfig/list", a.subscriptionPageConfigList)
+	g.POST("/subscriptionPageConfig/get", a.subscriptionPageConfigGet)
+	g.POST("/subscriptionPageConfig/save", a.subscriptionPageConfigSave)
+
 	// Initialize migration controller
 	NewMigrationController(g)
 }

@@ -1,3 +1,7 @@
+# Public subscription page is served by SharX itself: /panel/sub/?id=<subId> (Next static export).
+# Set XUI_WEB_DOMAIN (and TLS env vars if needed) so user-facing links resolve to the panel host.
+# VPN clients use the subscription port (e.g. 2096) for raw configs; browsers hitting the sub URL
+# with Accept: text/html are redirected to the first-party page unless ?legacy=1 is set.
 services:
   sharx:
     build:
@@ -13,7 +17,9 @@ services:
       - $PWD/db/:/etc/x-ui/
       - $PWD/cert/:/root/cert/
       - $PWD/data/:/app/data/  # Data folder for core state and geo files
-      - $PWD/bin/:/app/bin/    # Bin folder for Xray binaries
+      # Do not mount ./bin unless you supply xray-linux-* yourself. An empty host dir hides
+      # the binaries baked into the image and causes: fork/exec /app/bin/xray-linux-arm64: no such file
+      # - $PWD/bin/:/app/bin/
     environment:
       # Xray настройки
       XRAY_VMESS_AEAD_FORCED: "false"
@@ -21,6 +27,8 @@ services:
       # Paths
       XUI_DATA_FOLDER: "/app/data"
       XUI_BIN_FOLDER: "/app/bin"
+      # Панель на корне сайта (см. GetBasePath); без подпути не будет 302/404 на GET http://host:2053/
+      XUI_WEB_BASE_PATH: "/"
       # XUI_WEB_CERT_FILE:  /cert/fullchain.pem
       # XUI_WEB_KEY_FILE: /cert/privkey.pem
       # XUI_WEB_DOMAIN: panel.example.com

@@ -45,6 +45,13 @@ func (s *InboundService) getXrayAPI(apiPort int) (*xray.XrayAPI, error) {
 	return api, nil
 }
 
+func marshalInboundJSONForXray(inbound *model.Inbound) ([]byte, error) {
+	ss := SettingService{}
+	cf, _ := ss.GetCertFile()
+	kf, _ := ss.GetKeyFile()
+	return json.MarshalIndent(BuildInboundXrayConfig(inbound, cf, kf), "", "  ")
+}
+
 // inboundUpdateMutexes provides per-inbound mutexes to prevent concurrent updates
 var inboundUpdateMutexes = make(map[int]*sync.Mutex)
 var inboundMutexLock sync.Mutex
@@ -318,6 +325,8 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		switch inbound.Protocol {
 		case model.Trojan:
 			client["password"] = entity.Password
+		case model.Hysteria, model.Hysteria2:
+			client["auth"] = entity.Password
 		case model.Shadowsocks:
 			// For Shadowsocks, we need to get method from settings
 			if method, ok := settings["method"].(string); ok {
@@ -476,7 +485,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	if len(clients) > 0 {
 		for _, client := range clients {
 			switch inbound.Protocol {
-			case "trojan":
+			case "trojan", "hysteria", "hysteria2":
 				if client.Password == "" {
 					return inbound, false, common.NewError("empty client ID")
 				}
@@ -529,7 +538,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 			apiPort := p.GetAPIPort()
 			api, err := s.getXrayAPI(apiPort)
 			if err == nil {
-				inboundJson, err1 := json.MarshalIndent(inbound.GenXrayInboundConfig(), "", "  ")
+				inboundJson, err1 := marshalInboundJSONForXray(inbound)
 				if err1 != nil {
 					logger.Debug("Unable to marshal inbound config:", err1)
 				} else {
@@ -937,7 +946,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			nodes, err := nodeService.GetNodesForInbound(inbound.Id)
 			if err == nil && len(nodes) > 0 && inbound.Enable {
 				// Generate new config with updated Settings
-				inboundJson, err2 := json.MarshalIndent(oldInbound.GenXrayInboundConfig(), "", "  ")
+				inboundJson, err2 := marshalInboundJSONForXray(oldInbound)
 				if err2 == nil {
 					// Update inbound on all nodes via API (async, non-blocking)
 					for _, node := range nodes {
@@ -970,7 +979,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 
 				if inbound.Enable {
 					// Generate new config with updated Settings (which excludes disabled clients)
-					inboundJson, err2 := json.MarshalIndent(oldInbound.GenXrayInboundConfig(), "", "  ")
+					inboundJson, err2 := marshalInboundJSONForXray(oldInbound)
 					if err2 != nil {
 						logger.Debug("Unable to marshal updated inbound config:", err2)
 						needRestart = true
@@ -1084,7 +1093,7 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 	// Validate client IDs
 	for _, client := range clients {
 		switch oldInbound.Protocol {
-		case "trojan":
+		case "trojan", "hysteria", "hysteria2":
 			if client.Password == "" {
 				return false, common.NewError("empty client ID")
 			}
@@ -1151,7 +1160,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 	// Find client by clientId (UUID/password/email depending on protocol)
 	var targetEmail string
 	client_key := "id"
-	if oldInbound.Protocol == "trojan" {
+	if oldInbound.Protocol == "trojan" || model.IsHysteria(oldInbound.Protocol) {
 		client_key = "password"
 	}
 	if oldInbound.Protocol == "shadowsocks" {
@@ -1235,7 +1244,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	// Find old client by clientId (UUID/password/email depending on protocol)
 	var oldEmail string
 	client_key := "id"
-	if oldInbound.Protocol == "trojan" {
+	if oldInbound.Protocol == "trojan" || model.IsHysteria(oldInbound.Protocol) {
 		client_key = "password"
 	}
 	if oldInbound.Protocol == "shadowsocks" {
@@ -1750,7 +1759,7 @@ func (s *InboundService) SetClientTelegramUserID(trafficId int, tgId int64) (boo
 	for _, oldClient := range oldClients {
 		if oldClient.Email == clientEmail {
 			switch inbound.Protocol {
-			case "trojan":
+			case "trojan", "hysteria", "hysteria2":
 				clientId = oldClient.Password
 			case "shadowsocks":
 				clientId = oldClient.Email
@@ -1836,7 +1845,7 @@ func (s *InboundService) ToggleClientEnableByEmail(clientEmail string) (bool, bo
 	for _, oldClient := range oldClients {
 		if oldClient.Email == clientEmail {
 			switch inbound.Protocol {
-			case "trojan":
+			case "trojan", "hysteria", "hysteria2":
 				clientId = oldClient.Password
 			case "shadowsocks":
 				clientId = oldClient.Email
@@ -1917,7 +1926,7 @@ func (s *InboundService) ResetClientExpiryTimeByEmail(clientEmail string, expiry
 	for _, oldClient := range oldClients {
 		if oldClient.Email == clientEmail {
 			switch inbound.Protocol {
-			case "trojan":
+			case "trojan", "hysteria", "hysteria2":
 				clientId = oldClient.Password
 			case "shadowsocks":
 				clientId = oldClient.Email
@@ -1979,7 +1988,7 @@ func (s *InboundService) ResetClientTrafficLimitByEmail(clientEmail string, tota
 	for _, oldClient := range oldClients {
 		if oldClient.Email == clientEmail {
 			switch inbound.Protocol {
-			case "trojan":
+			case "trojan", "hysteria", "hysteria2":
 				clientId = oldClient.Password
 			case "shadowsocks":
 				clientId = oldClient.Email
@@ -2067,14 +2076,18 @@ func (s *InboundService) ResetClientTraffic(id int, clientEmail string) (bool, e
 							}
 							cipher = oldSettings["method"].(string)
 						}
-						err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, map[string]any{
+						user := map[string]any{
 							"email":    client.Email,
 							"id":       client.ID,
 							"security": client.Security,
 							"flow":     client.Flow,
 							"password": client.Password,
 							"cipher":   cipher,
-						})
+						}
+						if inbound.Protocol == model.Hysteria || inbound.Protocol == model.Hysteria2 {
+							user = map[string]any{"email": client.Email, "auth": client.Password}
+						}
+						err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, user)
 						if err1 == nil {
 							logger.Debug("Client enabled due to reset traffic:", clientEmail)
 						} else {
@@ -2373,7 +2386,7 @@ func (s *InboundService) SearchClientTraffic(query string) (traffic *xray.Client
 
 	clients := settings["clients"]
 	for _, client := range clients {
-		if (client.ID == query || client.Password == query) && client.Email != "" {
+		if (client.ID == query || client.Password == query || client.Auth == query) && client.Email != "" {
 			traffic.Email = client.Email
 			break
 		}

@@ -27,19 +27,28 @@ type IndexController struct {
 	settingService service.SettingService
 	userService    service.UserService
 	tgbot          service.Tgbot
+
+	serveLoginPage func(c *gin.Context)
 }
 
 // NewIndexController creates a new IndexController and initializes its routes.
-func NewIndexController(g *gin.RouterGroup) *IndexController {
-	a := &IndexController{}
+// serveLoginPage serves the static Next.js login (GET /) when the user is not logged in.
+func NewIndexController(g *gin.RouterGroup, serveLoginPage func(c *gin.Context)) *IndexController {
+	a := &IndexController{serveLoginPage: serveLoginPage}
 	a.initRouter(g)
 	return a
 }
 
 // initRouter sets up the routes for index, login, logout, and two-factor authentication.
 func (a *IndexController) initRouter(g *gin.RouterGroup) {
+	// HEAD: curl -I and health checks; Gin does not use GET for HEAD
+	g.HEAD("/", a.index)
 	g.GET("/", a.index)
+	g.HEAD("/logout", a.logout)
 	g.GET("/logout", a.logout)
+	// Panel menu uses basePath + "logout/" (trailing slash); redirects are disabled in web.go.
+	g.HEAD("/logout/", a.logout)
+	g.GET("/logout/", a.logout)
 
 	g.POST("/login", a.login)
 	g.POST("/getTwoFactorEnable", a.getTwoFactorEnable)
@@ -48,10 +57,12 @@ func (a *IndexController) initRouter(g *gin.RouterGroup) {
 // index handles the root route, redirecting logged-in users to the panel or showing the login page.
 func (a *IndexController) index(c *gin.Context) {
 	if session.IsLogin(c) {
-		c.Redirect(http.StatusTemporaryRedirect, "panel/")
+		c.Redirect(http.StatusFound, webPanelURL(c))
 		return
 	}
-	html(c, "login.html", "pages.login.title", nil)
+	if a.serveLoginPage != nil {
+		a.serveLoginPage(c)
+	}
 }
 
 // login handles user authentication and session creation.
@@ -112,7 +123,7 @@ func (a *IndexController) logout(c *gin.Context) {
 	if err := sessions.Default(c).Save(); err != nil {
 		logger.Warning("Unable to save session after clearing:", err)
 	}
-	c.Redirect(http.StatusTemporaryRedirect, c.GetString("base_path"))
+	c.Redirect(http.StatusFound, webBasePath(c))
 }
 
 // getTwoFactorEnable retrieves the current status of two-factor authentication.

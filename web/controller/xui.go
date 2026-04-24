@@ -11,11 +11,14 @@ type XUIController struct {
 	settingController     *SettingController
 	xraySettingController *XraySettingController
 	nodeController        *NodeController
+
+	servePanelPage func(c *gin.Context)
 }
 
 // NewXUIController creates a new XUIController and initializes its routes.
-func NewXUIController(g *gin.RouterGroup) *XUIController {
-	a := &XUIController{}
+// servePanelPage serves the Next.js static export for authenticated /panel/* routes.
+func NewXUIController(g *gin.RouterGroup, servePanelPage func(c *gin.Context)) *XUIController {
+	a := &XUIController{servePanelPage: servePanelPage}
 	a.initRouter(g)
 	return a
 }
@@ -25,86 +28,36 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 	g = g.Group("/panel")
 	g.Use(a.checkLogin)
 
-	g.GET("/", a.index)
-	g.GET("/inbounds", a.inbounds)
-	g.GET("/outbounds", a.outbounds)
-	g.GET("/settings", a.settings)
-	g.GET("/xray", a.xraySettings)
-	g.GET("/xray-core-config-profiles", a.xrayCoreConfigProfiles)
-	g.GET("/nodes", a.nodes)
-	g.GET("/clients", a.clients)
-	g.GET("/groups", a.groups)
-	g.GET("/hosts", a.hosts)
-	g.GET("/api-docs", a.apiDocs)
-
 	a.settingController = NewSettingController(g)
 	a.xraySettingController = NewXraySettingController(g)
 	a.nodeController = NewNodeController(g.Group("/node"))
-	
-	// Register client and host controllers directly under /panel (not /panel/api)
+
 	NewClientController(g.Group("/client"))
 	NewHostController(g.Group("/host"))
-	NewClientHWIDController(g.Group("/client")) // Register HWID controller under /panel/client/hwid
-	NewClientGroupController(g.Group("/group"))  // Register group controller under /panel/group
-	
-	// Register outbound controller
+	NewClientHWIDController(g.Group("/client"))
+	NewClientGroupController(g.Group("/group"))
 	NewOutboundController(g.Group("/outbound"))
-	
-	// Register Xray core config profile controller
 	NewXrayCoreConfigProfileController(g.Group("/xray-core-config-profile"))
+
+	g.HEAD("/", a.panelIndex)
+	g.GET("/", a.panelIndex)
+	// Do not register /*filepath here: Gin forbids a catch-all alongside static segments like /xray, /setting.
+	// Deep links are served via engine.NoRoute + ServeSPAFallback in web.Server.
 }
 
-// index renders the main panel index page.
-func (a *XUIController) index(c *gin.Context) {
-	html(c, "index.html", "pages.index.title", nil)
+func (a *XUIController) panelIndex(c *gin.Context) {
+	if a.servePanelPage != nil {
+		a.servePanelPage(c)
+	}
 }
 
-// inbounds renders the inbounds management page.
-func (a *XUIController) inbounds(c *gin.Context) {
-	html(c, "inbounds.html", "pages.inbounds.title", nil)
-}
-
-// settings renders the settings management page.
-func (a *XUIController) settings(c *gin.Context) {
-	html(c, "settings.html", "pages.settings.title", nil)
-}
-
-// xraySettings renders the Xray settings page.
-func (a *XUIController) xraySettings(c *gin.Context) {
-	html(c, "xray.html", "pages.xray.title", nil)
-}
-
-// nodes renders the nodes management page (multi-node mode).
-func (a *XUIController) nodes(c *gin.Context) {
-	html(c, "nodes.html", "pages.nodes.title", nil)
-}
-
-// clients renders the clients management page.
-func (a *XUIController) clients(c *gin.Context) {
-	html(c, "clients.html", "pages.clients.title", nil)
-}
-
-// groups renders the groups management page.
-func (a *XUIController) groups(c *gin.Context) {
-	html(c, "groups.html", "pages.groups.title", nil)
-}
-
-// hosts renders the hosts management page (multi-node mode).
-func (a *XUIController) hosts(c *gin.Context) {
-	html(c, "hosts.html", "pages.hosts.title", nil)
-}
-
-// outbounds renders the outbounds management page (multi-node mode).
-func (a *XUIController) outbounds(c *gin.Context) {
-	html(c, "outbounds.html", "pages.outbounds.title", nil)
-}
-
-// xrayCoreConfigProfiles renders the Xray core config profiles management page (multi-node mode).
-func (a *XUIController) xrayCoreConfigProfiles(c *gin.Context) {
-	html(c, "xray_core_config_profiles.html", "pages.xrayCoreConfigProfiles.title", nil)
-}
-
-// apiDocs renders the API documentation page.
-func (a *XUIController) apiDocs(c *gin.Context) {
-	html(c, "api-docs.html", "menu.apiDocs", nil)
+// ServeSPAFallback serves the React shell for client-side routes (GET /panel/... with no API match).
+func (a *XUIController) ServeSPAFallback(c *gin.Context) {
+	a.checkLogin(c)
+	if c.IsAborted() {
+		return
+	}
+	if a.servePanelPage != nil {
+		a.servePanelPage(c)
+	}
 }

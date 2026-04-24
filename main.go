@@ -13,16 +13,36 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/database"
+	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/sub"
 	"github.com/konstpic/sharx-code/v2/util/crypto"
+	"github.com/konstpic/sharx-code/v2/xray"
 	"github.com/konstpic/sharx-code/v2/web"
+	"github.com/konstpic/sharx-code/v2/web/controller"
 	"github.com/konstpic/sharx-code/v2/web/global"
 	"github.com/konstpic/sharx-code/v2/web/service"
 
 	"github.com/joho/godotenv"
 	"github.com/op/go-logging"
 )
+
+func registerClientShareLinksBuilder() {
+	controller.SetClientShareLinksBuilder(func(client *model.ClientEntity, host string) []model.ClientInboundShareLink {
+		s := sub.NewPanelSubService(host)
+		return s.ClientShareLinks(client, client.InboundIds)
+	})
+	controller.RegisterSubscriptionSubsHook(func(subID, host string) ([]string, int64, xray.ClientTraffic, error) {
+		ss := service.SettingService{}
+		showInfo, _ := ss.GetSubShowInfo()
+		remark, _ := ss.GetRemarkModel()
+		if remark == "" {
+			remark = "-ieo"
+		}
+		s := sub.NewCompatSubService(showInfo, remark)
+		return s.GetSubs(subID, host, nil)
+	})
+}
 
 // runWebServer initializes and starts the web server for the SharX panel.
 func runWebServer() {
@@ -58,6 +78,13 @@ func runWebServer() {
 		// Do not abort startup; Xray-related operations may still try to recover later.
 	}
 
+	// Generate (once) and cache the panel-wide node pairing bundle so every node
+	// shares the same SECRET_KEY in its docker-compose.yml.
+	pairingService := &service.PanelPairingService{}
+	if err := pairingService.Ensure(); err != nil {
+		logger.Warningf("Failed to ensure panel pairing bundle: %v", err)
+	}
+
 	// Pre-generate Xray configuration file from database at startup.
 	// This ensures the config file is ready before Xray starts.
 	xrayService := service.NewXrayService()
@@ -75,6 +102,7 @@ func runWebServer() {
 
 	var server *web.Server
 	server = web.NewServer()
+	registerClientShareLinksBuilder()
 	global.SetWebServer(server)
 	err = server.Start()
 	if err != nil {
@@ -115,6 +143,7 @@ func runWebServer() {
 			}
 
 			server = web.NewServer()
+			registerClientShareLinksBuilder()
 			global.SetWebServer(server)
 			err = server.Start()
 			if err != nil {

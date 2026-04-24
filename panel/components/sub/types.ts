@@ -1,0 +1,75 @@
+import type { SharxSubpageConfig } from "@/lib/sharxSubpageConfig";
+
+export type PublicSubUser = {
+  shortUuid: string;
+  username?: string;
+  daysLeft: number;
+  trafficUsed: string;
+  trafficLimit: string;
+  expiresAt: string;
+  isActive: boolean;
+  userStatus: string;
+};
+
+export type PublicSubPayload = {
+  config: SharxSubpageConfig | Record<string, unknown>;
+  configUuid: string;
+  subscriptionUrl: string;
+  subscriptionJsonUrl: string;
+  links: string[];
+  user: PublicSubUser;
+  /** Optional deep-link URL for Happ (happ://crypt4/...). */
+  happEncryptedUrl?: string;
+  /** Optional deep-link URL for v2rayTun (v2raytun://crypt/...). */
+  v2raytunEncryptedUrl?: string;
+};
+
+export type SupportKind = "telegram" | "discord" | "vk" | "generic";
+
+export function supportKindFromUrl(url: string): SupportKind {
+  const u = url.toLowerCase();
+  if (u.includes("t.me") || u.includes("telegram")) return "telegram";
+  if (u.includes("discord")) return "discord";
+  if (u.includes("vk.com") || u.includes("vkontakte")) return "vk";
+  return "generic";
+}
+
+export function parseLinkTitle(url: string): string {
+  const i = url.lastIndexOf("#");
+  if (i >= 0 && i < url.length - 1) {
+    const raw = url.slice(i + 1).trim();
+    try {
+      const decoded = decodeURIComponent(raw);
+      return decoded || url;
+    } catch {
+      return raw || url;
+    }
+  }
+  try {
+    return new URL(url).hostname || url;
+  } catch {
+    return url;
+  }
+}
+
+export const MOCK_SUB_DATA: PublicSubPayload = {
+  config: {} as SharxSubpageConfig,
+  configUuid: "preview",
+  subscriptionUrl: "https://example.com/sub/abcdef12345/?preview=1",
+  subscriptionJsonUrl: "https://example.com/sub/json/abcdef12345/?preview=1",
+  links: [
+    "vless://00000000-0000-0000-0000-000000000000@example.com:443?type=tcp&security=reality&pbk=demo&sid=00#Main%20Fast",
+    "vless://00000000-0000-0000-0000-000000000000@example.com:443?type=ws&security=tls&path=/demo#Backup",
+    "trojan://demo-password@example.com:443?security=tls#Backup%20TLS",
+  ],
+  user: {
+    shortUuid: "preview",
+    username: "alice@example.com",
+    daysLeft: 17,
+    trafficUsed: "12.4 GB",
+    trafficLimit: "100 GB",
+    expiresAt: new Date(Date.now() + 17 * 86400 * 1000).toISOString(),
+    isActive: true,
+    userStatus: "ACTIVE",
+  },
+};

@@ -1,0 +1,125 @@
+{
+  "schemaVersion": "sharx-v2",
+  "branding": {
+    "title": "Subscription",
+    "logoUrl": "",
+    "brandText": "",
+    "supportUrl": ""
+  },
+  "theme": "system",
+  "showQrCodes": true,
+  "locales": ["en", "ru"],
+  "blocks": [
+    {
+      "id": "default-subscription-info",
+      "kind": "subscription-info",
+      "enabled": true,
+      "variant": "expanded"
+    },
+    {
+      "id": "default-installation-guide",
+      "kind": "installation-guide",
+      "enabled": true,
+      "style": "stepper",
+      "showDeeplinks": true,
+      "platforms": ["ios", "android", "windows", "macos", "linux"],
+      "groups": [
+        {
+          "platform": "ios",
+          "enabled": true,
+          "intro": "",
+          "apps": [
+            { "app": "happ", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "v2raytun", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "streisand", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "shadowrocket", "label": "", "downloadUrl": "", "steps": [] }
+          ]
+        },
+        {
+          "platform": "android",
+          "enabled": true,
+          "intro": "",
+          "apps": [
+            { "app": "happ", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "v2raytun", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "v2rayng", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "hiddify", "label": "", "downloadUrl": "", "steps": [] }
+          ]
+        },
+        {
+          "platform": "windows",
+          "enabled": true,
+          "intro": "",
+          "apps": [
+            { "app": "happ", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "v2raytun", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "hiddify", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "clash-verge", "label": "", "downloadUrl": "", "steps": [] }
+          ]
+        },
+        {
+          "platform": "macos",
+          "enabled": true,
+          "intro": "",
+          "apps": [
+            { "app": "happ", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "v2raytun", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "hiddify", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "clash-verge", "label": "", "downloadUrl": "", "steps": [] }
+          ]
+        },
+        {
+          "platform": "linux",
+          "enabled": true,
+          "intro": "",
+          "apps": [
+            { "app": "hiddify", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "clash-verge", "label": "", "downloadUrl": "", "steps": [] },
+            { "app": "sing-box", "label": "", "downloadUrl": "", "steps": [] }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "default-add-to-app",
+      "kind": "add-to-app",
+      "enabled": true,
+      "preferJsonUrl": false,
+      "buttons": [
+        { "id": "btn-happ", "app": "happ", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": true },
+        { "id": "btn-v2raytun", "app": "v2raytun", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": true },
+        { "id": "btn-v2rayng", "app": "v2rayng", "enabled": true, "label": "", "iconUrl": "", "platforms": ["android"], "deepLinkTemplate": "", "useEncrypted": false },
+        { "id": "btn-hiddify", "app": "hiddify", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos","linux"], "deepLinkTemplate": "", "useEncrypted": false },
+        { "id": "btn-streisand", "app": "streisand", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios"], "deepLinkTemplate": "", "useEncrypted": false },
+        { "id": "btn-shadowrocket", "app": "shadowrocket", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios"], "deepLinkTemplate": "", "useEncrypted": false },
+        { "id": "btn-clash-meta", "app": "clash-meta", "enabled": true, "label": "", "iconUrl": "", "platforms": ["android","windows","macos","linux"], "deepLinkTemplate": "", "useEncrypted": false },
+        { "id": "btn-karing", "app": "karing", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": false }
+      ]
+    },
+    {
+      "id": "default-links-list",
+      "kind": "links-list",
+      "enabled": true,
+      "showQr": true,
+      "showCopy": true
+    }
+  ],
+  "responseRules": {
+    "profileTitle": "",
+    "profileUpdateInterval": 12,
+    "announce": "",
+    "supportUrl": "",
+    "profileWebPageUrl": "",
+    "extraHeaders": []
+  },
+  "appSettings": {
+    "encrypt": false,
+    "showInfo": true
+  },
+  "jsonTemplates": {
+    "fragment": "",
+    "mux": "",
+    "noises": "",
+    "rules": ""
+  }
+}

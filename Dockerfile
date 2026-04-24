@@ -1,7 +1,18 @@
 # ========================================================
+# Stage: Next.js static panel
+# ========================================================
+FROM node:22-alpine AS panelui
+WORKDIR /app/panel
+COPY panel/package.json panel/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm --prefer-offline
+COPY panel/ ./
+RUN npm run build && cp -R out /webpanel
+
+# ========================================================
 # Stage: Builder
 # ========================================================
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 WORKDIR /app
 ARG TARGETARCH
 ARG BUILDKIT_INLINE_CACHE=1
@@ -21,8 +32,19 @@ COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
-# Copy source code
-COPY . .
+# Copy only Go sources (web/panel comes from panelui; omitted via .dockerignore).
+# Panel or doc edits no longer invalidate the compile layer.
+COPY config/ ./config/
+COPY database/ ./database/
+COPY logger/ ./logger/
+COPY util/ ./util/
+COPY xray/ ./xray/
+COPY sub/ ./sub/
+COPY node/ ./node/
+COPY web/ ./web/
+COPY main.go ./
+COPY DockerInit.sh DockerEntrypoint.sh ./
+COPY --from=panelui /webpanel/ ./web/panel
 
 # Make all .sh files executable and fix line endings if needed
 RUN chmod +x *.sh && \

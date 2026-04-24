@@ -1,0 +1,42 @@
+{
+  "name": "panel",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --turbopack",
+    "prebuild": "node scripts/gen-locales.mjs",
+    "build": "next build",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@monaco-editor/react": "^4.7.0",
+    "axios": "^1.15.2",
+    "framer-motion": "^12.38.0",
+    "i18next": "^26.0.6",
+    "lucide-react": "^0.474.0",
+    "next": "15.5.15",
+    "qs": "^6.15.1",
+    "qrcode.react": "^4.2.0",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-i18next": "^17.0.4",
+    "react-markdown": "^10.1.0",
+    "rehype-slug": "^6.0.0",
+    "remark-gfm": "^4.0.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@iarna/toml": "^2.2.5",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/qs": "^6.15.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "15.5.15",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}

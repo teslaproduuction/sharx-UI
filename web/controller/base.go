@@ -4,6 +4,7 @@ package controller
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/locale"
@@ -15,13 +16,43 @@ import (
 // BaseController provides common functionality for all controllers, including authentication checks.
 type BaseController struct{}
 
+// webBasePath returns a path-absolute base URL prefix, always with a trailing slash (e.g. "/" or "/xui/").
+// Never returns empty — a missing/empty context value is treated as "/".
+func webBasePath(c *gin.Context) string {
+	p := c.GetString("base_path")
+	if p == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	if !strings.HasSuffix(p, "/") {
+		p += "/"
+	}
+	return p
+}
+
+// webPanelURL returns the path to the React panel shell (e.g. "/panel/").
+func webPanelURL(c *gin.Context) string {
+	return webBasePath(c) + "panel/"
+}
+
+func isPublicSubscriptionPagePath(path string) bool {
+	path = strings.TrimSuffix(path, "/")
+	return strings.HasSuffix(path, "/panel/sub")
+}
+
 // checkLogin is a middleware that verifies user authentication and handles unauthorized access.
 func (a *BaseController) checkLogin(c *gin.Context) {
+	if isPublicSubscriptionPagePath(c.Request.URL.Path) {
+		c.Next()
+		return
+	}
 	if !session.IsLogin(c) {
 		if isAjax(c) {
 			pureJsonMsg(c, http.StatusUnauthorized, false, I18nWeb(c, "pages.login.loginAgain"))
 		} else {
-			c.Redirect(http.StatusTemporaryRedirect, c.GetString("base_path"))
+			c.Redirect(http.StatusFound, webBasePath(c))
 		}
 		c.Abort()
 	} else {

@@ -97,7 +97,10 @@
 "settings" = "Configuraciones"
 "xray" = "Ajustes Xray"
 "apiDocs" = "Documentación API"
+"apiDocsDesc" = "Referencia HTTP API en Markdown (no OpenAPI) incluida en esta compilación."
+"apiDocsTocTitle" = "En esta página"
 "logout" = "Cerrar Sesión"
+"openNavigation" = "Open menu"
 "link" = "Gestionar"
 
 [pages.login]
@@ -487,6 +490,25 @@
 "statsOutboundUplinkDesc" = "Habilita la recopilación de estadísticas para el tráfico ascendente de todos los proxies de salida."
 "statsOutboundDownlink" = "Estadísticas de Bajada de Salida"
 "statsOutboundDownlinkDesc" = "Habilita la recopilación de estadísticas para el tráfico descendente de todos los proxies de salida."
+"editorSimple" = "Simple"
+"editorJson" = "JSON (advanced)"
+"simpleSectionTitle" = "Core (quick setup)"
+"simpleSectionHint" = "Adjust common options without editing JSON. Switch to JSON for inbound routing, DNS, and full control."
+"accessLogToFile" = "Write access log to a file"
+"customValue" = "custom"
+"simpleJsonFooter" = "Need inbound rules, routing rules, or DNS? Switch to JSON."
+"dnsLogEnable" = "Enable DNS query logging"
+"navAria" = "Xray template sections"
+"navGeneral" = "General"
+"navFullTemplate" = "Entire template (JSON)"
+"inboundsTemplateHint" = "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound."
+
+[pages.xray.navGroup]
+"core" = "Core"
+"network" = "Network"
+"endpoints" = "Endpoints"
+"advanced" = "Advanced"
+"misc" = "Other"
 
 [pages.xray.rules]
 "first" = "Primero"

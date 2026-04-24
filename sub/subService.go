@@ -43,6 +43,66 @@ func NewSubService(showInfo bool, remarkModel string) *SubService {
 	}
 }
 
+// NewPanelSubService returns a SubService wired for panel-side link generation (no subscription HTTP context).
+func NewPanelSubService(defaultHost string) *SubService {
+	var ss service.SettingService
+	remark, _ := ss.GetRemarkModel()
+	remark = strings.TrimSpace(remark)
+	if remark == "" {
+		remark = "-ieo"
+	}
+	s := NewSubService(false, remark)
+	s.address = defaultHost
+	s.inboundService = service.InboundService{}
+	s.settingService = service.SettingService{}
+	s.nodeService = service.NodeService{}
+	s.hostService = service.HostService{}
+	s.clientService = service.ClientService{}
+	s.hwidService = service.ClientHWIDService{}
+	return s
+}
+
+// NewCompatSubService returns a SubService fully wired for panel/public subscription APIs (GetSubs, ResolveRequest).
+func NewCompatSubService(showInfo bool, remarkModel string) *SubService {
+	s := NewSubService(showInfo, remarkModel)
+	s.inboundService = service.InboundService{}
+	s.settingService = service.SettingService{}
+	s.nodeService = service.NodeService{}
+	s.hostService = service.HostService{}
+	s.clientService = service.ClientService{}
+	s.hwidService = service.ClientHWIDService{}
+	return s
+}
+
+// ClientShareLinks builds share URLs for a client for each assigned inbound (newline-separated if multiple addresses).
+func (s *SubService) ClientShareLinks(client *model.ClientEntity, inboundIDs []int) []model.ClientInboundShareLink {
+	out := make([]model.ClientInboundShareLink, 0, len(inboundIDs))
+	for _, id := range inboundIDs {
+		if id <= 0 {
+			continue
+		}
+		inbound, err := s.inboundService.GetInbound(id)
+		if err != nil || inbound == nil {
+			continue
+		}
+		prepared := s.prepareInboundForSubscription(inbound)
+		link := s.getLinkWithClient(prepared, client)
+		if link == "" && client != nil && strings.TrimSpace(client.Email) != "" {
+			link = s.getLink(prepared, client.Email)
+		}
+		if link == "" {
+			continue
+		}
+		out = append(out, model.ClientInboundShareLink{
+			InboundId: id,
+			Remark:    inbound.Remark,
+			Protocol:  string(inbound.Protocol),
+			Link:      link,
+		})
+	}
+	return out
+}
+
 // GetSubs retrieves subscription links for a given subscription ID and host.
 // If gin.Context is provided, it will also register HWID from HTTP headers (x-hwid, x-device-os, etc.).
 func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]string, int64, xray.ClientTraffic, error) {
@@ -121,18 +181,11 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 	}
 	
 	for _, inbound := range inbounds {
-		if len(inbound.Listen) > 0 && inbound.Listen[0] == '@' {
-			listen, port, streamSettings, err := s.getFallbackMaster(inbound.Listen, inbound.StreamSettings)
-			if err == nil {
-				inbound.Listen = listen
-				inbound.Port = port
-				inbound.StreamSettings = streamSettings
-			}
-		}
-		
+		prepared := s.prepareInboundForSubscription(inbound)
+
 		if useNewArchitecture {
 			// New architecture: use ClientEntity data directly
-			link := s.getLinkWithClient(inbound, clientEntity)
+			link := s.getLinkWithClient(prepared, clientEntity)
 			// Split link by newline to handle multiple links (for multiple nodes)
 			linkLines := strings.Split(link, "\n")
 			for _, linkLine := range linkLines {
@@ -157,7 +210,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 			}
 		} else {
 			// Old architecture: parse clients from Settings
-			clients, err := s.inboundService.GetClients(inbound)
+			clients, err := s.inboundService.GetClients(prepared)
 			if err != nil {
 				logger.Error("SubService - GetClients: Unable to get clients from inbound")
 			}
@@ -199,7 +252,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 						LastOnline: clientEntity.LastOnline,
 					}
 					
-					link := s.getLink(inbound, client.Email)
+					link := s.getLink(prepared, client.Email)
 					// Split link by newline to handle multiple links (for multiple nodes)
 					linkLines := strings.Split(link, "\n")
 					for _, linkLine := range linkLines {
@@ -208,7 +261,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 							result = append(result, linkLine)
 						}
 					}
-					ct := s.getClientTraffics(inbound.ClientStats, client.Email)
+					ct := s.getClientTraffics(prepared.ClientStats, client.Email)
 					if ct.Email == "" {
 						ct = clientTraffic
 					}
@@ -221,26 +274,10 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 		}
 	}
 
-	// Apply filtering based on settings
-	onlyHappV2RayTun, _ := s.settingService.GetSubOnlyHappV2RayTun()
-	
-	// Filter links if needed
-	if onlyHappV2RayTun {
-		var filteredResult []string
-		for _, link := range result {
-			// Only include vless, vmess, trojan, shadowsocks protocols
-			if strings.HasPrefix(link, "vless://") || 
-			   strings.HasPrefix(link, "vmess://") || 
-			   strings.HasPrefix(link, "trojan://") || 
-			   strings.HasPrefix(link, "ss://") {
-				filteredResult = append(filteredResult, link)
-			}
-		}
-		result = filteredResult
-	}
-	
-	// Note: Encryption of subscription URL (not individual links) is handled in BuildPageData
-	// to provide encrypted URLs for Happ and V2RayTun app buttons
+	// Protocol filtering was previously gated behind `subOnlyHappV2RayTun`.
+	// That toggle has been removed: the panel now emits the full list of
+	// configs and relies on per-client filtering (done in the Add-to-App
+	// block templates or at the client side).
 
 	// Prepare statistics
 	for index, clientTraffic := range clientTraffics {
@@ -295,7 +332,7 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 		var inbounds []*model.Inbound
 		err = db.Model(model.Inbound{}).Preload("ClientStats").
 			Where("id IN ? AND enable = ? AND protocol IN ?", 
-				inboundIds, true, []model.Protocol{model.VMESS, model.VLESS, model.Trojan, model.Shadowsocks}).
+				inboundIds, true, []model.Protocol{model.VMESS, model.VLESS, model.Trojan, model.Shadowsocks, model.Hysteria, model.Hysteria2}).
 			Order("id ASC").
 			Find(&inbounds).Error
 		if err != nil {
@@ -317,7 +354,7 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 				END
 			) AS client 
 		WHERE
-			protocol in ('vmess','vless','trojan','shadowsocks')
+			protocol in ('vmess','vless','trojan','shadowsocks','hysteria','hysteria2')
 			AND (client.value::jsonb)->>'subId' = ? AND enable = ?
 	)`, subId, true).Order("id ASC").Find(&inbounds).Error
 	if err != nil {
@@ -335,6 +372,25 @@ func (s *SubService) getClientTraffics(traffics []xray.ClientTraffic, email stri
 	return xray.ClientTraffic{}
 }
 
+// prepareInboundForSubscription resolves fallback-master listen/port/stream when the inbound uses a UDS @dest tag,
+// matching the behavior expected by subscription link generation. It returns a shallow copy so callers do not mutate
+// the cached inbound from the DB slice.
+func (s *SubService) prepareInboundForSubscription(inbound *model.Inbound) *model.Inbound {
+	if inbound == nil {
+		return nil
+	}
+	out := *inbound
+	if len(out.Listen) > 0 && out.Listen[0] == '@' {
+		listen, port, streamSettings, err := s.getFallbackMaster(out.Listen, out.StreamSettings)
+		if err == nil {
+			out.Listen = listen
+			out.Port = port
+			out.StreamSettings = streamSettings
+		}
+	}
+	return &out
+}
+
 func (s *SubService) getFallbackMaster(dest string, streamSettings string) (string, int, string, error) {
 	db := database.GetDB()
 	var inbound *model.Inbound
@@ -344,6 +400,9 @@ func (s *SubService) getFallbackMaster(dest string, streamSettings string) (stri
 		Find(&inbound).Error
 	if err != nil {
 		return "", 0, "", err
+	}
+	if inbound == nil {
+		return "", 0, "", fmt.Errorf("fallback master inbound not found for %s", dest)
 	}
 
 	var stream map[string]any
@@ -359,30 +418,48 @@ func (s *SubService) getFallbackMaster(dest string, streamSettings string) (stri
 }
 
 func (s *SubService) getLink(inbound *model.Inbound, email string) string {
-	switch inbound.Protocol {
-	case "vmess":
-		return s.genVmessLink(inbound, email)
-	case "vless":
-		return s.genVlessLink(inbound, email)
-	case "trojan":
-		return s.genTrojanLink(inbound, email)
-	case "shadowsocks":
-		return s.genShadowsocksLink(inbound, email)
+	if inbound == nil {
+		return ""
+	}
+	in := *inbound
+	in.Protocol = model.Protocol(strings.ToLower(strings.TrimSpace(string(inbound.Protocol))))
+	switch in.Protocol {
+	case model.VMESS:
+		return s.genVmessLink(&in, email)
+	case model.VLESS:
+		return s.genVlessLink(&in, email)
+	case model.Trojan:
+		return s.genTrojanLink(&in, email)
+	case model.Shadowsocks:
+		return s.genShadowsocksLink(&in, email)
+	default:
+		if model.IsHysteria(in.Protocol) {
+			return s.genHysteriaLink(&in, email)
+		}
 	}
 	return ""
 }
 
 // getLinkWithClient generates a subscription link using ClientEntity data (new architecture)
 func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
-	switch inbound.Protocol {
-	case "vmess":
-		return s.genVmessLinkWithClient(inbound, client)
-	case "vless":
-		return s.genVlessLinkWithClient(inbound, client)
-	case "trojan":
-		return s.genTrojanLinkWithClient(inbound, client)
-	case "shadowsocks":
-		return s.genShadowsocksLinkWithClient(inbound, client)
+	if inbound == nil || client == nil {
+		return ""
+	}
+	in := *inbound
+	in.Protocol = model.Protocol(strings.ToLower(strings.TrimSpace(string(inbound.Protocol))))
+	switch in.Protocol {
+	case model.VMESS:
+		return s.genVmessLinkWithClient(&in, client)
+	case model.VLESS:
+		return s.genVlessLinkWithClient(&in, client)
+	case model.Trojan:
+		return s.genTrojanLinkWithClient(&in, client)
+	case model.Shadowsocks:
+		return s.genShadowsocksLinkWithClient(&in, client)
+	default:
+		if model.IsHysteria(in.Protocol) {
+			return s.genHysteriaLinkWithClient(&in, client)
+		}
 	}
 	return ""
 }
@@ -432,9 +509,27 @@ func (s *SubService) getAddressesForInbound(inbound *model.Inbound) []AddressPor
 		} else {
 			defaultAddress = inbound.Listen
 		}
+		if defaultAddress == "" {
+			if d, err := s.settingService.GetSubDomain(); err == nil {
+				defaultAddress = strings.TrimSpace(d)
+			}
+		}
+		if defaultAddress == "" {
+			if d, err := s.settingService.GetWebDomain(); err == nil {
+				defaultAddress = strings.TrimSpace(d)
+				if strings.Contains(defaultAddress, "://") {
+					if u, err := url.Parse(defaultAddress); err == nil && u.Host != "" {
+						defaultAddress = u.Host
+						if i := strings.Index(defaultAddress, ":"); i >= 0 {
+							defaultAddress = defaultAddress[:i]
+						}
+					}
+				}
+			}
+		}
 		nodeAddresses = []AddressPort{{Address: defaultAddress, Port: 0}}
 	}
-	
+
 	return nodeAddresses
 }
 
@@ -458,15 +553,16 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 	switch network {
 	case "tcp":
 		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
+		var typeStr string
+		if tcp != nil {
+			if header, _ := tcp["header"].(map[string]any); header != nil {
+				typeStr, _ = header["type"].(string)
+			}
+		}
 		baseObj["type"] = typeStr
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			baseObj["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			baseObj["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			baseObj["path"] = path
+			baseObj["host"] = host
 		}
 	case "kcp":
 		kcp, _ := stream["kcpSettings"].(map[string]any)
@@ -486,7 +582,7 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		baseObj["path"] = grpc["serviceName"].(string)
 		baseObj["authority"] = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			baseObj["type"] = "multi"
 		}
 	case "httpupgrade":
@@ -626,15 +722,16 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	switch network {
 	case "tcp":
 		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
+		var typeStr string
+		if tcp != nil {
+			if header, _ := tcp["header"].(map[string]any); header != nil {
+				typeStr, _ = header["type"].(string)
+			}
+		}
 		baseObj["type"] = typeStr
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			baseObj["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			baseObj["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			baseObj["path"] = path
+			baseObj["host"] = host
 		}
 	case "kcp":
 		kcp, _ := stream["kcpSettings"].(map[string]any)
@@ -654,7 +751,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		baseObj["path"] = grpc["serviceName"].(string)
 		baseObj["authority"] = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			baseObj["type"] = "multi"
 		}
 	case "httpupgrade":
@@ -768,7 +865,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 
 // genVlessLinkWithClient generates VLESS link using ClientEntity data (new architecture)
 func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
-	if inbound.Protocol != model.VLESS {
+	if inbound.Protocol != model.VLESS || client == nil {
 		return ""
 	}
 	
@@ -778,7 +875,10 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	uuid := client.UUID
 	port := inbound.Port
-	streamNetwork := stream["network"].(string)
+	streamNetwork, _ := stream["network"].(string)
+	if streamNetwork == "" {
+		streamNetwork = "tcp"
+	}
 	params := make(map[string]string)
 	params["type"] = streamNetwork
 
@@ -791,15 +891,9 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -820,7 +914,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if mm, ok := grpc["multiMode"].(bool); ok && mm {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -883,14 +977,22 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		if realitySetting != nil {
 			if sniValue, ok := searchKey(realitySetting, "serverNames"); ok {
 				sNames, _ := sniValue.([]any)
-				params["sni"] = sNames[random.Num(len(sNames))].(string)
+				if n := len(sNames); n > 0 {
+					if sn, ok := sNames[random.Num(n)].(string); ok {
+						params["sni"] = sn
+					}
+				}
 			}
 			if pbkValue, ok := searchKey(realitySettings, "publicKey"); ok {
 				params["pbk"], _ = pbkValue.(string)
 			}
 			if sidValue, ok := searchKey(realitySetting, "shortIds"); ok {
 				shortIds, _ := sidValue.([]any)
-				params["sid"] = shortIds[random.Num(len(shortIds))].(string)
+				if n := len(shortIds); n > 0 {
+					if sid, ok := shortIds[random.Num(n)].(string); ok {
+						params["sid"] = sid
+					}
+				}
 			}
 			if fpValue, ok := searchKey(realitySettings, "fingerprint"); ok {
 				if fp, ok := fpValue.(string); ok && len(fp) > 0 {
@@ -1009,15 +1111,9 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -1038,7 +1134,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -1221,15 +1317,9 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -1250,7 +1340,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -1430,15 +1520,9 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -1459,7 +1543,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -1643,15 +1727,9 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -1672,7 +1750,7 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -1823,15 +1901,9 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 
 	switch streamNetwork {
 	case "tcp":
-		tcp, _ := stream["tcpSettings"].(map[string]any)
-		header, _ := tcp["header"].(map[string]any)
-		typeStr, _ := header["type"].(string)
-		if typeStr == "http" {
-			request := header["request"].(map[string]any)
-			requestPath, _ := request["path"].([]any)
-			params["path"] = requestPath[0].(string)
-			headers, _ := request["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if path, host, httpOK := tcpHTTPPathHostForShareLink(stream); httpOK {
+			params["path"] = path
+			params["host"] = host
 			params["headerType"] = "http"
 		}
 	case "kcp":
@@ -1852,7 +1924,7 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 		grpc, _ := stream["grpcSettings"].(map[string]any)
 		params["serviceName"] = grpc["serviceName"].(string)
 		params["authority"], _ = grpc["authority"].(string)
-		if grpc["multiMode"].(bool) {
+		if jsonBool(grpc, "multiMode") {
 			params["mode"] = "multi"
 		}
 	case "httpupgrade":
@@ -1983,9 +2055,163 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 	return links
 }
 
+// genHysteriaLink produces hysteria2:// (or v1) subscription URLs from inbound + client email.
+func (s *SubService) genHysteriaLink(inbound *model.Inbound, email string) string {
+	clients, _ := s.inboundService.GetClients(inbound)
+	var auth string
+	for _, c := range clients {
+		if c.Email == email {
+			auth = c.Password
+			if c.Auth != "" {
+				auth = c.Auth
+			}
+			break
+		}
+	}
+	if auth == "" {
+		return ""
+	}
+	return s.hysteriaLinkForAuth(inbound, email, auth)
+}
+
+// genHysteriaLinkWithClient is the new-architecture variant using ClientEntity.
+func (s *SubService) genHysteriaLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if client == nil {
+		return ""
+	}
+	auth := strings.TrimSpace(client.Password)
+	if auth == "" && client.UUID != "" {
+		auth = strings.TrimSpace(client.UUID)
+	}
+	if auth == "" {
+		return ""
+	}
+	return s.hysteriaLinkForAuth(inbound, client.Email, auth)
+}
+
+func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth string) string {
+	if !model.IsHysteria(inbound.Protocol) || auth == "" {
+		return ""
+	}
+	var stream map[string]interface{}
+	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+	params := make(map[string]string)
+
+	params["security"] = "tls"
+	tlsSetting, _ := stream["tlsSettings"].(map[string]interface{})
+	alpns, _ := tlsSetting["alpn"].([]interface{})
+	var alpn []string
+	for _, a := range alpns {
+		if s, ok := a.(string); ok {
+			alpn = append(alpn, s)
+		}
+	}
+	if len(alpn) > 0 {
+		params["alpn"] = strings.Join(alpn, ",")
+	}
+	if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
+		params["sni"], _ = sniValue.(string)
+	}
+
+	tlsSettings, _ := searchKey(tlsSetting, "settings")
+	if tlsSettings != nil {
+		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
+			params["fp"], _ = fpValue.(string)
+		}
+		if insecure, ok := searchKey(tlsSettings, "allowInsecure"); ok {
+			if b, ok := insecure.(bool); ok && b {
+				params["insecure"] = "1"
+			}
+		}
+	}
+
+	if finalmask, ok := stream["finalmask"].(map[string]interface{}); ok {
+		if udpMasks, ok := finalmask["udp"].([]interface{}); ok {
+			for _, m := range udpMasks {
+				mask, _ := m.(map[string]interface{})
+				if mask == nil || mask["type"] != "salamander" {
+					continue
+				}
+				settings, _ := mask["settings"].(map[string]interface{})
+				if pw, ok := settings["password"].(string); ok && pw != "" {
+					params["obfs"] = "salamander"
+					params["obfs-password"] = pw
+					break
+				}
+			}
+		}
+	}
+
+	var settings map[string]interface{}
+	json.Unmarshal([]byte(inbound.Settings), &settings)
+	version, _ := settings["version"].(float64)
+	protocol := "hysteria2"
+	if int(version) == 1 {
+		protocol = "hysteria"
+	}
+
+	externalProxies, _ := stream["externalProxy"].([]interface{})
+	if len(externalProxies) > 0 {
+		links := make([]string, 0, len(externalProxies))
+		for _, externalProxy := range externalProxies {
+			ep, ok := externalProxy.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			dest, _ := ep["dest"].(string)
+			portF, okPort := ep["port"].(float64)
+			if dest == "" || !okPort {
+				continue
+			}
+			epRemark, _ := ep["remark"].(string)
+
+			link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, dest, int(portF))
+			u, _ := url.Parse(link)
+			q := u.Query()
+			for k, v := range params {
+				q.Add(k, v)
+			}
+			u.RawQuery = q.Encode()
+			u.Fragment = s.genRemark(inbound, email, epRemark)
+			links = append(links, u.String())
+		}
+		return strings.Join(links, "\n")
+	}
+
+	link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, s.address, inbound.Port)
+	u, _ := url.Parse(link)
+	q := u.Query()
+	for k, v := range params {
+		q.Add(k, v)
+	}
+	u.RawQuery = q.Encode()
+	u.Fragment = s.genRemark(inbound, email, "")
+	return u.String()
+}
+
+// splitRemarkModel splits the model string: first rune = separator, rest = ASCII order letters (i, e, o, n, p, r).
+// Using runes for the first character so UTF-8 symbols (e.g. em dash) are not read as a raw byte.
+func splitRemarkModel(model string) (separationChar string, orderChars string) {
+	if model == "" {
+		return "-", "ieo"
+	}
+	r := []rune(model)
+	if len(r) < 1 {
+		return "-", "ieo"
+	}
+	separationChar = string(r[0:1])
+	if len(r) < 2 {
+		return separationChar, ""
+	}
+	return separationChar, string(r[1:])
+}
+
 func (s *SubService) genRemark(inbound *model.Inbound, email string, extra string) string {
-	separationChar := string(s.remarkModel[0])
-	orderChars := s.remarkModel[1:]
+	model := s.remarkModel
+	if model == "" {
+		model = "-ieo"
+	}
+	separationChar, orderChars := splitRemarkModel(model)
 	
 	// Get node information if available (for 'n' and 'p' options)
 	var nodeName, nodeIP string
@@ -2091,8 +2317,11 @@ func (s *SubService) genRemark(inbound *model.Inbound, email string, extra strin
 
 // genRemarkWithClient generates remark for ClientEntity, checking Enable and Status
 func (s *SubService) genRemarkWithClient(inbound *model.Inbound, client *model.ClientEntity, extra string) string {
-	separationChar := string(s.remarkModel[0])
-	orderChars := s.remarkModel[1:]
+	model := s.remarkModel
+	if model == "" {
+		model = "-ieo"
+	}
+	separationChar, orderChars := splitRemarkModel(model)
 	
 	// Get node information if available (for 'n' and 'p' options)
 	var nodeName, nodeIP string
@@ -2212,6 +2441,51 @@ func searchKey(data any, key string) (any, bool) {
 	return nil, false
 }
 
+func jsonBool(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return false
+	}
+	b, ok := v.(bool)
+	return ok && b
+}
+
+// tcpHTTPPathHostForShareLink parses tcpSettings fake-http path and Host for vmess/vless/trojan/ss links.
+func tcpHTTPPathHostForShareLink(stream map[string]any) (path, host string, ok bool) {
+	if stream == nil {
+		return "", "", false
+	}
+	tcp, _ := stream["tcpSettings"].(map[string]any)
+	if tcp == nil {
+		return "", "", false
+	}
+	header, _ := tcp["header"].(map[string]any)
+	if header == nil {
+		return "", "", false
+	}
+	typeStr, _ := header["type"].(string)
+	if typeStr != "http" {
+		return "", "", false
+	}
+	request, _ := header["request"].(map[string]any)
+	if request == nil {
+		return "", "", false
+	}
+	requestPath, _ := request["path"].([]any)
+	if len(requestPath) == 0 {
+		return "", "", false
+	}
+	p, pOK := requestPath[0].(string)
+	if !pOK {
+		return "", "", false
+	}
+	headers, _ := request["headers"].(map[string]any)
+	return p, searchHost(headers), true
+}
+
 func searchHost(headers any) string {
 	data, _ := headers.(map[string]any)
 	for k, v := range data {
@@ -2253,8 +2527,6 @@ type PageData struct {
 	SubUrl               string
 	SubJsonUrl           string
 	Result               []string
-	HideConfigLinks      bool
-	ShowOnlyHappV2RayTun bool   // Show only Happ and V2RayTun buttons
 	HappEncryptedUrl     string // Encrypted URL for Happ app (happ://crypt4/...)
 	V2RayTunEncryptedUrl string // Encrypted URL for V2RayTun app (v2raytun://crypt/...)
 	Theme                string // Subscription page theme
@@ -2413,35 +2685,20 @@ func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray
 		datepicker = "gregorian"
 	}
 
-	hideConfigLinks, _ := s.settingService.GetSubHideConfigLinks()
-	showOnlyHappV2RayTun, _ := s.settingService.GetSubShowOnlyHappV2RayTun()
-	
-	// Encrypt subscription URL for Happ and V2RayTun if enabled
+	// Always compute encrypted subscription URLs. The public page decides per
+	// button whether to use them via the `useEncrypted` flag in AddToApp.
 	var happEncryptedUrl, v2raytunEncryptedUrl string
-	encryptHappV2RayTun, _ := s.settingService.GetSubEncryptHappV2RayTun()
-	logger.Infof("BuildPageData: encryptHappV2RayTun=%v, subURL=%s", encryptHappV2RayTun, subURL)
-	if encryptHappV2RayTun {
-		// Encrypt for Happ
-		happEncrypted, err := crypto.EncryptForHapp(subURL)
-		if err == nil {
-			happEncryptedUrl = "happ://crypt4/" + happEncrypted
-			logger.Infof("BuildPageData: Successfully encrypted Happ URL, length=%d", len(happEncryptedUrl))
-		} else {
-			logger.Warningf("Failed to encrypt subscription URL for Happ: %v", err)
-		}
-		
-		// Encrypt for V2RayTun
-		v2raytunEncrypted, err := crypto.EncryptForV2RayTun(subURL)
-		if err == nil {
-			v2raytunEncryptedUrl = "v2raytun://crypt/" + v2raytunEncrypted
-			logger.Infof("BuildPageData: Successfully encrypted V2RayTun URL, length=%d", len(v2raytunEncryptedUrl))
-		} else {
-			logger.Warningf("Failed to encrypt subscription URL for V2RayTun: %v", err)
-		}
+	if happEncrypted, err := crypto.EncryptForHapp(subURL); err == nil {
+		happEncryptedUrl = "happ://crypt4/" + happEncrypted
 	} else {
-		logger.Infof("BuildPageData: Encryption disabled, using plain URLs")
+		logger.Warningf("Failed to encrypt subscription URL for Happ: %v", err)
 	}
-	
+	if v2raytunEncrypted, err := crypto.EncryptForV2RayTun(subURL); err == nil {
+		v2raytunEncryptedUrl = "v2raytun://crypt/" + v2raytunEncrypted
+	} else {
+		logger.Warningf("Failed to encrypt subscription URL for V2RayTun: %v", err)
+	}
+
 	// Get subscription page customization settings
 	theme, _ := s.settingService.GetSubPageTheme()
 	logoUrl, _ := s.settingService.GetSubPageLogoUrl()
@@ -2465,8 +2722,6 @@ func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray
 		SubUrl:               subURL,
 		SubJsonUrl:           subJsonURL,
 		Result:               subs,
-		HideConfigLinks:      hideConfigLinks,
-		ShowOnlyHappV2RayTun: showOnlyHappV2RayTun,
 		HappEncryptedUrl:     happEncryptedUrl,
 		V2RayTunEncryptedUrl: v2raytunEncryptedUrl,
 		Theme:                theme,

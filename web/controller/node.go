@@ -83,7 +83,21 @@ func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.POST("/logs/:id", a.getNodeLogs)
 	g.POST("/check-connection", a.checkNodeConnection) // Check node connection without API key
 	g.POST("/resetTraffic/:id", a.resetNodeTraffic)   // Reset node traffic
+	g.GET("/secret", a.getPairingSecret)              // Panel-wide SECRET_KEY for node docker-compose
 	// push-logs endpoint moved to APIController to bypass session auth
+}
+
+// getPairingSecret returns the shared SECRET_KEY (base64 JSON) that every pairing-mode node
+// needs in its docker-compose.yml. The same value is reused for all nodes so a single compose
+// file can be deployed across many hosts.
+func (a *NodeController) getPairingSecret(c *gin.Context) {
+	pairing := &service.PanelPairingService{}
+	secret, err := pairing.GetSecretKey()
+	if err != nil {
+		jsonMsg(c, "Failed to load pairing secret", err)
+		return
+	}
+	jsonObj(c, map[string]string{"secretKey": secret}, nil)
 }
 
 // getNodes retrieves the list of all nodes.
@@ -140,51 +154,57 @@ func (a *NodeController) getNode(c *gin.Context) {
 
 // addNode creates a new node and registers it with a generated API key.
 func (a *NodeController) addNode(c *gin.Context) {
-	node := &model.Node{}
-	err := c.ShouldBind(node)
+	var body struct {
+		model.Node
+		LegacyAuth bool `json:"legacyAuth" form:"legacyAuth"`
+	}
+	err := c.ShouldBind(&body)
 	if err != nil {
 		jsonMsg(c, "Invalid node data", err)
 		return
 	}
+	node := &body.Node
+	node.JwtPrivateKeyPem = ""
+	node.PanelClientCertPem = ""
+	node.PanelClientKeyPem = ""
+	node.CaCertPem = ""
+	node.AuthMode = ""
 
-	// Log received data for debugging
-	logger.Debugf("[Node: %s] Adding node: address=%s", node.Name, node.Address)
+	logger.Debugf("[Node: %s] Adding node: address=%s legacyAuth=%v", node.Name, node.Address, body.LegacyAuth)
 
-	// Note: Connection check is done on frontend via /panel/node/check-connection endpoint
-	// to avoid CORS issues. Here we proceed directly to registration.
-
-	// Generate API key and register node
-	// Get panel URL from request (the URL user is accessing panel from)
 	panelURL := getRequestPanelURL(c)
-	apiKey, err := a.nodeService.RegisterNode(node, panelURL)
-	if err != nil {
-		logger.Errorf("[Node: %s] Registration failed: %v", node.Name, err)
-		jsonMsg(c, "Failed to register node: "+err.Error(), err)
-		return
+
+	var secretKey string
+	if body.LegacyAuth {
+		apiKey, regErr := a.nodeService.RegisterNode(node, panelURL)
+		if regErr != nil {
+			logger.Errorf("[Node: %s] Registration failed: %v", node.Name, regErr)
+			jsonMsg(c, "Failed to register node: "+regErr.Error(), regErr)
+			return
+		}
+		node.ApiKey = apiKey
+	} else {
+		var prepErr error
+		secretKey, prepErr = a.nodeService.PrepareNodePairing(node)
+		if prepErr != nil {
+			jsonMsg(c, "Failed to prepare node pairing: "+prepErr.Error(), prepErr)
+			return
+		}
 	}
 
-	// Set the generated API key
-	node.ApiKey = apiKey
-
-	// Set default status
 	if node.Status == "" {
 		node.Status = "unknown"
 	}
 
-	// Save node to database
 	err = a.nodeService.AddNode(node)
 	if err != nil {
 		jsonMsg(c, "Failed to add node to database", err)
 		return
 	}
 
-	// Check health immediately
 	go a.nodeService.CheckNodeHealth(node)
-
-	// Broadcast nodes update via WebSocket
 	a.broadcastNodesUpdate()
 
-	// Send notification to Telegram bot if multi-node mode is enabled
 	settingService := service.SettingService{}
 	multiMode, err := settingService.GetMultiNodeMode()
 	if err == nil && multiMode {
@@ -203,8 +223,12 @@ func (a *NodeController) addNode(c *gin.Context) {
 		}
 	}
 
-	logger.Infof("[Node: %s] Node added and registered successfully", node.Name)
-	jsonMsgObj(c, "Node added and registered successfully", node, nil)
+	logger.Infof("[Node: %s] Node added successfully", node.Name)
+	resp := struct {
+		*model.Node
+		SecretKey string `json:"secretKey,omitempty"`
+	}{Node: node, SecretKey: secretKey}
+	jsonMsgObj(c, "Node added successfully", resp, nil)
 }
 
 // updateNode updates an existing node.

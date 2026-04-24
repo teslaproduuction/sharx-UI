@@ -53,6 +53,15 @@ media/
 # Windows files
 windows_files/
 
+# Baked by panelui stage — keeps Docker context small; panel static comes from multi-stage copy
+web/panel/
+
+# Next.js noise (panel source still copied; these need not enter context)
+panel/.next/
+panel/out/
+panel/node_modules/
+panel/tsconfig.tsbuildinfo
+
 # Build artifacts
 build/
 dist/
