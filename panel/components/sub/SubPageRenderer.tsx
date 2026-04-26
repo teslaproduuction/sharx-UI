@@ -5,6 +5,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Modal, useToast } from "@/components/ui";
+import { copyTextToClipboard } from "@/lib/copyToClipboard";
 import { isSharxV2Config, isSharxV1Config } from "@/lib/sharxSubpageConfig";
 import type {
   SharxSubpageConfigV1,
@@ -95,7 +96,7 @@ export function SubPageRenderer({
         return;
       }
       try {
-        await navigator.clipboard.writeText(text);
+        await copyTextToClipboard(text);
         toast.success(
           kind === "subscription"
             ? t("pages.publicSub.copiedSubscription", {

@@ -8,7 +8,6 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/crypto"
 	ldaputil "github.com/konstpic/sharx-code/v2/util/ldap"
-	"github.com/xlzd/gotp"
 	"gorm.io/gorm"
 )
 
@@ -33,7 +32,8 @@ func (s *UserService) GetFirstUser() (*model.User, error) {
 	return user, nil
 }
 
-func (s *UserService) CheckUser(username string, password string, twoFactorCode string) *model.User {
+// VerifyPassword checks username and password (local or LDAP). It does not validate 2FA.
+func (s *UserService) VerifyPassword(username string, password string) *model.User {
 	db := database.GetDB()
 
 	user := &model.User{}
@@ -77,26 +77,6 @@ func (s *UserService) CheckUser(username string, password string, twoFactorCode 
 		}
 		ok, err := ldaputil.AuthenticateUser(cfg, username, password)
 		if err != nil || !ok {
-			return nil
-		}
-		// On successful LDAP auth, continue 2FA checks below
-	}
-
-	twoFactorEnable, err := s.settingService.GetTwoFactorEnable()
-	if err != nil {
-		logger.Warning("check two factor err:", err)
-		return nil
-	}
-
-	if twoFactorEnable {
-		twoFactorToken, err := s.settingService.GetTwoFactorToken()
-
-		if err != nil {
-			logger.Warning("check two factor token err:", err)
-			return nil
-		}
-
-		if gotp.NewDefaultTOTP(twoFactorToken).Now() != twoFactorCode {
 			return nil
 		}
 	}

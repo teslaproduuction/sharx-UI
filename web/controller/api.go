@@ -1,7 +1,10 @@
 package controller
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/http"
 	"os"
@@ -10,6 +13,7 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 
@@ -40,26 +44,11 @@ func (a *APIController) SetDocsFS(docsFS fs.FS) {
 // checkAPIAuth is a middleware that returns 404 for unauthenticated API requests
 // to hide the existence of API endpoints from unauthorized users
 func (a *APIController) checkAPIAuth(c *gin.Context) {
-	// #region agent log
-	if strings.HasPrefix(c.Request.URL.Path, "/panel/api/inbounds") {
-		logger.Debugf("[DEBUG-AGENT] checkAPIAuth: inbound request, path=%s, method=%s", c.Request.URL.Path, c.Request.Method)
-	}
-	// #endregion
+	TryAttachAPITokenFromBearer(c)
 	if !session.IsLogin(c) {
-		// #region agent log
-		if strings.HasPrefix(c.Request.URL.Path, "/panel/api/inbounds") {
-			logger.Debugf("[DEBUG-AGENT] checkAPIAuth: UNAUTHORIZED, path=%s, method=%s", c.Request.URL.Path, c.Request.Method)
-		}
-		// #endregion
 		c.AbortWithStatus(http.StatusNotFound)
 		return
 	}
-	// #region agent log
-	if strings.HasPrefix(c.Request.URL.Path, "/panel/api/inbounds") {
-		user := session.GetLoginUser(c)
-		logger.Debugf("[DEBUG-AGENT] checkAPIAuth: AUTHORIZED, path=%s, method=%s, userId=%d", c.Request.URL.Path, c.Request.Method, user.Id)
-	}
-	// #endregion
 	c.Next()
 }
 
@@ -71,7 +60,9 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 	// Register in separate group without session auth middleware
 	nodeAPI := g.Group("/panel/api/node")
 	nodeAPI.POST("/push-logs", a.pushNodeLogs)
-	
+	nodeAPI.POST("/push-geo", a.pushNodeGeo)
+	nodeAPI.POST("/pull-xray-config", a.pullWorkerXrayConfig)
+
 	// Main API group with session auth
 	api := g.Group("/panel/api")
 	api.Use(a.checkAPIAuth)
@@ -86,7 +77,9 @@ func (a *APIController) initRouter(g *gin.RouterGroup) {
 
 	// Extra routes
 	api.GET("/backuptotgbot", a.BackuptoTgbot)
-	
+
+	a.registerAPITokenRoutes(api)
+
 	// API Documentation
 	apiDocs := api.Group("/api-docs")
 	apiDocs.GET("/markdown", a.getAPIDocsMarkdown)
@@ -107,23 +100,55 @@ func extractPort(address string) string {
 	return ""
 }
 
-// pushNodeLogs receives logs from a node in real-time and adds them to the panel log buffer.
-// This endpoint is called by nodes when new logs are generated.
-// It uses API key authentication instead of session authentication.
+func parseSharxV1Signature(s string) (hex string, ok bool) {
+	s = strings.TrimSpace(s)
+	if !strings.HasPrefix(s, "v1=") {
+		return "", false
+	}
+	return strings.TrimSpace(s[3:]), true
+}
+
+// findNodeByAddressForLogPush matches the panel node row by public URL (exact or by port for localhost vs LAN).
+func findNodeByAddressForLogPush(nodes []*model.Node, nodeAddress string) *model.Node {
+	reqAddr := strings.TrimSuffix(strings.TrimSpace(nodeAddress), "/")
+	reqPort := extractPort(reqAddr)
+	for _, n := range nodes {
+		nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
+		nodePort := extractPort(nodeAddr)
+		if nodeAddr == reqAddr || (nodePort != "" && nodePort == reqPort) {
+			return n
+		}
+	}
+	return nil
+}
+
+// pushNodeLogs receives logs from a node; authenticates with X-Sharx-Signature (HMAC, pairing).
 func (a *APIController) pushNodeLogs(c *gin.Context) {
+	const sigHeader = "X-Sharx-Signature"
+
 	type PushLogRequest struct {
-		ApiKey      string   `json:"apiKey" binding:"required"`      // Node API key for authentication
-		NodeAddress string   `json:"nodeAddress,omitempty"`           // Node's own address for identification (optional, used when multiple nodes share API key)
-		Logs        []string `json:"logs" binding:"required"`        // Array of log lines in format "timestamp level - message"
+		NodeAddress string   `json:"nodeAddress,omitempty"`
+		Logs        []string `json:"logs" binding:"required"`
 	}
 
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
+		return
+	}
+	_ = c.Request.Body.Close()
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
 	var req PushLogRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+	if len(req.Logs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "logs is required"})
 		return
 	}
 
-	// Find node by API key and optionally by address
 	nodeService := service.NodeService{}
 	nodes, err := nodeService.GetAllNodes()
 	if err != nil {
@@ -131,67 +156,41 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 		return
 	}
 
-	var node *model.Node
-	var matchedByKey []*model.Node // Track nodes with matching API key
-	
-	for _, n := range nodes {
-		if n.ApiKey == req.ApiKey {
-			matchedByKey = append(matchedByKey, n)
-			
-			// If nodeAddress is provided, match by both API key and address
-			if req.NodeAddress != "" {
-				// Normalize addresses for comparison (remove trailing slashes, etc.)
-				nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
-				reqAddr := strings.TrimSuffix(strings.TrimSpace(req.NodeAddress), "/")
-				
-				// Extract port from both addresses for comparison
-				// This handles cases where node uses localhost but panel has external IP
-				nodePort := extractPort(nodeAddr)
-				reqPort := extractPort(reqAddr)
-				
-				// Match by exact address or by port (if addresses don't match exactly)
-				// This allows nodes to use localhost while panel has external IP
-				if nodeAddr == reqAddr || (nodePort != "" && nodePort == reqPort) {
-					node = n
-					break
-				}
-			} else {
-				// If no address provided, use first match (backward compatibility)
-				node = n
-				break
-			}
-		}
+	sig := strings.TrimSpace(c.GetHeader(sigHeader))
+	if sig == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": sigHeader + " (HMAC v1) is required"})
+		return
 	}
-
+	v1, ok := parseSharxV1Signature(sig)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid " + sigHeader + " (expected v1=hex)"})
+		return
+	}
+	pairing := &service.PanelPairingService{}
+	key, err := pairing.GetOutboundHMACKey()
+	if err != nil {
+		logger.Errorf("pairing HMAC key: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Pairing not configured"})
+		return
+	}
+	if !pairing_outbound.ValidSignature(key, body, v1) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+		return
+	}
+	if strings.TrimSpace(req.NodeAddress) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
+		return
+	}
+	node := findNodeByAddressForLogPush(nodes, req.NodeAddress)
 	if node == nil {
-		// Enhanced logging for debugging
-		if len(matchedByKey) > 0 {
-			logger.Debugf("Failed to find node: API key matches %d node(s), but address mismatch. Request address: '%s', Request port: '%s'. Matched nodes: %v", 
-				len(matchedByKey), req.NodeAddress, extractPort(req.NodeAddress), 
-				func() []string {
-					var addrs []string
-					for _, n := range matchedByKey {
-						addrs = append(addrs, fmt.Sprintf("%s (port: %s)", n.Address, extractPort(n.Address)))
-					}
-					return addrs
-				}())
-		} else {
-			logger.Debugf("Failed to find node: No node found with API key (received %d logs, key length: %d, key prefix: %s). Total nodes in DB: %d", 
-				len(req.Logs), len(req.ApiKey), 
-				func() string {
-					if len(req.ApiKey) > 4 {
-						return req.ApiKey[:4] + "..."
-					}
-					return req.ApiKey
-				}(), len(nodes))
-		}
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+		logger.Debugf("HMAC log push: no node for address %s", req.NodeAddress)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
 		return
 	}
 
 	// Log which node is sending logs (for debugging)
-	logger.Debugf("Received %d logs from node: %s (ID: %d, Address: %s, API key length: %d)", 
-		len(req.Logs), node.Name, node.Id, node.Address, len(req.ApiKey))
+	logger.Debugf("Received %d logs from node: %s (ID: %d, Address: %s)",
+		len(req.Logs), node.Name, node.Id, node.Address)
 
 	// Process and add logs to panel buffer
 	for _, logLine := range req.Logs {
@@ -238,7 +237,7 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 		default:
 			logger.Infof("%s", formattedMessage)
 		}
-		
+
 		// Also send to Loki with node component and node ID
 		nodeIDStr := fmt.Sprintf("%d", node.Id)
 		logger.PushLogToLokiWithComponent(level, message, "node", nodeIDStr)
@@ -247,11 +246,171 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"message": "Logs received"})
 }
 
+// pushNodeGeo receives approximate lat/lon from a worker (HMAC, pairing); same auth as push-logs.
+func (a *APIController) pushNodeGeo(c *gin.Context) {
+	const sigHeader = "X-Sharx-Signature"
+
+	type pushGeoRequest struct {
+		NodeAddress string  `json:"nodeAddress"`
+		Lat         float64 `json:"lat"`
+		Lng         float64 `json:"lng"`
+		Source      string  `json:"source,omitempty"`
+		IP          string  `json:"ip,omitempty"`
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
+		return
+	}
+	_ = c.Request.Body.Close()
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
+	var req pushGeoRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.NodeAddress) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
+		return
+	}
+	if req.Lat < -90 || req.Lat > 90 || req.Lng < -180 || req.Lng > 180 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid coordinates"})
+		return
+	}
+
+	sig := strings.TrimSpace(c.GetHeader(sigHeader))
+	if sig == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": sigHeader + " (HMAC v1) is required"})
+		return
+	}
+	v1, ok := parseSharxV1Signature(sig)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid " + sigHeader + " (expected v1=hex)"})
+		return
+	}
+	pairing := &service.PanelPairingService{}
+	key, err := pairing.GetOutboundHMACKey()
+	if err != nil {
+		logger.Errorf("pairing HMAC key: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Pairing not configured"})
+		return
+	}
+	if !pairing_outbound.ValidSignature(key, body, v1) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+		return
+	}
+
+	nodeService := service.NodeService{}
+	node, err := nodeService.FindNodeByPushAddress(req.NodeAddress)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
+		return
+	}
+	if node == nil {
+		logger.Debugf("HMAC geo push: no node for address %s", req.NodeAddress)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
+		return
+	}
+
+	src := strings.TrimSpace(req.Source)
+	if src == "" {
+		src = "unknown"
+	}
+	if err := nodeService.UpdateNodeGeography(node.Id, req.Lat, req.Lng, src); err != nil {
+		logger.Errorf("geo push update node %d: %v", node.Id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save geography"})
+		return
+	}
+	logger.Debugf("Geo push: node %s (%d) → %.4f, %.4f (%s, ip=%s)", node.Name, node.Id, req.Lat, req.Lng, src, strings.TrimSpace(req.IP))
+	c.JSON(http.StatusOK, gin.H{"message": "Geography received"})
+}
+
+// pullWorkerXrayConfig returns the current Xray JSON for a worker (HMAC, pairing); same auth as push-geo.
+func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
+	const sigHeader = "X-Sharx-Signature"
+
+	type pullReq struct {
+		NodeAddress string `json:"nodeAddress"`
+	}
+
+	body, err := io.ReadAll(c.Request.Body)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Failed to read body"})
+		return
+	}
+	_ = c.Request.Body.Close()
+	c.Request.Body = io.NopCloser(bytes.NewReader(body))
+
+	var req pullReq
+	if err := json.Unmarshal(body, &req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
+		return
+	}
+	if strings.TrimSpace(req.NodeAddress) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
+		return
+	}
+
+	sig := strings.TrimSpace(c.GetHeader(sigHeader))
+	if sig == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": sigHeader + " (HMAC v1) is required"})
+		return
+	}
+	v1, ok := parseSharxV1Signature(sig)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid " + sigHeader + " (expected v1=hex)"})
+		return
+	}
+	pairing := &service.PanelPairingService{}
+	key, err := pairing.GetOutboundHMACKey()
+	if err != nil {
+		logger.Errorf("pairing HMAC key: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Pairing not configured"})
+		return
+	}
+	if !pairing_outbound.ValidSignature(key, body, v1) {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
+		return
+	}
+
+	nodeService := service.NodeService{}
+	node, err := nodeService.FindNodeByPushAddress(req.NodeAddress)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
+		return
+	}
+	if node == nil {
+		logger.Debugf("HMAC pull-xray-config: no node for address %s", req.NodeAddress)
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
+		return
+	}
+	if !node.Enable {
+		c.JSON(http.StatusForbidden, gin.H{"error": "Node is disabled"})
+		return
+	}
+
+	xraySvc := service.NewXrayService()
+	configJSON, err := xraySvc.BuildWorkerXrayConfigForNode(node)
+	if err != nil {
+		logger.Errorf("pull-xray-config build for node %d: %v", node.Id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		return
+	}
+
+	type pullResp struct {
+		Config json.RawMessage `json:"config"`
+	}
+	logger.Debugf("pull-xray-config: node %s (%d), %d bytes", node.Name, node.Id, len(configJSON))
+	c.JSON(http.StatusOK, pullResp{Config: configJSON})
+}
+
 // getAPIDocsMarkdown returns the API documentation markdown file.
 func (a *APIController) getAPIDocsMarkdown(c *gin.Context) {
 	var content []byte
 	var err error
-	
+
 	// Try reading from embedded docs filesystem first
 	if a.docsFS != nil {
 		// When using //go:embed docs, files are accessible as "docs/API.md"
@@ -266,7 +425,7 @@ func (a *APIController) getAPIDocsMarkdown(c *gin.Context) {
 		}
 		logger.Debugf("Failed to read API.md from embedded filesystem (trying disk): %v", err)
 	}
-	
+
 	// Fallback to disk
 	diskPaths := []string{"web/docs/API.md", "docs/API.md", "API.md"}
 	for _, path := range diskPaths {
@@ -278,7 +437,7 @@ func (a *APIController) getAPIDocsMarkdown(c *gin.Context) {
 			return
 		}
 	}
-	
+
 	logger.Warningf("Failed to read API.md: %v", err)
 	c.String(http.StatusNotFound, "API documentation not found")
 }

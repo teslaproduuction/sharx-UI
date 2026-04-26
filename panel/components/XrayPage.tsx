@@ -1,8 +1,7 @@
 "use client";
 
-import { RefreshCw, RotateCcw, Save, Wand2, FileCode2, Radio, Wrench } from "lucide-react";
+import { RotateCcw, Save, Wand2, FileCode2, Radio, Wrench } from "lucide-react";
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -13,14 +12,18 @@ import {
   isTemplateJsonValid,
   mergeSectionIntoTemplate,
 } from "@/lib/xrayTemplateSlice";
-import { panel, p } from "@/lib/paths";
+import { linkP, panel } from "@/lib/paths";
+import {
+  buildXrayTemplateStepperItems,
+  getActiveStepId,
+  getNavIdForStep,
+} from "@/lib/xrayTemplateStepper";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import { XrayTemplateNav, type XrayTemplateNavId } from "@/components/XrayTemplateNav";
 import { sectionButtonLabel } from "@/components/xray/sectionButtonLabel";
 import { SimpleCoreForm } from "@/components/xray/SimpleCoreForm";
-import { Button, ConfirmDialog, Spinner, useToast } from "@/components/ui";
-
-const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+import { XrayTemplateSectionContent } from "@/components/xray/XrayTemplateSectionContent";
+import { Button, ConfirmDialog, Spinner, Stepper, useToast } from "@/components/ui";
 
 type XrayView = "template" | "runtime";
 type SectionKey = "full" | string;
@@ -158,8 +161,7 @@ export function XrayPage() {
       setSectionDraft("{}");
       setSectionParseError(t("pages.xrayCoreConfigProfiles.invalidJson"));
     }
-    // `template` omitted on purpose: we only resync a section when the tab or a reload reverts the buffer.
-  }, [sectionKey, dataEpoch, view, loading, t]);
+  }, [sectionKey, dataEpoch, view, loading, t, template]);
 
   const templateOk = useMemo(() => isTemplateJsonValid(template), [template]);
 
@@ -176,6 +178,16 @@ export function XrayPage() {
       return [];
     }
   }, [view, template]);
+
+  const { steps: xrayStepperItems, grouped: xrayGrouped, otherKeys: xrayOtherKeys } = useMemo(
+    () => buildXrayTemplateStepperItems(t, view === "template" ? sectionKeys : []),
+    [t, view, sectionKeys],
+  );
+
+  const xrayActiveStepId = useMemo(
+    () => (view === "template" ? getActiveStepId(navId, xrayGrouped, xrayOtherKeys) : "general"),
+    [view, navId, xrayGrouped, xrayOtherKeys],
+  );
 
   const navigateTemplateNav = useCallback(
     (next: XrayTemplateNavId) => {
@@ -313,6 +325,19 @@ export function XrayPage() {
     [template, t, toast],
   );
 
+  const applySection = useCallback(
+    (sectionJson: string) => {
+      setSectionDraft(sectionJson);
+      try {
+        setTemplate(mergeSectionIntoTemplate(template, String(sectionKey), sectionJson));
+        setSectionParseError(null);
+      } catch {
+        setSectionParseError(t("pages.xrayCoreConfigProfiles.invalidJson"));
+      }
+    },
+    [sectionKey, template, t],
+  );
+
   const codeValue = useMemo(() => {
     if (view === "runtime") return runtime;
     if (sectionKey === "full") return template;
@@ -359,10 +384,6 @@ export function XrayPage() {
             </div>
             {view === "template" && (
               <>
-                <Button variant="secondary" onClick={() => void loadTemplate()} loading={loading} className="!gap-2">
-                  <RefreshCw size={16} />
-                  {t("refresh")}
-                </Button>
                 <Button variant="secondary" onClick={revert} disabled={!dirty} className="!gap-2">
                   <RotateCcw size={16} />
                   {t("reset")}
@@ -377,17 +398,6 @@ export function XrayPage() {
                 </Button>
               </>
             )}
-            {view === "runtime" && (
-              <Button
-                variant="secondary"
-                onClick={() => void loadRuntime()}
-                loading={loadingRuntime}
-                className="!gap-2"
-              >
-                <RefreshCw size={16} />
-                {t("refresh")}
-              </Button>
-            )}
           </div>
         }
       />
@@ -396,7 +406,7 @@ export function XrayPage() {
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-100/90">
           <p className="leading-relaxed">{t("pages.xray.nodeModeInfo")}</p>
           <Link
-            href={p("panel/xray-core-config-profiles")}
+            href={linkP("panel/xray-core-config-profiles")}
             className="mt-2 inline-block text-[var(--accent)] underline-offset-2 hover:underline"
           >
             {t("pages.xray.openCoreProfiles")}
@@ -419,6 +429,20 @@ export function XrayPage() {
 
       {view === "template" && !loading && !templateOk && navId !== "full" ? (
         <p className="text-sm text-rose-300">{t("pages.xrayCoreConfigProfiles.invalidJson")}</p>
+      ) : null}
+
+      {view === "template" && !loading ? (
+        <div className="mb-2 overflow-x-auto">
+          <Stepper
+            steps={xrayStepperItems}
+            activeId={xrayActiveStepId}
+            allowJump={templateOk}
+            onSelect={(id) => {
+              const nextNav = getNavIdForStep(id, xrayGrouped, xrayOtherKeys);
+              navigateTemplateNav(nextNav);
+            }}
+          />
+        </div>
       ) : null}
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
@@ -458,7 +482,7 @@ export function XrayPage() {
                       "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound.",
                   })}{" "}
                   <Link
-                    href={p("panel/inbounds")}
+                    href={linkP("panel/inbounds")}
                     className="text-[var(--accent)] underline-offset-2 hover:underline"
                   >
                     {t("menu.inbounds", { defaultValue: "Inbounds" })}
@@ -477,30 +501,23 @@ export function XrayPage() {
 
           <Surface padding="sm" className="overflow-x-auto">
             {showSpinner ? (
-              <div className="grid min-h-[50vh] place-items-center">
+              <div className="grid min-h-48 place-items-center">
                 <Spinner size={40} />
               </div>
-            ) : showGeneralUi ? (
-              <p className="px-1 py-2 text-xs text-[var(--fg-muted)]">
-                {t("pages.xray.simpleJsonFooter", {
-                  defaultValue: "Use the menu to open routing (balancers), DNS, or the full JSON template.",
-                })}
-              </p>
             ) : (
-              <div className="min-h-[50vh] overflow-hidden rounded-xl border border-[var(--border)]">
-                <Editor
-                  height="70vh"
-                  defaultLanguage="json"
-                  theme="vs-dark"
-                  value={codeValue}
-                  onChange={readOnly ? () => undefined : handleCodeChange}
-                  options={{
-                    readOnly,
-                    minimap: { enabled: false },
-                    scrollBeyondLastLine: false,
-                  }}
-                />
-              </div>
+              <XrayTemplateSectionContent
+                navId={navId}
+                sectionDraft={sectionDraft}
+                applySection={applySection}
+                handleCodeChange={handleCodeChange}
+                codeValue={codeValue}
+                templateOk={templateOk}
+                loading={false}
+                readOnly={readOnly}
+                showGeneralUi={showGeneralUi}
+                syncKey={dataEpoch}
+                t={t}
+              />
             )}
           </Surface>
         </div>

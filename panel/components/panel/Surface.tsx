@@ -14,7 +14,7 @@ const pad: Record<NonNullable<SurfaceProps["padding"]>, string> = {
   lg: "p-6 sm:p-8",
 };
 
-/** Remnawave docs — .card (see globals `.panel-surface`). */
+/** Card-like surface; see globals `.panel-surface`. */
 export function Surface({ children, className = "", padding = "md" }: SurfaceProps) {
   return (
     <div className={`panel-surface ${pad[padding]} ${className}`}>

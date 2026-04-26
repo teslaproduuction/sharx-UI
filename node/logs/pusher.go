@@ -14,12 +14,13 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 )
 
 // LogPusher sends logs to the panel in real-time.
 type LogPusher struct {
-	panelURL   string
-	apiKey     string
+	panelURL    string
+	hmacKey     [32]byte
 	nodeAddress string // Node's own address for identification
 	logBuffer  []string
 	bufferMu   sync.Mutex
@@ -31,30 +32,36 @@ type LogPusher struct {
 }
 
 var (
+	outboundHmacKey  [32]byte
+	outboundHmacSet  bool
+	outboundHmacLock sync.Mutex
+)
+
+// SetOutboundHMACKey sets the key derived from the SECRET_KEY bundle. Call before InitLogPusher.
+func SetOutboundHMACKey(k [32]byte) {
+	outboundHmacLock.Lock()
+	defer outboundHmacLock.Unlock()
+	outboundHmacKey = k
+	outboundHmacSet = true
+}
+
+var (
 	pusher     *LogPusher
 	pusherOnce sync.Once
 	pusherMu   sync.RWMutex
 )
 
-// InitLogPusher initializes the log pusher if panel URL and API key are configured.
-// nodeAddress is the address of this node (e.g., "http://192.168.0.7:8080") for identification.
+// InitLogPusher initializes the log pusher when HMAC (from SECRET_KEY) is set. Pairing-only.
+// nodeAddress is the address of this node (e.g., "https://host:8080") for HMAC/address matching.
 func InitLogPusher(nodeAddress string) {
 	pusherOnce.Do(func() {
-		// Try to get API key from (in order of priority):
-		// 1. Environment variable
-		// 2. Saved config file
-		apiKey := os.Getenv("NODE_API_KEY")
-		if apiKey == "" {
-			// Try to load from saved config
-			cfg := getNodeConfig()
-			if cfg != nil && cfg.ApiKey != "" {
-				apiKey = cfg.ApiKey
-				logger.Debug("Using API key from saved configuration for log pusher")
-			}
-		}
+		outboundHmacLock.Lock()
+		hmacK := outboundHmacKey
+		haveHmac := outboundHmacSet
+		outboundHmacLock.Unlock()
 
-		if apiKey == "" {
-			logger.Debug("Log pusher disabled: no API key found (will be enabled after registration)")
+		if !haveHmac {
+			logger.Debug("Log pusher disabled: SECRET_KEY HMAC not set")
 			return
 		}
 
@@ -69,10 +76,10 @@ func InitLogPusher(nodeAddress string) {
 		}
 
 		pusher = &LogPusher{
-			panelURL: panelURL,
-			apiKey:   apiKey,
+			panelURL:    panelURL,
+			hmacKey:     hmacK,
 			nodeAddress: nodeAddress,
-			logBuffer: make([]string, 0, 10),
+			logBuffer:   make([]string, 0, 10),
 			client: &http.Client{
 				Timeout: 5 * time.Second,
 			},
@@ -93,7 +100,6 @@ func InitLogPusher(nodeAddress string) {
 
 // nodeConfigData represents the node configuration structure.
 type nodeConfigData struct {
-	ApiKey      string `json:"apiKey"`
 	PanelURL    string `json:"panelUrl"`
 	NodeAddress string `json:"nodeAddress"`
 }
@@ -134,22 +140,15 @@ func SetPanelURL(url string) {
 	}
 
 	if pusher == nil {
-		// Initialize if not already initialized
-		apiKey := os.Getenv("NODE_API_KEY")
-		if apiKey == "" {
-			// Try to load from saved config
-			cfg := getNodeConfig()
-			if cfg != nil && cfg.ApiKey != "" {
-				apiKey = cfg.ApiKey
-			}
-		}
-		
-		if apiKey == "" {
-			logger.Debug("Cannot set panel URL: no API key found")
+		outboundHmacLock.Lock()
+		hk := outboundHmacKey
+		hHmac := outboundHmacSet
+		outboundHmacLock.Unlock()
+		if !hHmac {
+			logger.Debug("Cannot set panel URL: SECRET_KEY HMAC not set")
 			return
 		}
 
-		// Get node address from environment if not provided
 		nodeAddress := os.Getenv("NODE_ADDRESS")
 		if nodeAddress == "" {
 			cfg := getNodeConfig()
@@ -157,11 +156,11 @@ func SetPanelURL(url string) {
 				nodeAddress = cfg.NodeAddress
 			}
 		}
-		
+
 		pusher = &LogPusher{
-			apiKey:   apiKey,
+			hmacKey:     hk,
 			nodeAddress: nodeAddress,
-			logBuffer: make([]string, 0, 10),
+			logBuffer:   make([]string, 0, 10),
 			client: &http.Client{
 				Timeout: 5 * time.Second,
 			},
@@ -193,52 +192,6 @@ func SetPanelURL(url string) {
 	}
 }
 
-// UpdateApiKey updates the API key in the log pusher.
-// This is called after node registration to enable log pushing.
-// If pusher is not initialized, it will be initialized with the API key.
-func UpdateApiKey(apiKey string) {
-	pusherMu.Lock()
-	defer pusherMu.Unlock()
-
-	if pusher == nil {
-		// Initialize pusher if it doesn't exist yet
-		// Get node address from environment first (fastest)
-		nodeAddress := os.Getenv("NODE_ADDRESS")
-		if nodeAddress == "" {
-			// Try to get from config, but use default if not found (don't block)
-			// Use a quick read without blocking
-			cfg := getNodeConfig()
-			if cfg != nil && cfg.NodeAddress != "" {
-				nodeAddress = cfg.NodeAddress
-			}
-		}
-		if nodeAddress == "" {
-			// Default node address (will be updated later)
-			nodeAddress = "http://127.0.0.1:8080"
-		}
-
-		pusher = &LogPusher{
-			apiKey:      apiKey,
-			nodeAddress: nodeAddress,
-			logBuffer:   make([]string, 0, 10),
-			client: &http.Client{
-				Timeout: 5 * time.Second,
-			},
-			stopCh:  make(chan struct{}),
-			enabled: false, // Will be enabled when panel URL is set
-		}
-	} else {
-		pusher.apiKey = apiKey
-	}
-	
-	// If pusher is enabled but wasn't running, start it
-	// Do this in a goroutine to avoid blocking
-	if pusher.enabled && pusher.pushTicker == nil && pusher.panelURL != "" {
-		pusher.pushTicker = time.NewTicker(2 * time.Second)
-		go pusher.run()
-		// Don't log here to avoid recursion - log will be sent via pusher
-	}
-}
 
 // PushLog adds a log entry to the buffer for sending to panel.
 func PushLog(logLine string) {
@@ -321,7 +274,7 @@ func (lp *LogPusher) push() {
 
 // pushLogs sends logs to the panel.
 func (lp *LogPusher) pushLogs(logs []string) {
-	if len(logs) == 0 {
+	if len(logs) == 0 || strings.TrimSpace(lp.nodeAddress) == "" {
 		return
 	}
 
@@ -334,31 +287,22 @@ func (lp *LogPusher) pushLogs(logs []string) {
 
 	// Don't log here to avoid recursion - this function is called from logger
 
-	// Prepare request
-	reqBody := map[string]interface{}{
-		"apiKey": lp.apiKey,
-		"logs":   logs,
-	}
-	// Add node address for identification (in case multiple nodes share the same API key)
-	if lp.nodeAddress != "" {
-		reqBody["nodeAddress"] = lp.nodeAddress
-	}
+	reqBody := map[string]interface{}{"logs": logs, "nodeAddress": lp.nodeAddress}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		// Don't log here to avoid recursion - use fmt.Printf or os.Stderr
 		fmt.Fprintf(os.Stderr, "Failed to marshal log push request: %v\n", err)
 		return
 	}
 
 	req, err := http.NewRequest("POST", panelEndpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		// Don't log here to avoid recursion
 		fmt.Fprintf(os.Stderr, "Failed to create log push request: %v\n", err)
 		return
 	}
 
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Sharx-Signature", "v1="+pairing_outbound.SignBody(lp.hmacKey, jsonData))
 
 	// Use context with timeout to avoid blocking forever
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)

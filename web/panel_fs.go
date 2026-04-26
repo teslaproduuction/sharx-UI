@@ -10,8 +10,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/gin-gonic/gin"
+	"github.com/konstpic/sharx-code/v2/config"
 )
 
 //go:embed all:panel
@@ -115,6 +115,16 @@ func ServePanelReactPage(c *gin.Context) {
 		return
 	}
 	rel := path.Clean("panel/" + p)
+	// Next.js 15+ with output: "export" performs client navigation by fetching the RSC
+	// flight at paths like /panel/nodes/index.txt (or sibling.path.txt; see
+	// next/dist/client/components/router-reducer/fetch-server-response.js). If we do not
+	// serve the real .txt file, we fall through to panel/index.html and the client
+	// cannot parse the response — it falls back to a full document navigation.
+	if strings.HasSuffix(rel, ".txt") {
+		if servePanelFile(c, rel) {
+			return
+		}
+	}
 	candidates := []string{rel + "/index.html", rel + ".html"}
 	for _, name := range candidates {
 		if servePanelFile(c, name) {

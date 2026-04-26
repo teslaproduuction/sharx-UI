@@ -4,6 +4,41 @@ import { p } from "./paths";
 
 const STORAGE_KEY = "sharx:lang";
 
+/** Must match `web/locale` `LocalizerMiddleware` cookie `lang` so API `msg` uses the same language as the panel. */
+const SERVER_LANG_COOKIE = "lang";
+const COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 400; // ~400 days, session-long preference
+
+/**
+ * BCP-47-style tags for go-i18n (matches embed `translate.*.toml` locales).
+ * Short panel codes in `supported` are mapped to what the server localizer can resolve.
+ */
+function serverLangFromPanelCode(code: string): string {
+  const map: Record<string, string> = {
+    en: "en-US",
+    ru: "ru-RU",
+    fa: "fa-IR",
+    zh: "zh-CN",
+    tw: "zh-TW",
+    ar: "ar-EG",
+    es: "es-ES",
+    ja: "ja-JP",
+    id: "id-ID",
+    tr: "tr-TR",
+    pt: "pt-BR",
+    uk: "uk-UA",
+    vi: "vi-VN",
+  };
+  return map[code] ?? "en-US";
+}
+
+/** Keeps the Gin `lang` cookie in sync with panel UI; API responses use I18nWeb() with this localizer. */
+function syncServerLocaleCookie(panelCode: string) {
+  if (typeof document === "undefined") return;
+  const tag = serverLangFromPanelCode(panelCode);
+  const val = encodeURIComponent(tag);
+  document.cookie = `${SERVER_LANG_COOKIE}=${val}; path=/; max-age=${COOKIE_MAX_AGE_SEC}; SameSite=Lax`;
+}
+
 export const supported = [
   { code: "en", label: "English" },
   { code: "ru", label: "Русский" },
@@ -45,6 +80,7 @@ function getInitialLang() {
 export function setStoredLang(code: string) {
   if (typeof window === "undefined") return;
   localStorage.setItem(STORAGE_KEY, code);
+  syncServerLocaleCookie(code);
 }
 
 let initPromise: Promise<typeof i18n> | null = null;
@@ -54,6 +90,7 @@ export function initI18n() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     const lang = getInitialLang();
+    syncServerLocaleCookie(lang);
     const tr = await loadBundle(lang);
     await i18n.use(initReactI18next).init({
       lng: lang,

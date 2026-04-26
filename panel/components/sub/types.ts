@@ -9,12 +9,17 @@ export type PublicSubUser = {
   expiresAt: string;
   isActive: boolean;
   userStatus: string;
+  /** True when the VPN session is in Xray's current online set (not the same as account ACTIVE). */
+  isOnline?: boolean;
 };
 
 export type PublicSubPayload = {
   config: SharxSubpageConfig | Record<string, unknown>;
   configUuid: string;
+  /** Raw subscription feed URL (e.g. /sub/...) for VPN apps. */
   subscriptionUrl: string;
+  /** Optional HTML subscription landing page when it differs from subscriptionUrl. */
+  subscriptionPageUrl?: string;
   subscriptionJsonUrl: string;
   links: string[];
   user: PublicSubUser;
@@ -71,5 +76,6 @@ export const MOCK_SUB_DATA: PublicSubPayload = {
     expiresAt: new Date(Date.now() + 17 * 86400 * 1000).toISOString(),
     isActive: true,
     userStatus: "ACTIVE",
+    isOnline: false,
   },
 };

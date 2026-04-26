@@ -1,15 +1,21 @@
-# Pre-built image; host network, API on :8080 by default
+# Pre-built image; named volumes. Edit PANEL_URL / SECRET_KEY (paste from panel) — no .env.
 services:
   node:
-    image: registry.konstpic.ru/sharx/sharxnode:latest
+    image: sharx/sharxnode:latest
     container_name: sharx-node
     restart: unless-stopped
     network_mode: host
     volumes:
-      - ./bin:/app/bin
-      - ./logs:/app/logs
-      - ./cert:/app/cert
-      - ./data:/app/data
+      - sharx-node-bin:/app/bin
+      - sharx-node-logs:/app/logs
+      - sharx-node-cert:/app/cert
+      - sharx-node-data:/app/data
     environment:
       PANEL_URL: "http://127.0.0.1:2053"
       SECRET_KEY: ""
+
+volumes:
+  sharx-node-bin:
+  sharx-node-logs:
+  sharx-node-cert:
+  sharx-node-data:

@@ -1,7 +1,10 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import { motion, useReducedMotion } from "framer-motion";
+import { useEffect, type CSSProperties, type ReactNode } from "react";
 import type { SharxBranding } from "@/lib/sharxSubpageConfig";
+import { durations, easeStandard } from "@/lib/motion";
+import { resolveSubPageColorPreset } from "@/lib/subPageColorPreset";
 import shell from "./subscription-shell.module.css";
 
 type Props = {
@@ -11,6 +14,8 @@ type Props = {
   branding?: SharxBranding;
   /** "system" | "dark" | "light" — forwarded as data-theme on root. */
   theme?: string;
+  /** Same presets as the panel (default: SharX Web / `web`). */
+  colorPreset?: string;
 };
 
 function buildCssVars(branding?: SharxBranding): CSSProperties {
@@ -42,17 +47,49 @@ export function SubPageShell({
   className = "",
   branding,
   theme,
+  colorPreset,
 }: Props) {
   const style = buildCssVars(branding);
   const dataTheme = resolveTheme(theme);
+  const palette = resolveSubPageColorPreset(colorPreset);
+  const reduce = useReducedMotion();
+  const hasCustomBg = !!(branding?.bgColor && branding.bgColor.trim());
+
+  useEffect(() => {
+    const html = document.documentElement;
+    const prev = html.getAttribute("data-panel-theme");
+    if (palette === "default") {
+      html.removeAttribute("data-panel-theme");
+    } else {
+      html.setAttribute("data-panel-theme", palette);
+    }
+    return () => {
+      if (prev == null) html.removeAttribute("data-panel-theme");
+      else html.setAttribute("data-panel-theme", prev);
+    };
+  }, [palette]);
+
   return (
     <div
       className={`${shell.root} ${className}`}
       style={style}
       data-theme={dataTheme}
+      data-color-preset={palette}
+      data-has-custom-bg={hasCustomBg ? "true" : "false"}
     >
       <div className={shell.animatedBg} aria-hidden />
-      <div className={shell.content}>{children}</div>
+      {reduce ? (
+        <div className={shell.content}>{children}</div>
+      ) : (
+        <motion.div
+          className={shell.content}
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: durations.slow, ease: easeStandard }}
+        >
+          {children}
+        </motion.div>
+      )}
     </div>
   );
 }

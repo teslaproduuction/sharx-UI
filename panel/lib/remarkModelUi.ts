@@ -1,5 +1,18 @@
 const ORDER_LETTERS = new Set(["i", "e", "o", "n", "p", "r"]);
 
+/** Allowed single-letter field codes in remark model order (after separator). */
+export const REMARK_ORDER_LETTERS = ["i", "e", "o", "n", "p", "r"] as const;
+export type RemarkOrderLetter = (typeof REMARK_ORDER_LETTERS)[number];
+
+/** Strips invalid characters; preserves order (duplicates allowed). */
+export function parseOrderLetters(order: string): RemarkOrderLetter[] {
+  const out: RemarkOrderLetter[] = [];
+  for (const c of Array.from((order ?? "").toLowerCase())) {
+    if (ORDER_LETTERS.has(c)) out.push(c as RemarkOrderLetter);
+  }
+  return out;
+}
+
 /** First grapheme = separator, rest = order template (i/e/o/n/p/r). */
 export function parseRemarkModelUi(model: string): { sep: string; order: string } {
   const m = (model ?? "").trim();

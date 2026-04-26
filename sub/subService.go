@@ -180,6 +180,8 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 		s.datepicker = "gregorian"
 	}
 	
+	// New architecture: traffic lives on ClientEntity once; do not append per-inbound or aggregation doubles it.
+	var newArchTrafficAdded bool
 	for _, inbound := range inbounds {
 		prepared := s.prepareInboundForSubscription(inbound)
 
@@ -194,19 +196,22 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 					result = append(result, linkLine)
 				}
 			}
-			// Create ClientTraffic from ClientEntity for statistics (traffic is stored in ClientEntity now)
-			trafficLimit := int64(clientEntity.TotalGB * 1024 * 1024 * 1024)
-			ct := xray.ClientTraffic{
-				Email:      clientEntity.Email,
-				Up:         clientEntity.Up,
-				Down:       clientEntity.Down,
-				Total:      trafficLimit,
-				ExpiryTime: clientEntity.ExpiryTime,
-				LastOnline: clientEntity.LastOnline,
-			}
-			clientTraffics = append(clientTraffics, ct)
-			if ct.LastOnline > lastOnline {
-				lastOnline = ct.LastOnline
+			// Single ClientTraffic row for this sub (same counters for all inbounds)
+			if !newArchTrafficAdded {
+				trafficLimit := int64(clientEntity.TotalGB * 1024 * 1024 * 1024)
+				ct := xray.ClientTraffic{
+					Email:      clientEntity.Email,
+					Up:         clientEntity.Up,
+					Down:       clientEntity.Down,
+					Total:      trafficLimit,
+					ExpiryTime: clientEntity.ExpiryTime,
+					LastOnline: clientEntity.LastOnline,
+				}
+				clientTraffics = append(clientTraffics, ct)
+				if ct.LastOnline > lastOnline {
+					lastOnline = ct.LastOnline
+				}
+				newArchTrafficAdded = true
 			}
 		} else {
 			// Old architecture: parse clients from Settings
@@ -329,14 +334,29 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 			inboundIds[i] = mapping.InboundId
 		}
 		
-		var inbounds []*model.Inbound
+		var all []*model.Inbound
 		err = db.Model(model.Inbound{}).Preload("ClientStats").
-			Where("id IN ? AND enable = ? AND protocol IN ?", 
-				inboundIds, true, []model.Protocol{model.VMESS, model.VLESS, model.Trojan, model.Shadowsocks, model.Hysteria, model.Hysteria2}).
+			Where("id IN ? AND enable = ?", inboundIds, true).
 			Order("id ASC").
-			Find(&inbounds).Error
+			Find(&all).Error
 		if err != nil {
 			return nil, err
+		}
+		// Filter by normalized protocol (DB may store mixed case; SQL IN would skip shadowsocks/mixed).
+		allowedSub := map[model.Protocol]struct{}{
+			model.VMESS:       {},
+			model.VLESS:       {},
+			model.Trojan:      {},
+			model.Shadowsocks: {},
+			model.Mixed:       {},
+			model.Hysteria:    {},
+			model.Hysteria2:   {},
+		}
+		inbounds := make([]*model.Inbound, 0, len(all))
+		for _, inb := range all {
+			if _, ok := allowedSub[model.NormalizeProtocol(inb.Protocol)]; ok {
+				inbounds = append(inbounds, inb)
+			}
 		}
 		return inbounds, nil
 	}
@@ -354,7 +374,7 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 				END
 			) AS client 
 		WHERE
-			protocol in ('vmess','vless','trojan','shadowsocks','hysteria','hysteria2')
+			protocol in ('vmess','vless','trojan','shadowsocks','mixed','hysteria','hysteria2')
 			AND (client.value::jsonb)->>'subId' = ? AND enable = ?
 	)`, subId, true).Order("id ASC").Find(&inbounds).Error
 	if err != nil {
@@ -432,6 +452,8 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		return s.genTrojanLink(&in, email)
 	case model.Shadowsocks:
 		return s.genShadowsocksLink(&in, email)
+	case model.Mixed:
+		return s.genMixedLink(&in, email)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLink(&in, email)
@@ -456,9 +478,125 @@ func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.Cli
 		return s.genTrojanLinkWithClient(&in, client)
 	case model.Shadowsocks:
 		return s.genShadowsocksLinkWithClient(&in, client)
+	case model.Mixed:
+		return s.genMixedLinkWithClient(&in, client)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLinkWithClient(&in, client)
+		}
+	}
+	return ""
+}
+
+// passwordForSubLink returns the secret for SS/Mixed links: ClientEntity first, then inbound settings (legacy/stale rows).
+func (s *SubService) passwordForSubLink(inbound *model.Inbound, client *model.ClientEntity) string {
+	if client == nil {
+		return ""
+	}
+	if p := strings.TrimSpace(client.Password); p != "" {
+		return p
+	}
+	if inbound == nil || strings.TrimSpace(inbound.Settings) == "" {
+		return ""
+	}
+	var settings map[string]any
+	if err := json.Unmarshal([]byte(inbound.Settings), &settings); err != nil {
+		return ""
+	}
+	switch model.NormalizeProtocol(inbound.Protocol) {
+	case model.Mixed:
+		want := mixedProxyUserFromEmail(client.Email)
+		accs, _ := settings["accounts"].([]any)
+		for _, a := range accs {
+			am, _ := a.(map[string]any)
+			if am == nil {
+				continue
+			}
+			if strings.TrimSpace(mapGetString(am, "user")) == want {
+				return mapGetString(am, "pass")
+			}
+		}
+	case model.Shadowsocks:
+		want := strings.ToLower(strings.TrimSpace(client.Email))
+		clients, _ := settings["clients"].([]any)
+		for _, c := range clients {
+			cm, _ := c.(map[string]any)
+			if cm == nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(mapGetString(cm, "email"))) == want {
+				return mapGetString(cm, "password")
+			}
+		}
+	}
+	return ""
+}
+
+// mixedProxyUserFromEmail matches web/inbound mixed account user (local-part of email, fallback "user").
+func mixedProxyUserFromEmail(email string) string {
+	u := strings.TrimSpace(email)
+	if i := strings.IndexByte(u, '@'); i > 0 {
+		u = u[:i]
+	}
+	if u == "" {
+		return "user"
+	}
+	return u
+}
+
+// genMixedLinkWithClient returns SOCKS5 and HTTP proxy URIs (one address per line group) for Xray mixed inbound.
+func (s *SubService) genMixedLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || model.NormalizeProtocol(inbound.Protocol) != model.Mixed || client == nil {
+		return ""
+	}
+	pass := strings.TrimSpace(s.passwordForSubLink(inbound, client))
+	if pass == "" {
+		return ""
+	}
+	user := mixedProxyUserFromEmail(client.Email)
+	nodeAddresses := s.getAddressesForInbound(inbound)
+	if len(nodeAddresses) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	idx := 0
+	for _, ap := range nodeAddresses {
+		host := strings.TrimSpace(ap.Address)
+		if host == "" {
+			continue
+		}
+		linkPort := inbound.Port
+		if ap.Port > 0 {
+			linkPort = ap.Port
+		}
+		hp := net.JoinHostPort(host, fmt.Sprintf("%d", linkPort))
+		socks := &url.URL{Scheme: "socks5", User: url.UserPassword(user, pass), Host: hp}
+		httpU := &url.URL{Scheme: "http", User: url.UserPassword(user, pass), Host: hp}
+		if idx > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(socks.String())
+		b.WriteByte('\n')
+		b.WriteString(httpU.String())
+		idx++
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String()
+}
+
+func (s *SubService) genMixedLink(inbound *model.Inbound, email string) string {
+	if inbound == nil || model.NormalizeProtocol(inbound.Protocol) != model.Mixed {
+		return ""
+	}
+	clients, err := s.inboundService.GetClients(inbound)
+	if err != nil {
+		return ""
+	}
+	for _, c := range clients {
+		if c.Email == email && strings.TrimSpace(c.Password) != "" {
+			return s.genMixedLinkWithClient(inbound, &model.ClientEntity{Email: c.Email, Password: c.Password})
 		}
 	}
 	return ""
@@ -530,6 +668,18 @@ func (s *SubService) getAddressesForInbound(inbound *model.Inbound) []AddressPor
 		nodeAddresses = []AddressPort{{Address: defaultAddress, Port: 0}}
 	}
 
+	nonEmpty := make([]AddressPort, 0, len(nodeAddresses))
+	for _, ap := range nodeAddresses {
+		if strings.TrimSpace(ap.Address) != "" {
+			nonEmpty = append(nonEmpty, ap)
+		}
+	}
+	if len(nonEmpty) > 0 {
+		return nonEmpty
+	}
+	if h := strings.TrimSpace(s.address); h != "" {
+		return []AddressPort{{Address: h, Port: 0}}
+	}
 	return nodeAddresses
 }
 
@@ -1706,22 +1856,79 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 	return links
 }
 
-// genShadowsocksLinkWithClient generates Shadowsocks link using ClientEntity data (new architecture)
-func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
-	if inbound.Protocol != model.Shadowsocks {
+func parseJSONMap(raw string) map[string]any {
+	var m map[string]any
+	if strings.TrimSpace(raw) == "" {
+		return map[string]any{}
+	}
+	if err := json.Unmarshal([]byte(raw), &m); err != nil || m == nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+func mapGetString(m map[string]any, key string) string {
+	if m == nil {
 		return ""
 	}
-	
-	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
-	var stream map[string]any
-	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+	v, ok := m[key]
+	if !ok || v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		if t == float64(int64(t)) {
+			return fmt.Sprintf("%.0f", t)
+		}
+		return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%f", t), "0"), ".")
+	case bool:
+		if t {
+			return "true"
+		}
+		return "false"
+	default:
+		return fmt.Sprint(v)
+	}
+}
 
-	var settings map[string]any
-	json.Unmarshal([]byte(inbound.Settings), &settings)
-	inboundPassword := settings["password"].(string)
-	method := settings["method"].(string)
-	streamNetwork := stream["network"].(string)
+func intFromAny(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	case int64:
+		return int(n)
+	default:
+		return 0
+	}
+}
+
+// genShadowsocksLinkWithClient generates Shadowsocks link using ClientEntity data (new architecture)
+func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || model.NormalizeProtocol(inbound.Protocol) != model.Shadowsocks || client == nil {
+		return ""
+	}
+	clientPass := strings.TrimSpace(s.passwordForSubLink(inbound, client))
+	if clientPass == "" {
+		return ""
+	}
+
+	nodeAddresses := s.getAddressesForInbound(inbound)
+	stream := parseJSONMap(inbound.StreamSettings)
+	settings := parseJSONMap(inbound.Settings)
+
+	method := mapGetString(settings, "method")
+	if method == "" {
+		method = "aes-256-gcm"
+	}
+	inboundPassword := mapGetString(settings, "password")
+	streamNetwork := mapGetString(stream, "network")
+	if streamNetwork == "" {
+		streamNetwork = "tcp"
+	}
 	params := make(map[string]string)
 	params["type"] = streamNetwork
 
@@ -1733,92 +1940,105 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 			params["headerType"] = "http"
 		}
 	case "kcp":
-		kcp, _ := stream["kcpSettings"].(map[string]any)
-		header, _ := kcp["header"].(map[string]any)
-		params["headerType"] = header["type"].(string)
-		params["seed"] = kcp["seed"].(string)
+		if kcp, _ := stream["kcpSettings"].(map[string]any); kcp != nil {
+			if header, _ := kcp["header"].(map[string]any); header != nil {
+				params["headerType"] = mapGetString(header, "type")
+			}
+			params["seed"] = mapGetString(kcp, "seed")
+		}
 	case "ws":
-		ws, _ := stream["wsSettings"].(map[string]any)
-		params["path"] = ws["path"].(string)
-		if host, ok := ws["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := ws["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if ws, _ := stream["wsSettings"].(map[string]any); ws != nil {
+			params["path"] = mapGetString(ws, "path")
+			if host := mapGetString(ws, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := ws["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
 		}
 	case "grpc":
-		grpc, _ := stream["grpcSettings"].(map[string]any)
-		params["serviceName"] = grpc["serviceName"].(string)
-		params["authority"], _ = grpc["authority"].(string)
-		if jsonBool(grpc, "multiMode") {
-			params["mode"] = "multi"
+		if grpc, _ := stream["grpcSettings"].(map[string]any); grpc != nil {
+			params["serviceName"] = mapGetString(grpc, "serviceName")
+			params["authority"] = mapGetString(grpc, "authority")
+			if jsonBool(grpc, "multiMode") {
+				params["mode"] = "multi"
+			}
 		}
 	case "httpupgrade":
-		httpupgrade, _ := stream["httpupgradeSettings"].(map[string]any)
-		params["path"] = httpupgrade["path"].(string)
-		if host, ok := httpupgrade["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := httpupgrade["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if httpupgrade, _ := stream["httpupgradeSettings"].(map[string]any); httpupgrade != nil {
+			params["path"] = mapGetString(httpupgrade, "path")
+			if host := mapGetString(httpupgrade, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := httpupgrade["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
 		}
 	case "xhttp":
-		xhttp, _ := stream["xhttpSettings"].(map[string]any)
-		params["path"] = xhttp["path"].(string)
-		if host, ok := xhttp["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := xhttp["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if xhttp, _ := stream["xhttpSettings"].(map[string]any); xhttp != nil {
+			params["path"] = mapGetString(xhttp, "path")
+			if host := mapGetString(xhttp, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := xhttp["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
+			params["mode"] = mapGetString(xhttp, "mode")
 		}
-		params["mode"] = xhttp["mode"].(string)
 	}
 
-	security, _ := stream["security"].(string)
+	security := mapGetString(stream, "security")
 	if security == "tls" {
 		params["security"] = "tls"
-		tlsSetting, _ := stream["tlsSettings"].(map[string]any)
-		alpns, _ := tlsSetting["alpn"].([]any)
-		var alpn []string
-		for _, a := range alpns {
-			alpn = append(alpn, a.(string))
-		}
-		if len(alpn) > 0 {
-			params["alpn"] = strings.Join(alpn, ",")
-		}
-		if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
-			params["sni"], _ = sniValue.(string)
-		}
-
-		tlsSettings, _ := searchKey(tlsSetting, "settings")
-		if tlsSetting != nil {
-			if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
-				params["fp"], _ = fpValue.(string)
+		if tlsSetting, _ := stream["tlsSettings"].(map[string]any); tlsSetting != nil {
+			if alpns, _ := tlsSetting["alpn"].([]any); len(alpns) > 0 {
+				var alpn []string
+				for _, a := range alpns {
+					if str, ok := a.(string); ok {
+						alpn = append(alpn, str)
+					}
+				}
+				if len(alpn) > 0 {
+					params["alpn"] = strings.Join(alpn, ",")
+				}
 			}
-			if insecure, ok := searchKey(tlsSettings, "allowInsecure"); ok {
-				if insecure.(bool) {
-					params["allowInsecure"] = "1"
+			if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
+				params["sni"], _ = sniValue.(string)
+			}
+			if tlsInnerRaw, ok := searchKey(tlsSetting, "settings"); ok {
+				if innerMap, ok := tlsInnerRaw.(map[string]any); ok {
+					if fpValue, ok := searchKey(innerMap, "fingerprint"); ok {
+						params["fp"], _ = fpValue.(string)
+					}
+					if insecure, ok := searchKey(innerMap, "allowInsecure"); ok {
+						if b, ok := insecure.(bool); ok && b {
+							params["allowInsecure"] = "1"
+						}
+					}
 				}
 			}
 		}
 	}
 
-	encPart := fmt.Sprintf("%s:%s", method, client.Password)
-	if method[0] == '2' {
-		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, client.Password)
+	encPart := fmt.Sprintf("%s:%s", method, clientPass)
+	if strings.HasPrefix(method, "2022") {
+		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, clientPass)
 	}
 
 	externalProxies, _ := stream["externalProxy"].([]any)
 
 	links := ""
 	linkIndex := 0
-	
+
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
 			ep, _ := externalProxy.(map[string]any)
-			newSecurity, _ := ep["forceTls"].(string)
-			dest, _ := ep["dest"].(string)
-			epPort := int(ep["port"].(float64))
+			if ep == nil {
+				continue
+			}
+			newSecurity := mapGetString(ep, "forceTls")
+			dest := mapGetString(ep, "dest")
+			epPort := intFromAny(ep["port"])
+			if dest == "" || epPort <= 0 {
+				continue
+			}
 			link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), dest, epPort)
 
 			if newSecurity != "same" {
@@ -1826,68 +2046,74 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 			} else {
 				params["security"] = security
 			}
-			url, _ := url.Parse(link)
-			q := url.Query()
-
+			u, err := url.Parse(link)
+			if err != nil {
+				continue
+			}
+			q := u.Query()
 			for k, v := range params {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
-
-			url.RawQuery = q.Encode()
-			url.Fragment = s.genRemarkWithClient(inbound, client, ep["remark"].(string))
+			u.RawQuery = q.Encode()
+			u.Fragment = s.genRemarkWithClient(inbound, client, mapGetString(ep, "remark"))
 
 			if linkIndex > 0 {
 				links += "\n"
 			}
-			links += url.String()
+			links += u.String()
 			linkIndex++
 		}
 		return links
 	}
 
 	for _, addrPort := range nodeAddresses {
+		addr := strings.TrimSpace(addrPort.Address)
+		if addr == "" {
+			continue
+		}
 		linkPort := inbound.Port
 		if addrPort.Port > 0 {
 			linkPort = addrPort.Port
 		}
-		link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), addrPort.Address, linkPort)
-		url, _ := url.Parse(link)
-		q := url.Query()
-
+		link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), addr, linkPort)
+		u, err := url.Parse(link)
+		if err != nil {
+			continue
+		}
+		q := u.Query()
 		for k, v := range params {
 			q.Add(k, v)
 		}
-
-		url.RawQuery = q.Encode()
-		url.Fragment = s.genRemarkWithClient(inbound, client, "")
+		u.RawQuery = q.Encode()
+		u.Fragment = s.genRemarkWithClient(inbound, client, "")
 
 		if linkIndex > 0 {
 			links += "\n"
 		}
-		links += url.String()
+		links += u.String()
 		linkIndex++
 	}
-	
+
 	return links
 }
 
 func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) string {
-	if inbound.Protocol != model.Shadowsocks {
+	if inbound == nil || model.NormalizeProtocol(inbound.Protocol) != model.Shadowsocks {
 		return ""
 	}
-	
-	// Get addresses (Host > Nodes > Default)
+
 	nodeAddresses := s.getAddressesForInbound(inbound)
-	var stream map[string]any
-	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+	stream := parseJSONMap(inbound.StreamSettings)
 	clients, _ := s.inboundService.GetClients(inbound)
 
-	var settings map[string]any
-	json.Unmarshal([]byte(inbound.Settings), &settings)
-	inboundPassword := settings["password"].(string)
-	method := settings["method"].(string)
+	settings := parseJSONMap(inbound.Settings)
+	method := mapGetString(settings, "method")
+	if method == "" {
+		method = "aes-256-gcm"
+	}
+	inboundPassword := mapGetString(settings, "password")
 	clientIndex := -1
 	for i, client := range clients {
 		if client.Email == email {
@@ -1895,7 +2121,18 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 			break
 		}
 	}
-	streamNetwork := stream["network"].(string)
+	if clientIndex < 0 {
+		return ""
+	}
+	clientPass := strings.TrimSpace(clients[clientIndex].Password)
+	if clientPass == "" {
+		return ""
+	}
+
+	streamNetwork := mapGetString(stream, "network")
+	if streamNetwork == "" {
+		streamNetwork = "tcp"
+	}
 	params := make(map[string]string)
 	params["type"] = streamNetwork
 
@@ -1907,94 +2144,105 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 			params["headerType"] = "http"
 		}
 	case "kcp":
-		kcp, _ := stream["kcpSettings"].(map[string]any)
-		header, _ := kcp["header"].(map[string]any)
-		params["headerType"] = header["type"].(string)
-		params["seed"] = kcp["seed"].(string)
+		if kcp, _ := stream["kcpSettings"].(map[string]any); kcp != nil {
+			if header, _ := kcp["header"].(map[string]any); header != nil {
+				params["headerType"] = mapGetString(header, "type")
+			}
+			params["seed"] = mapGetString(kcp, "seed")
+		}
 	case "ws":
-		ws, _ := stream["wsSettings"].(map[string]any)
-		params["path"] = ws["path"].(string)
-		if host, ok := ws["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := ws["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if ws, _ := stream["wsSettings"].(map[string]any); ws != nil {
+			params["path"] = mapGetString(ws, "path")
+			if host := mapGetString(ws, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := ws["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
 		}
 	case "grpc":
-		grpc, _ := stream["grpcSettings"].(map[string]any)
-		params["serviceName"] = grpc["serviceName"].(string)
-		params["authority"], _ = grpc["authority"].(string)
-		if jsonBool(grpc, "multiMode") {
-			params["mode"] = "multi"
+		if grpc, _ := stream["grpcSettings"].(map[string]any); grpc != nil {
+			params["serviceName"] = mapGetString(grpc, "serviceName")
+			params["authority"] = mapGetString(grpc, "authority")
+			if jsonBool(grpc, "multiMode") {
+				params["mode"] = "multi"
+			}
 		}
 	case "httpupgrade":
-		httpupgrade, _ := stream["httpupgradeSettings"].(map[string]any)
-		params["path"] = httpupgrade["path"].(string)
-		if host, ok := httpupgrade["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := httpupgrade["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if httpupgrade, _ := stream["httpupgradeSettings"].(map[string]any); httpupgrade != nil {
+			params["path"] = mapGetString(httpupgrade, "path")
+			if host := mapGetString(httpupgrade, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := httpupgrade["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
 		}
 	case "xhttp":
-		xhttp, _ := stream["xhttpSettings"].(map[string]any)
-		params["path"] = xhttp["path"].(string)
-		if host, ok := xhttp["host"].(string); ok && len(host) > 0 {
-			params["host"] = host
-		} else {
-			headers, _ := xhttp["headers"].(map[string]any)
-			params["host"] = searchHost(headers)
+		if xhttp, _ := stream["xhttpSettings"].(map[string]any); xhttp != nil {
+			params["path"] = mapGetString(xhttp, "path")
+			if host := mapGetString(xhttp, "host"); host != "" {
+				params["host"] = host
+			} else if headers, _ := xhttp["headers"].(map[string]any); headers != nil {
+				params["host"] = searchHost(headers)
+			}
+			params["mode"] = mapGetString(xhttp, "mode")
 		}
-		params["mode"] = xhttp["mode"].(string)
 	}
 
-	security, _ := stream["security"].(string)
+	security := mapGetString(stream, "security")
 	if security == "tls" {
 		params["security"] = "tls"
-		tlsSetting, _ := stream["tlsSettings"].(map[string]any)
-		alpns, _ := tlsSetting["alpn"].([]any)
-		var alpn []string
-		for _, a := range alpns {
-			alpn = append(alpn, a.(string))
-		}
-		if len(alpn) > 0 {
-			params["alpn"] = strings.Join(alpn, ",")
-		}
-		if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
-			params["sni"], _ = sniValue.(string)
-		}
-
-		tlsSettings, _ := searchKey(tlsSetting, "settings")
-		if tlsSetting != nil {
-			if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
-				params["fp"], _ = fpValue.(string)
+		if tlsSetting, _ := stream["tlsSettings"].(map[string]any); tlsSetting != nil {
+			if alpns, _ := tlsSetting["alpn"].([]any); len(alpns) > 0 {
+				var alpn []string
+				for _, a := range alpns {
+					if str, ok := a.(string); ok {
+						alpn = append(alpn, str)
+					}
+				}
+				if len(alpn) > 0 {
+					params["alpn"] = strings.Join(alpn, ",")
+				}
 			}
-			if insecure, ok := searchKey(tlsSettings, "allowInsecure"); ok {
-				if insecure.(bool) {
-					params["allowInsecure"] = "1"
+			if sniValue, ok := searchKey(tlsSetting, "serverName"); ok {
+				params["sni"], _ = sniValue.(string)
+			}
+			if tlsInnerRaw, ok := searchKey(tlsSetting, "settings"); ok {
+				if innerMap, ok := tlsInnerRaw.(map[string]any); ok {
+					if fpValue, ok := searchKey(innerMap, "fingerprint"); ok {
+						params["fp"], _ = fpValue.(string)
+					}
+					if insecure, ok := searchKey(innerMap, "allowInsecure"); ok {
+						if b, ok := insecure.(bool); ok && b {
+							params["allowInsecure"] = "1"
+						}
+					}
 				}
 			}
 		}
 	}
 
-	encPart := fmt.Sprintf("%s:%s", method, clients[clientIndex].Password)
-	if method[0] == '2' {
-		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, clients[clientIndex].Password)
+	encPart := fmt.Sprintf("%s:%s", method, clientPass)
+	if strings.HasPrefix(method, "2022") {
+		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, clientPass)
 	}
 
 	externalProxies, _ := stream["externalProxy"].([]any)
 
-	// Generate links for each node address (or external proxy)
 	links := ""
 	linkIndex := 0
-	
-	// First, handle external proxies if any
+
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
 			ep, _ := externalProxy.(map[string]any)
-			newSecurity, _ := ep["forceTls"].(string)
-			dest, _ := ep["dest"].(string)
-			epPort := int(ep["port"].(float64))
+			if ep == nil {
+				continue
+			}
+			newSecurity := mapGetString(ep, "forceTls")
+			dest := mapGetString(ep, "dest")
+			epPort := intFromAny(ep["port"])
+			if dest == "" || epPort <= 0 {
+				continue
+			}
 			link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), dest, epPort)
 
 			if newSecurity != "same" {
@@ -2002,56 +2250,56 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 			} else {
 				params["security"] = security
 			}
-			url, _ := url.Parse(link)
-			q := url.Query()
-
+			u, err := url.Parse(link)
+			if err != nil {
+				continue
+			}
+			q := u.Query()
 			for k, v := range params {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
-
-			// Set the new query values on the URL
-			url.RawQuery = q.Encode()
-
-			url.Fragment = s.genRemark(inbound, email, ep["remark"].(string))
+			u.RawQuery = q.Encode()
+			u.Fragment = s.genRemark(inbound, email, mapGetString(ep, "remark"))
 
 			if linkIndex > 0 {
 				links += "\n"
 			}
-			links += url.String()
+			links += u.String()
 			linkIndex++
 		}
 		return links
 	}
 
-	// Generate links for each node address
 	for _, addrPort := range nodeAddresses {
-		// Use port from Host if specified, otherwise use inbound.Port
+		addr := strings.TrimSpace(addrPort.Address)
+		if addr == "" {
+			continue
+		}
 		linkPort := inbound.Port
 		if addrPort.Port > 0 {
 			linkPort = addrPort.Port
 		}
-		link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), addrPort.Address, linkPort)
-		url, _ := url.Parse(link)
-		q := url.Query()
-
+		link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), addr, linkPort)
+		u, err := url.Parse(link)
+		if err != nil {
+			continue
+		}
+		q := u.Query()
 		for k, v := range params {
 			q.Add(k, v)
 		}
-
-		// Set the new query values on the URL
-		url.RawQuery = q.Encode()
-
-		url.Fragment = s.genRemark(inbound, email, "")
+		u.RawQuery = q.Encode()
+		u.Fragment = s.genRemark(inbound, email, "")
 
 		if linkIndex > 0 {
 			links += "\n"
 		}
-		links += url.String()
+		links += u.String()
 		linkIndex++
 	}
-	
+
 	return links
 }
 

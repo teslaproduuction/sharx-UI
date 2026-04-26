@@ -8,6 +8,7 @@ export type InboundFormProtocol =
   | "vmess"
   | "trojan"
   | "shadowsocks"
+  | "mixed"
   | "hysteria"
   | "hysteria2";
 
@@ -282,6 +283,83 @@ function parseHeaderType(tcp: Record<string, unknown> | undefined): "none" | "ht
   return ty === "http" ? "http" : "none";
 }
 
+/** How the inbound transport editor maps to streamSettings (UI varies by protocol). */
+export type InboundStreamTransportMode = "hysteria" | "shadowsocks" | "full";
+
+export function getInboundStreamTransportMode(
+  protocol: InboundFormProtocol,
+): InboundStreamTransportMode {
+  if (protocol === "hysteria" || protocol === "hysteria2") return "hysteria";
+  /** TCP/WS, stream security none — same editor for SS and mixed (HTTP+SOCKS proxy). */
+  if (protocol === "shadowsocks" || protocol === "mixed") return "shadowsocks";
+  return "full";
+}
+
+/**
+ * Shadowsocks: only TCP or WebSocket, stream security is always "none" (SS has its own crypto).
+ * TLS/REALITY apply to VLESS/VMess/Trojan, not this protocol — ignore if present in saved JSON.
+ */
+function parseStreamSettingsShadowsocksForm(json: string): StreamFormState {
+  const base = defaultStreamForm();
+  base.security = "none";
+  try {
+    const root = JSON.parse(json) as Record<string, unknown>;
+    const net = root.network;
+    base.network = net === "ws" ? "ws" : "tcp";
+    const tcp = root.tcpSettings as Record<string, unknown> | undefined;
+    if (tcp) {
+      base.acceptProxyProtocol = tcp.acceptProxyProtocol === true;
+      base.tcpHeaderType = parseHeaderType(tcp);
+    }
+    const ws = root.wsSettings as Record<string, unknown> | undefined;
+    if (ws) {
+      if (typeof ws.path === "string") base.wsPath = ws.path;
+      const headers = ws.headers as Record<string, unknown> | undefined;
+      const host = headers?.Host ?? headers?.host;
+      if (typeof host === "string") base.wsHost = host;
+    }
+  } catch {
+    /* keep defaults */
+  }
+  return base;
+}
+
+function buildStreamSettingsShadowsocksFromForm(state: StreamFormState): string {
+  const net = state.network === "ws" ? "ws" : "tcp";
+  const out: Record<string, unknown> = {
+    network: net,
+    security: "none",
+  };
+  if (net === "tcp") {
+    out.tcpSettings = {
+      acceptProxyProtocol: state.acceptProxyProtocol,
+      header: { type: state.tcpHeaderType },
+    };
+  } else {
+    const headers: Record<string, string> = {};
+    if (state.wsHost.trim()) {
+      headers.Host = state.wsHost.trim();
+    }
+    out.wsSettings = {
+      path: state.wsPath.trim() || "/",
+      headers,
+    };
+  }
+  return JSON.stringify(out);
+}
+
+/** Preset: Shadowsocks + WebSocket (no stream TLS). */
+export function streamPresetShadowsocksWsString(): string {
+  return JSON.stringify({
+    network: "ws",
+    security: "none",
+    wsSettings: {
+      path: "/",
+      headers: {},
+    },
+  });
+}
+
 /** Map existing streamSettings JSON into form state. Best-effort for tcp/ws/grpc + tls. */
 export function parseStreamSettingsToForm(
   json: string,
@@ -300,6 +378,9 @@ export function parseStreamSettingsToForm(
       /* keep defaults */
     }
     return base;
+  }
+  if (protocol === "shadowsocks" || protocol === "mixed") {
+    return parseStreamSettingsShadowsocksForm(json);
   }
   try {
     const root = JSON.parse(json) as Record<string, unknown>;
@@ -450,6 +531,9 @@ export function buildStreamSettingsFromForm(
       },
     });
   }
+  if (protocol === "shadowsocks" || protocol === "mixed") {
+    return buildStreamSettingsShadowsocksFromForm(state);
+  }
 
   const out: Record<string, unknown> = {
     network: state.network,
@@ -565,6 +649,9 @@ export type FirstClientPatch = {
   hysteriaAuth: string;
   ssMethod: string;
   ssPassword: string;
+  /** Xray mixed inbound: SOCKS/HTTP account user (maps to accounts[].user). */
+  mixedUser?: string;
+  mixedPassword?: string;
 };
 
 export function buildSettingsJson(
@@ -682,6 +769,15 @@ export function buildSettingsJson(
       };
       return JSON.stringify(o);
     }
+    case "mixed": {
+      const user = (opts.mixedUser || "proxy").trim() || "proxy";
+      const pass = (opts.mixedPassword ?? "").trim() || randomPassword(12);
+      return JSON.stringify({
+        auth: "password",
+        accounts: [{ user, pass }],
+        udp: true,
+      });
+    }
     default:
       return "{}";
   }
@@ -701,6 +797,16 @@ export function parseFirstClientFromSettings(
 ): Partial<FirstClientPatch> {
   try {
     const root = JSON.parse(settingsStr) as Record<string, unknown>;
+    if (protocol === "mixed") {
+      const out: Partial<FirstClientPatch> = {};
+      const acc = root.accounts;
+      if (Array.isArray(acc) && acc.length > 0) {
+        const a0 = acc[0] as Record<string, unknown>;
+        if (typeof a0.user === "string") out.mixedUser = a0.user;
+        if (typeof a0.pass === "string") out.mixedPassword = a0.pass;
+      }
+      return out;
+    }
     const clients = root.clients;
     if (!Array.isArray(clients) || clients.length === 0) {
       return {};
@@ -742,6 +848,16 @@ export function mergeFirstClientIntoSettings(
     root.method = patch.ssMethod || "aes-256-gcm";
     root.password = patch.ssPassword.trim() || randomPassword(12);
     if (!Array.isArray(root.clients)) root.clients = [];
+    return JSON.stringify(root);
+  }
+
+  if (protocol === "mixed") {
+    const user = (patch.mixedUser || "proxy").trim() || "proxy";
+    const pass = (patch.mixedPassword ?? "").trim() || randomPassword(12);
+    root.auth = "password";
+    root.accounts = [{ user, pass }];
+    root.udp = true;
+    delete root.clients;
     return JSON.stringify(root);
   }
 

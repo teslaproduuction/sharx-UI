@@ -19,6 +19,12 @@ import (
 	"github.com/konstpic/sharx-code/v2/util/common"
 )
 
+const (
+	xrayStopGracePeriod = 15 * time.Second
+	xrayStopKillWait    = 5 * time.Second
+	xrayStopPoll        = 50 * time.Millisecond
+)
+
 // GetBinaryName returns the Xray binary filename for the current OS and architecture.
 func GetBinaryName() string {
 	return fmt.Sprintf("xray-%s-%s", runtime.GOOS, runtime.GOARCH)
@@ -254,27 +260,37 @@ func (p *process) Start() (err error) {
 		return err
 	}
 
-	cmd := exec.Command(GetBinaryPath(), "-c", configPath)
-	p.cmd = cmd
+	binPath := GetBinaryPath()
+	if st, statErr := os.Stat(binPath); statErr != nil || st.IsDir() {
+		if statErr == nil {
+			statErr = errors.New("path is not a regular file")
+		}
+		return fmt.Errorf("xray binary not found at %s (expected name %s for this build): %w", binPath, GetBinaryName(), statErr)
+	}
 
+	cmd := exec.Command(binPath, "-c", configPath)
 	cmd.Stdout = p.logWriter
 	cmd.Stderr = p.logWriter
 
+	if err = cmd.Start(); err != nil {
+		return fmt.Errorf("failed to start xray: %w", err)
+	}
+	p.cmd = cmd
+
 	go func() {
-		err := cmd.Run()
-		if err != nil {
-			// On Windows, killing the process results in "exit status 1" which isn't an error for us
-			if runtime.GOOS == "windows" {
-				errStr := strings.ToLower(err.Error())
-				if strings.Contains(errStr, "exit status 1") {
-					// Suppress noisy log on graceful stop
-					p.exitErr = err
-					return
-				}
-			}
-			logger.Error("Failure in running xray-core:", err)
-			p.exitErr = err
+		werr := cmd.Wait()
+		if werr == nil {
+			return
 		}
+		if runtime.GOOS == "windows" {
+			errStr := strings.ToLower(werr.Error())
+			if strings.Contains(errStr, "exit status 1") {
+				p.exitErr = werr
+				return
+			}
+		}
+		logger.Error("Failure in running xray-core:", werr)
+		p.exitErr = werr
 	}()
 
 	p.refreshVersion()
@@ -333,17 +349,55 @@ func WriteConfigFile(xrayConfig *Config) (string, error) {
 	return configPath, nil
 }
 
-// Stop terminates the running Xray process.
+// Stop terminates the running Xray process: SIGTERM (Unix) or Kill (Windows), wait for exit,
+// then SIGKILL on Unix if still running. Merely signaling without waiting left Xray listening
+// while the API already returned success.
 func (p *process) Stop() error {
+	if p.cmd == nil || p.cmd.Process == nil {
+		return nil
+	}
 	if !p.IsRunning() {
-		return errors.New("xray is not running")
+		return nil
 	}
 
+	proc := p.cmd.Process
+
 	if runtime.GOOS == "windows" {
-		return p.cmd.Process.Kill()
+		if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
 	} else {
-		return p.cmd.Process.Signal(syscall.SIGTERM)
+		if err := proc.Signal(syscall.SIGTERM); err != nil {
+			if errors.Is(err, os.ErrProcessDone) || !p.IsRunning() {
+				return nil
+			}
+			return err
+		}
 	}
+
+	deadline := time.Now().Add(xrayStopGracePeriod)
+	for p.IsRunning() && time.Now().Before(deadline) {
+		time.Sleep(xrayStopPoll)
+	}
+	if !p.IsRunning() {
+		return nil
+	}
+
+	if runtime.GOOS != "windows" {
+		logger.Warningf("xray did not exit after SIGTERM (pid %d), sending SIGKILL", proc.Pid)
+		if err := proc.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return err
+		}
+		deadline = time.Now().Add(xrayStopKillWait)
+		for p.IsRunning() && time.Now().Before(deadline) {
+			time.Sleep(xrayStopPoll)
+		}
+	}
+
+	if p.IsRunning() {
+		return fmt.Errorf("xray process %d still running after stop", proc.Pid)
+	}
+	return nil
 }
 
 // writeCrashReport writes a crash report to the binary folder with a timestamped filename.

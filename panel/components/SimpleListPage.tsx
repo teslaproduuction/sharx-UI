@@ -1,13 +1,13 @@
 "use client";
 
 import type { LucideIcon } from "lucide-react";
-import { RefreshCw, Table2 } from "lucide-react";
+import { Table2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
-import { Button, IconTile, Spinner, type IconTileTone } from "@/components/ui";
+import { IconTile, Spinner, type IconTileTone } from "@/components/ui";
 
 export function SimpleListPage({
   titleKey,
@@ -44,12 +44,6 @@ export function SimpleListPage({
         title={t(titleKey as never)}
         icon={headerIcon}
         iconTone={headerIconTone}
-        actions={
-          <Button variant="primary" onClick={load} loading={loading} className="!gap-2">
-            <RefreshCw size={16} />
-            {t("refresh")}
-          </Button>
-        }
       />
       <Surface padding="none" className="overflow-hidden">
         {loading && !rows.length ? (

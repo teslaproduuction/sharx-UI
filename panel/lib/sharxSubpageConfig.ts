@@ -1,4 +1,9 @@
 import { z } from "zod";
+import { appFaviconUrl } from "./subscriptionAppIcons";
+import {
+  SUB_PAGE_COLOR_PRESET_DEFAULT,
+  subPageColorPresetSchema,
+} from "./subPageColorPreset";
 
 // ------------------------------------------------------------------------------------
 // Shared branding / theme schema
@@ -74,126 +79,126 @@ export const APP_CATALOG: Record<SubscriptionApp, AppCatalogEntry> = {
     platforms: ["ios", "android", "windows", "macos"],
     deepLinkTemplate: "happ://add/{url}",
     supportsEncrypted: true,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("happ.su"),
   },
   v2raytun: {
     label: "v2rayTun",
     platforms: ["ios", "android", "windows", "macos"],
     deepLinkTemplate: "v2raytun://install-sub?url={urlEncoded}",
     supportsEncrypted: true,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("v2raytun.com"),
   },
   v2rayng: {
     label: "v2rayNG",
     platforms: ["android"],
     deepLinkTemplate: "v2rayng://install-sub?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("v2rayng.com"),
   },
   hiddify: {
     label: "Hiddify",
     platforms: ["ios", "android", "windows", "macos", "linux"],
     deepLinkTemplate: "hiddify://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("hiddify.com"),
   },
   streisand: {
     label: "Streisand",
     platforms: ["ios"],
     deepLinkTemplate: "streisand://import/{url}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("streisand.app"),
   },
   shadowrocket: {
     label: "Shadowrocket",
     platforms: ["ios"],
     deepLinkTemplate: "shadowrocket://add/sub://{b64Url}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("liguangming.com"),
   },
   "clash-meta": {
     label: "Clash Meta",
     platforms: ["android", "windows", "macos", "linux"],
     deepLinkTemplate: "clash://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("mihomo.party"),
   },
   "clash-verge": {
     label: "Clash Verge",
     platforms: ["windows", "macos", "linux"],
     deepLinkTemplate: "clash://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("clashverge.dev"),
   },
   karing: {
     label: "Karing",
     platforms: ["ios", "android", "windows", "macos"],
     deepLinkTemplate: "karing://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("karing.app"),
   },
   nekobox: {
     label: "NekoBox",
     platforms: ["android"],
     deepLinkTemplate: "sn://subscription?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("matsuridayo.github.io"),
   },
   "sing-box": {
     label: "sing-box",
     platforms: ["ios", "android", "windows", "macos", "linux"],
     deepLinkTemplate: "sing-box://import-remote-profile?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("sing-box.sagernet.org"),
   },
   stash: {
     label: "Stash",
     platforms: ["ios", "macos"],
     deepLinkTemplate: "stash://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("stash.wiki"),
   },
   loon: {
     label: "Loon",
     platforms: ["ios"],
     deepLinkTemplate: "loon://import?sub={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("nsloon.app"),
   },
   "quantumult-x": {
     label: "Quantumult X",
     platforms: ["ios"],
     deepLinkTemplate: "quantumult-x:///add-resource?remote-resource={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("quantumult.com"),
   },
   surge: {
     label: "Surge",
     platforms: ["ios", "macos"],
     deepLinkTemplate: "surge:///install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("nssurge.com"),
   },
   foxray: {
     label: "FoXray",
     platforms: ["ios", "macos"],
     deepLinkTemplate: "foxray://yiamu.dev/sub/add/{b64Url}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("yiamu.dev"),
   },
   flclash: {
     label: "FlClash",
     platforms: ["android", "windows", "macos", "linux"],
     deepLinkTemplate: "clash://install-config?url={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("flclash.app"),
   },
   amneziavpn: {
     label: "AmneziaVPN",
     platforms: ["ios", "android", "windows", "macos", "linux"],
     deepLinkTemplate: "amnezia://add?config={urlEncoded}",
     supportsEncrypted: false,
-    iconUrl: "",
+    iconUrl: appFaviconUrl("amnezia.org"),
   },
   custom: {
     label: "Custom",
@@ -560,12 +565,19 @@ export const appSettingsSchema = z.object({
 });
 export type AppSettings = z.infer<typeof appSettingsSchema>;
 
+export const routingDeepLinkPresetSchema = z.enum(["happ", "incy", "sharx", "custom"]);
+export type RoutingDeepLinkPreset = z.infer<typeof routingDeepLinkPresetSchema>;
+
 export const routingProfileSchema = z.object({
   id: z.string().min(1),
   name: z.string().default(""),
   source: z.enum(["inline", "url"]).default("inline"),
   body: z.string().default(""),
   url: z.string().default(""),
+  /** Deep link scheme for inline JSON (happ:// / incy:// / sharx:// or custom prefix). */
+  deepLinkPreset: routingDeepLinkPresetSchema.default("happ"),
+  /** When preset is custom: full prefix before Base64 payload, e.g. myapp://routing/add/ */
+  deepLinkCustomPrefix: z.string().default(""),
 });
 export type RoutingProfile = z.infer<typeof routingProfileSchema>;
 
@@ -613,6 +625,8 @@ export const sharxSubpageConfigV2Schema = z.object({
   schemaVersion: z.literal("sharx-v2"),
   branding: brandingSchema,
   theme: z.string().default("system"),
+  /** Same presets as the panel appearance (e.g. default, web = SharX Web). */
+  colorPreset: subPageColorPresetSchema.default(SUB_PAGE_COLOR_PRESET_DEFAULT),
   showQrCodes: z.boolean().default(true),
   locales: z.array(z.string()).default(["en", "ru"]),
   blocks: z.array(subpageBlockSchema).default([]),
@@ -759,6 +773,7 @@ export function defaultV2(): SharxSubpageConfigV2 {
       supportUrl: "",
     },
     theme: "system",
+    colorPreset: SUB_PAGE_COLOR_PRESET_DEFAULT,
     showQrCodes: true,
     locales: ["en", "ru"],
     blocks: defaultV2Blocks(),
@@ -775,6 +790,7 @@ export function defaultV2(): SharxSubpageConfigV2 {
 export function normalizeV2(cfg: SharxSubpageConfigV2): SharxSubpageConfigV2 {
   return {
     ...cfg,
+    colorPreset: cfg.colorPreset ?? SUB_PAGE_COLOR_PRESET_DEFAULT,
     responseRules: cfg.responseRules ?? defaultResponseRules(),
     appSettings: cfg.appSettings ?? defaultAppSettings(),
     jsonTemplates: cfg.jsonTemplates ?? defaultJsonTemplates(),
@@ -794,6 +810,7 @@ export function migrateV1ToV2(v1: SharxSubpageConfigV1): SharxSubpageConfigV2 {
       supportUrl: v1.branding.supportUrl,
     },
     theme: v1.theme || "system",
+    colorPreset: SUB_PAGE_COLOR_PRESET_DEFAULT,
     showQrCodes: v1.showQrCodes,
     locales: v1.locales && v1.locales.length ? v1.locales : ["en", "ru"],
     blocks: defaultV2Blocks(),

@@ -4,6 +4,8 @@ package xray
 import (
 	"archive/zip"
 	"bufio"
+	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -19,9 +21,13 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/conndrop"
 	"github.com/konstpic/sharx-code/v2/util/json_util"
 	"github.com/konstpic/sharx-code/v2/xray"
 )
+
+// ErrXrayNotReady is returned when Xray is not running; callers may map it to HTTP 503.
+var ErrXrayNotReady = errors.New("XRAY is not running")
 
 // NodeStats represents traffic and online clients statistics from a node.
 type NodeStats struct {
@@ -156,6 +162,11 @@ func (m *Manager) LoadConfigFromFile() error {
 	// If no config file found, that's okay - node will wait for config from panel
 	if configPath == "" {
 		logger.Debug("No config.json found, node will wait for configuration from panel")
+		return nil
+	}
+
+	if len(bytes.TrimSpace(configData)) == 0 {
+		logger.Debugf("Config file %s is empty, ignoring (waiting for panel apply-config)", configPath)
 		return nil
 	}
 
@@ -410,10 +421,15 @@ func (m *Manager) Stop() error {
 	defer m.lock.Unlock()
 
 	if m.process == nil || !m.process.IsRunning() {
+		m.process = nil
 		return nil
 	}
 
-	return m.process.Stop()
+	if err := m.process.Stop(); err != nil {
+		return err
+	}
+	m.process = nil
+	return nil
 }
 
 // GetStats returns traffic and online clients statistics from XRAY.
@@ -422,7 +438,7 @@ func (m *Manager) GetStats(reset bool) (*NodeStats, error) {
 	defer m.lock.Unlock()
 
 	if m.process == nil || !m.process.IsRunning() {
-		return nil, errors.New("XRAY is not running")
+		return nil, ErrXrayNotReady
 	}
 
 	// Get API port from process
@@ -476,6 +492,70 @@ func (m *Manager) GetStats(reset bool) (*NodeStats, error) {
 	}, nil
 }
 
+// GetUserOnlineSessions returns per-IP online entries from Xray stats (requires statsUserOnline in policy).
+func (m *Manager) GetUserOnlineSessions(email string, reset bool) ([]xray.OnlineIPSession, error) {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+	return m.getUserOnlineSessionsLocked(email, reset)
+}
+
+func (m *Manager) getUserOnlineSessionsLocked(email string, reset bool) ([]xray.OnlineIPSession, error) {
+	if m.process == nil || !m.process.IsRunning() {
+		return nil, ErrXrayNotReady
+	}
+	apiPort := m.process.GetAPIPort()
+	if apiPort == 0 {
+		return nil, errors.New("XRAY API port is not available")
+	}
+	xrayAPI := &xray.XrayAPI{}
+	if err := xrayAPI.Init(apiPort); err != nil {
+		return nil, fmt.Errorf("failed to initialize XrayAPI: %w", err)
+	}
+	defer xrayAPI.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return xrayAPI.GetUserOnlineIPList(ctx, email, reset)
+}
+
+// DropConnectionsByEmail drops established connections for all IPs in the user online map (reset=true when querying, same as typical conntrack/sock-destroy flows).
+func (m *Manager) DropConnectionsByEmail(email string) error {
+	m.lock.Lock()
+	sessions, err := m.getUserOnlineSessionsLocked(email, true)
+	m.lock.Unlock()
+	if err != nil {
+		return err
+	}
+	ips := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		if s.IP != "" {
+			ips = append(ips, s.IP)
+		}
+	}
+	if len(ips) == 0 {
+		return nil
+	}
+	if !conndrop.Available() {
+		return conndrop.ErrConntrackUnavailable
+	}
+	return conndrop.DropIPs(ips)
+}
+
+// DropConnectionsByIPs drops established connections for the given IP addresses.
+func (m *Manager) DropConnectionsByIPs(ips []string) error {
+	if len(ips) == 0 {
+		return nil
+	}
+	if !conndrop.Available() {
+		return conndrop.ErrConntrackUnavailable
+	}
+	return conndrop.DropIPs(ips)
+}
+
+// ConntrackDropAvailable reports whether the node can run conntrack-based drops.
+func (m *Manager) ConntrackDropAvailable() bool {
+	return conndrop.Available()
+}
+
 // GetLogs returns XRAY access logs from the log file.
 // Returns raw log lines as strings.
 func (m *Manager) GetLogs(count int, filter string) ([]string, error) {
@@ -483,7 +563,7 @@ func (m *Manager) GetLogs(count int, filter string) ([]string, error) {
 	defer m.lock.Unlock()
 
 	if m.process == nil || !m.process.IsRunning() {
-		return nil, errors.New("XRAY is not running")
+		return nil, ErrXrayNotReady
 	}
 
 	// Get access log path from current config

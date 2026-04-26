@@ -1,6 +1,6 @@
 "use client";
 
-import { Building2, Pencil, Plus, RefreshCw, Trash2, Users } from "lucide-react";
+import { Building2, Pencil, Plus, Trash2, Users } from "lucide-react";
 import type { TextareaHTMLAttributes } from "react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -368,15 +368,6 @@ export function GroupsPage() {
         iconTone="warning"
         actions={
           <>
-            <Button
-              variant="primary"
-              onClick={load}
-              loading={loading}
-              className="!gap-2"
-            >
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button variant="secondary" onClick={openAdd} className="!gap-2">
               <Plus size={16} />
               {t("pages.groups.addGroup")}

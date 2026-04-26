@@ -48,6 +48,7 @@ func (a *BaseController) checkLogin(c *gin.Context) {
 		c.Next()
 		return
 	}
+	TryAttachAPITokenFromBearer(c)
 	if !session.IsLogin(c) {
 		if isAjax(c) {
 			pureJsonMsg(c, http.StatusUnauthorized, false, I18nWeb(c, "pages.login.loginAgain"))

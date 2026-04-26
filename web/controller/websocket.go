@@ -81,6 +81,7 @@ func NewWebSocketController(hub *websocket.Hub) *WebSocketController {
 // HandleWebSocket handles WebSocket connections
 func (w *WebSocketController) HandleWebSocket(c *gin.Context) {
 	// Check authentication
+	TryAttachAPITokenFromBearer(c)
 	if !session.IsLogin(c) {
 		logger.Warningf("Unauthorized WebSocket connection attempt from %s", getRemoteIp(c))
 		c.AbortWithStatus(http.StatusUnauthorized)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
+	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 
 	"gorm.io/gorm"
 )
@@ -74,6 +75,16 @@ func (s *PanelPairingService) GetJWTPrivateKey() (*rsa.PrivateKey, error) {
 		return nil, err
 	}
 	return c.jwtPrivate, nil
+}
+
+// GetOutboundHMACKey returns the 32-byte key used for node→panel HMAC (log push, etc.).
+// It is derived from the same public material as the SECRET_KEY bundle (no per-node API key).
+func (s *PanelPairingService) GetOutboundHMACKey() ([32]byte, error) {
+	c, err := s.get()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	return pairing_outbound.OutboundHMACKey(c.row.CaCertPem, c.row.JwtPublicKeyPem), nil
 }
 
 // Reset clears the cached material (for tests / migrations).

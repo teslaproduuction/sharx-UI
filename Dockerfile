@@ -3,9 +3,13 @@
 # ========================================================
 FROM node:22-alpine AS panelui
 WORKDIR /app/panel
+# Must match XUI / SharX `webBasePath` (e.g. / or /prefix). `next.config` `basePath` + client `linkP()`.
+ARG NEXT_PUBLIC_BASE_PATH=/
+ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
 COPY panel/package.json panel/package-lock.json ./
+# react-simple-maps declares peer react@18; panel uses react@19 — same as panel/.npmrc locally.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --cache /root/.npm --prefer-offline
+    npm ci --cache /root/.npm --prefer-offline --legacy-peer-deps
 COPY panel/ ./
 RUN npm run build && cp -R out /webpanel
 
@@ -35,9 +39,13 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # Copy only Go sources (web/panel comes from panelui; omitted via .dockerignore).
 # Panel or doc edits no longer invalidate the compile layer.
 COPY config/ ./config/
+# Optional: docker build --build-arg SHARX_VERSION=1.2.3 to stamp config/version before compile.
+ARG SHARX_VERSION=
+RUN if [ -n "$SHARX_VERSION" ]; then printf '%s' "$SHARX_VERSION" > config/version; fi
 COPY database/ ./database/
 COPY logger/ ./logger/
 COPY util/ ./util/
+COPY conndrop/ ./conndrop/
 COPY xray/ ./xray/
 COPY sub/ ./sub/
 COPY node/ ./node/
@@ -73,7 +81,8 @@ RUN apk add --no-cache --update \
   tzdata \
   fail2ban \
   bash \
-  postgresql-client
+  postgresql-client \
+  conntrack-tools
 
 COPY --from=builder /app/build/ /app/
 COPY --from=builder /app/DockerEntrypoint.sh /app/

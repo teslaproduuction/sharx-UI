@@ -1,25 +1,25 @@
 "use client";
 
 import {
+  ArrowDown,
   ArrowLeft,
   ArrowRight,
-  BookOpen,
-  Copy,
+  ArrowUp,
+  ArrowUpDown,
   Eye,
+  Filter,
   KeyRound,
   Network,
   Pencil,
   Plus,
-  RefreshCw,
   Server,
   SlidersHorizontal,
   Trash2,
   User,
   type LucideIcon,
 } from "lucide-react";
-import Link from "next/link";
 import type { ReactNode, TextareaHTMLAttributes } from "react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
 import {
@@ -30,6 +30,7 @@ import {
   defaultSniffingString,
   defaultStreamForm,
   defaultStreamSettingsString,
+  getInboundStreamTransportMode,
   hostFromRealityTarget,
   mergeFirstClientIntoSettings,
   parseFirstClientFromSettings,
@@ -40,6 +41,7 @@ import {
   randomRealityShortIds,
   randomWsPath,
   REALITY_FINGERPRINTS,
+  streamPresetShadowsocksWsString,
   streamPresetTcpTlsString,
   suggestRandomTlsSni,
   totalBytesToGbInput,
@@ -53,12 +55,15 @@ import {
   NAME_FLAG_SELECT_OPTIONS,
   splitNameFlag,
 } from "@/lib/nameFlag";
-import { p, panel } from "@/lib/paths";
-import { PageScaffold, PageHeader, Surface, StatusPill } from "@/components/panel";
+import { usePanelWebSocket } from "@/lib/panelWebSocket";
+import { panel } from "@/lib/paths";
+import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
+import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
   ConfirmDialog,
+  IconButton,
   IconTile,
   Input,
   Modal,
@@ -66,6 +71,7 @@ import {
   SelectNative,
   Spinner,
   Stepper,
+  Switch,
   Tabs,
   useToast,
 } from "@/components/ui";
@@ -111,6 +117,196 @@ type Row = {
   enable: boolean;
 };
 
+/** Maps panel API / WebSocket inbounds array to list rows. */
+function inboundsPayloadToRows(raw: unknown): Row[] {
+  if (!Array.isArray(raw)) return [];
+  const out: Row[] = [];
+  for (const x of raw) {
+    if (!x || typeof x !== "object") continue;
+    const o = x as Record<string, unknown>;
+    if (typeof o.id !== "number") continue;
+    out.push({
+      id: o.id,
+      remark: String(o.remark ?? ""),
+      protocol: String(o.protocol ?? ""),
+      port: typeof o.port === "number" ? o.port : 0,
+      up: Number(o.up) || 0,
+      down: Number(o.down) || 0,
+      total: Number(o.total) || 0,
+      enable: Boolean(o.enable),
+    });
+  }
+  return out;
+}
+
+function cx(...parts: (string | false | undefined | null)[]): string {
+  return parts.filter(Boolean).join(" ");
+}
+
+type InboundSortKey = "id" | "remark" | "protocol" | "port" | "used" | "status";
+type SortDir = "asc" | "desc";
+type InboundFilterStatus = "" | "enabled" | "disabled";
+
+type InboundColumnFilterId = "remark" | "protocol" | "port" | "traffic";
+
+const INBOUND_DEFAULT_FILTERS: Record<InboundColumnFilterId, string> = {
+  remark: "",
+  protocol: "",
+  port: "",
+  traffic: "",
+};
+
+function parseTrafficFilterBytes(input: string): number | null {
+  const s = input.trim().toLowerCase().replace(",", ".");
+  if (!s) return null;
+  const m = s.match(/^([\d.]+)\s*(b|kb|mb|gb|tb)?$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const u = (m[2] || "gb").toLowerCase();
+  const mult: Record<string, number> = {
+    b: 1,
+    kb: 1024,
+    mb: 1024 ** 2,
+    gb: 1024 ** 3,
+    tb: 1024 ** 4,
+  };
+  return n * (mult[u] ?? mult.gb);
+}
+
+function usedBytes(r: Row): number {
+  return r.up + r.down;
+}
+
+function inboundTrafficHaystack(r: Row): string {
+  const up = r.up || 0;
+  const down = r.down || 0;
+  return [
+    sizeFormat(up),
+    sizeFormat(down),
+    sizeFormat(usedBytes(r)),
+    String(up),
+    String(down),
+  ]
+    .join(" ")
+    .toLowerCase();
+}
+
+function compareInbounds(
+  a: Row,
+  b: Row,
+  key: InboundSortKey,
+  dir: SortDir,
+): number {
+  const m = dir === "asc" ? 1 : -1;
+  let c = 0;
+  switch (key) {
+    case "id":
+      c = a.id - b.id;
+      break;
+    case "remark":
+      c = a.remark.localeCompare(b.remark, undefined, { sensitivity: "base" });
+      break;
+    case "protocol":
+      c = a.protocol.localeCompare(b.protocol, undefined, { sensitivity: "base" });
+      break;
+    case "port":
+      c = a.port - b.port;
+      break;
+    case "used":
+      c = usedBytes(a) - usedBytes(b);
+      break;
+    case "status":
+      c = (a.enable ? 1 : 0) - (b.enable ? 1 : 0);
+      break;
+  }
+  if (c !== 0) return c * m;
+  return (a.id - b.id) * m;
+}
+
+function InboundColumnFilterInput({
+  value,
+  onChange,
+  placeholder,
+  className = "",
+  prefix,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  className?: string;
+  prefix?: string;
+}) {
+  const input = (
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      placeholder={placeholder}
+      className={
+        prefix
+          ? `!h-8 min-w-0 flex-1 !border-0 !bg-transparent !px-2 !py-1 !text-xs ${className}`
+          : `!h-8 w-full min-w-[4.5rem] !px-2 !py-1 !text-xs ${className}`
+      }
+    />
+  );
+  if (!prefix) return input;
+  return (
+    <div
+      className={`flex min-w-0 items-stretch overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] ${className}`}
+    >
+      <span
+        className="flex shrink-0 items-center border-r border-[var(--border)] bg-[color-mix(in_oklab,var(--border)_35%,transparent)] px-1.5 font-mono text-xs font-semibold text-[var(--fg-muted)]"
+        aria-hidden
+      >
+        {prefix}
+      </span>
+      {input}
+    </div>
+  );
+}
+
+function InboundSortableTh({
+  label,
+  sortKey: sk,
+  activeKey,
+  dir,
+  onSort,
+  className = "",
+}: {
+  label: string;
+  sortKey: InboundSortKey;
+  activeKey: InboundSortKey;
+  dir: SortDir;
+  onSort: (k: InboundSortKey) => void;
+  className?: string;
+}) {
+  const active = activeKey === sk;
+  return (
+    <th className={cx("p-3", className)}>
+      <button
+        type="button"
+        className="inline-flex max-w-full items-center gap-1 text-left font-semibold uppercase tracking-wider text-[var(--fg-subtle)] outline-none hover:text-[var(--fg-muted)] focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSort(sk);
+        }}
+      >
+        <span className="truncate">{label}</span>
+        {active ? (
+          dir === "asc" ? (
+            <ArrowUp className="size-3.5 shrink-0 opacity-90" aria-hidden />
+          ) : (
+            <ArrowDown className="size-3.5 shrink-0 opacity-90" aria-hidden />
+          )
+        ) : (
+          <ArrowUpDown className="size-3.5 shrink-0 opacity-35" aria-hidden />
+        )}
+      </button>
+    </th>
+  );
+}
+
 type NodeRow = { id: number; name: string };
 
 type InboundDetail = {
@@ -141,6 +337,7 @@ const PROTOCOLS: { value: InboundFormProtocol; label: string }[] = [
   { value: "vmess", label: "VMess" },
   { value: "trojan", label: "Trojan" },
   { value: "shadowsocks", label: "Shadowsocks" },
+  { value: "mixed", label: "Mixed" },
   { value: "hysteria2", label: "Hysteria 2" },
 ];
 
@@ -149,6 +346,7 @@ const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
   "vmess",
   "trojan",
   "shadowsocks",
+  "mixed",
   "hysteria",
   "hysteria2",
 ]);
@@ -255,6 +453,7 @@ const PROTOCOL_TONE: Record<string, "accent" | "info" | "warning" | "success" | 
   vmess: "info",
   trojan: "warning",
   shadowsocks: "success",
+  mixed: "neutral",
   hysteria2: "accent",
   hysteria: "accent",
 };
@@ -271,6 +470,8 @@ const defaultForm = () => ({
   hysteriaAuth: randomPassword(8),
   ssMethod: "aes-256-gcm",
   ssPassword: randomPassword(12),
+  mixedUser: "proxy",
+  mixedPassword: randomPassword(12),
   totalGb: "0",
   trafficReset: "never",
   streamForm: defaultStreamForm(),
@@ -284,6 +485,7 @@ export function InboundsPage() {
   const [loading, setLoading] = useState(true);
   const [deleteId, setDeleteId] = useState<number | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [toggleEnableBusyId, setToggleEnableBusyId] = useState<number | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
@@ -300,23 +502,24 @@ export function InboundsPage() {
     allTime: 0,
   });
 
+  const [sortKey, setSortKey] = useState<InboundSortKey>("id");
+  const [sortDir, setSortDir] = useState<SortDir>("asc");
+  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<
+    Record<InboundColumnFilterId, string>
+  >(() => ({ ...INBOUND_DEFAULT_FILTERS }));
+  const [trafficCompareOp, setTrafficCompareOp] = useState<CompareOp>("");
+  const [filterStatus, setFilterStatus] = useState<InboundFilterStatus>("");
+
+  const ws = usePanelWebSocket();
+  const resyncAfterDisconnect = useRef(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await getJson<Row[]>(panel("api/inbounds/list"));
     setLoading(false);
     if (r.success && r.obj) {
-      setRows(
-        (r.obj as Row[]).map((x) => ({
-          id: x.id,
-          remark: x.remark,
-          protocol: x.protocol,
-          port: x.port,
-          up: x.up,
-          down: x.down,
-          total: x.total,
-          enable: x.enable,
-        })),
-      );
+      setRows(inboundsPayloadToRows(r.obj));
     }
   }, []);
 
@@ -339,6 +542,31 @@ export function InboundsPage() {
   }, [load]);
 
   useEffect(() => {
+    if (!ws) return;
+    const onInbounds = (p: unknown) => {
+      if (!Array.isArray(p)) return;
+      setRows(inboundsPayloadToRows(p));
+    };
+    const onDisc = () => {
+      resyncAfterDisconnect.current = true;
+    };
+    const onConn = () => {
+      if (resyncAfterDisconnect.current) {
+        resyncAfterDisconnect.current = false;
+        void load();
+      }
+    };
+    ws.on("inbounds", onInbounds);
+    ws.on("disconnected", onDisc);
+    ws.on("connected", onConn);
+    return () => {
+      ws.off("inbounds", onInbounds);
+      ws.off("disconnected", onDisc);
+      ws.off("connected", onConn);
+    };
+  }, [ws, load]);
+
+  useEffect(() => {
     if (modalOpen) void loadNodes();
   }, [modalOpen, loadNodes]);
 
@@ -350,17 +578,6 @@ export function InboundsPage() {
     setStep("basics");
     setPreserveTraffic({ up: 0, down: 0, allTime: 0 });
   }, []);
-
-  const addEndpointPath = panel("api/inbounds/add");
-  const addEndpointFull =
-    typeof window === "undefined"
-      ? addEndpointPath
-      : `${window.location.origin}${addEndpointPath}`;
-
-  const copyAddEndpoint = () => {
-    void navigator.clipboard.writeText(addEndpointFull);
-    toast.success(t("copySuccess"));
-  };
 
   const openAdd = () => {
     resetAddForm();
@@ -406,6 +623,8 @@ export function InboundsPage() {
         hysteriaAuth: parsed.hysteriaAuth ?? randomPassword(8),
         ssMethod: parsed.ssMethod ?? "aes-256-gcm",
         ssPassword: parsed.ssPassword ?? randomPassword(12),
+        mixedUser: parsed.mixedUser ?? "proxy",
+        mixedPassword: parsed.mixedPassword ?? randomPassword(12),
         totalGb: totalBytesToGbInput(ib.total ?? 0),
         trafficReset: ib.trafficReset || "never",
         streamForm: parseStreamSettingsToForm(
@@ -444,6 +663,19 @@ export function InboundsPage() {
         preset === "tcp"
           ? defaultStreamSettingsString()
           : streamPresetTcpTlsString();
+      return {
+        ...f,
+        streamForm: parseStreamSettingsToForm(json, f.protocol),
+      };
+    });
+  };
+
+  const applyStreamFormPresetShadowsocks = (preset: "tcp" | "ws") => {
+    setForm((f) => {
+      const json =
+        preset === "tcp"
+          ? defaultStreamSettingsString()
+          : streamPresetShadowsocksWsString();
       return {
         ...f,
         streamForm: parseStreamSettingsToForm(json, f.protocol),
@@ -511,6 +743,8 @@ export function InboundsPage() {
       hysteriaAuth: form.hysteriaAuth,
       ssMethod: form.ssMethod,
       ssPassword: form.ssPassword,
+      mixedUser: form.mixedUser,
+      mixedPassword: form.mixedPassword,
     };
 
     let settings: string;
@@ -591,6 +825,52 @@ export function InboundsPage() {
     }
   };
 
+  const setInboundEnableFromRow = useCallback(
+    async (id: number, nextEnable: boolean) => {
+      setToggleEnableBusyId(id);
+      try {
+        const r = await getJson<InboundDetail>(panel(`api/inbounds/get/${id}`));
+        if (!r.success || !r.obj) {
+          toast.error((r as { msg?: string }).msg || t("fail"));
+          return;
+        }
+        const ib = r.obj as InboundDetail;
+        const body: Record<string, unknown> = {
+          remark: ib.remark ?? "",
+          enable: nextEnable,
+          listen: (ib.listen ?? "").trim(),
+          port: ib.port,
+          protocol: ib.protocol,
+          settings: ib.settings ?? "{}",
+          streamSettings: ib.streamSettings ?? defaultStreamSettingsString(),
+          sniffing: ib.sniffing ?? defaultSniffingString(),
+          total: ib.total ?? 0,
+          expiryTime: ib.expiryTime ?? 0,
+          trafficReset: ib.trafficReset || "never",
+          up: ib.up ?? 0,
+          down: ib.down ?? 0,
+          allTime: ib.allTime ?? 0,
+        };
+        const nids = ib.nodeIds?.filter((n) => n > 0) ?? [];
+        if (nids.length > 0) body.nodeIds = nids;
+        const up = await postJson<unknown>(panel(`api/inbounds/update/${id}`), body, true);
+        if (up.success) {
+          toast.success(
+            (up as { msg?: string }).msg || t("success", { defaultValue: "OK" }),
+          );
+          void load();
+        } else {
+          toast.error((up as { msg?: string }).msg || t("fail"));
+        }
+      } catch {
+        toast.error(t("fail"));
+      } finally {
+        setToggleEnableBusyId(null);
+      }
+    },
+    [load, t, toast],
+  );
+
   const realityFingerprintOptions = useMemo(() => {
     const fp = form.streamForm.realityFingerprint.trim();
     const list: string[] = [...REALITY_FINGERPRINTS];
@@ -629,11 +909,16 @@ export function InboundsPage() {
 
   const tabItems = useMemo(
     () =>
-      INBOUND_STEPS.map((s) => ({
-        id: s.id,
-        label: t(s.labelKey, { defaultValue: s.labelDefault }),
-        icon: s.icon,
-      })),
+      INBOUND_STEPS.map((s) => {
+        const label = t(s.labelKey, { defaultValue: s.labelDefault });
+        const desc = t(s.descriptionKey, { defaultValue: s.descriptionDefault });
+        return {
+          id: s.id,
+          label,
+          title: desc ? `${label} — ${desc}` : label,
+          icon: s.icon,
+        };
+      }),
     [t],
   );
 
@@ -721,8 +1006,88 @@ export function InboundsPage() {
     toast.success(t("success", { defaultValue: "OK" }));
   }, [toast, t]);
 
+  const defaultDirForInboundKey = (k: InboundSortKey): SortDir => {
+    switch (k) {
+      case "used":
+        return "desc";
+      case "id":
+      case "remark":
+      case "protocol":
+      case "port":
+      case "status":
+        return "asc";
+      default:
+        return "asc";
+    }
+  };
+
+  const toggleInboundSort = useCallback(
+    (k: InboundSortKey) => {
+      if (k === sortKey) {
+        setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+      } else {
+        setSortKey(k);
+        setSortDir(defaultDirForInboundKey(k));
+      }
+    },
+    [sortKey],
+  );
+
+  const filteredInboundRows = useMemo(() => {
+    const remarkNeedle = columnFilters.remark.trim().toLowerCase();
+    const protocolNeedle = columnFilters.protocol.trim().toLowerCase();
+    const portNeedle = columnFilters.port.trim().toLowerCase();
+    const trafficRaw = columnFilters.traffic.trim();
+    const trafficNeedle =
+      trafficCompareOp === "" ? trafficRaw.toLowerCase() : "";
+    const trafficThreshold =
+      trafficCompareOp !== "" ? parseTrafficFilterBytes(trafficRaw) : null;
+
+    return rows.filter((r) => {
+      if (filterStatus === "enabled" && !r.enable) return false;
+      if (filterStatus === "disabled" && r.enable) return false;
+
+      if (remarkNeedle && !r.remark.toLowerCase().includes(remarkNeedle)) {
+        return false;
+      }
+      if (protocolNeedle && !r.protocol.toLowerCase().includes(protocolNeedle)) {
+        return false;
+      }
+      if (portNeedle && !String(r.port).toLowerCase().includes(portNeedle)) {
+        return false;
+      }
+
+      if (trafficCompareOp === "") {
+        if (trafficNeedle && !inboundTrafficHaystack(r).includes(trafficNeedle)) {
+          return false;
+        }
+      } else if (trafficThreshold != null) {
+        const used = usedBytes(r);
+        if (trafficCompareOp === "gt" && !(used > trafficThreshold)) return false;
+        if (trafficCompareOp === "lt" && !(used < trafficThreshold)) return false;
+        if (trafficCompareOp === "eq" && used !== trafficThreshold) return false;
+      }
+
+      return true;
+    });
+  }, [rows, columnFilters, trafficCompareOp, filterStatus]);
+
+  const hasActiveInboundFilters = useMemo(() => {
+    if (filterStatus !== "" || trafficCompareOp !== "") return true;
+    return (Object.keys(columnFilters) as InboundColumnFilterId[]).some(
+      (k) => columnFilters[k].trim() !== "",
+    );
+  }, [columnFilters, filterStatus, trafficCompareOp]);
+
+  const displayedInboundRows = useMemo(() => {
+    const next = [...filteredInboundRows];
+    next.sort((a, b) => compareInbounds(a, b, sortKey, sortDir));
+    return next;
+  }, [filteredInboundRows, sortKey, sortDir]);
+
   const isHysteriaFamily =
     form.protocol === "hysteria" || form.protocol === "hysteria2";
+  const streamTransportMode = getInboundStreamTransportMode(form.protocol);
 
   return (
     <PageScaffold compact>
@@ -733,15 +1098,6 @@ export function InboundsPage() {
         iconTone="accent"
         actions={
           <>
-            <Button
-              variant="primary"
-              onClick={load}
-              loading={loading}
-              className="!gap-2"
-            >
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button
               variant="secondary"
               onClick={openAdd}
@@ -754,7 +1110,48 @@ export function InboundsPage() {
         }
       />
       <Reveal>
-      <Surface padding="none" className="overflow-hidden">
+      {rows.length > 0 ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <IconButton
+            type="button"
+            label={
+              filtersVisible
+                ? t("pages.clients.filterToggleHide", {
+                    defaultValue: "Hide column filters",
+                  })
+                : t("pages.clients.filterToggleShow", {
+                    defaultValue: "Show column filters",
+                  })
+            }
+            aria-pressed={filtersVisible}
+            className={
+              filtersVisible
+                ? "!border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] !bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] !text-[var(--accent)]"
+                : undefined
+            }
+            onClick={() => setFiltersVisible((v) => !v)}
+          >
+            <Filter size={18} />
+          </IconButton>
+          {hasActiveInboundFilters ? (
+            <Button
+              type="button"
+              variant="secondary"
+              className="!h-9 shrink-0 !gap-2 !text-xs"
+              onClick={() => {
+                setColumnFilters({ ...INBOUND_DEFAULT_FILTERS });
+                setTrafficCompareOp("");
+                setFilterStatus("");
+              }}
+            >
+              {t("pages.clients.filterClear", {
+                defaultValue: "Reset filters",
+              })}
+            </Button>
+          ) : null}
+        </div>
+      ) : null}
+      <Surface padding="none" className="overflow-visible">
         {loading && !rows.length ? (
           <div className="grid min-h-48 place-items-center">
             <Spinner size={32} />
@@ -768,73 +1165,199 @@ export function InboundsPage() {
           </div>
         ) : (
           <div className="panel-data-table overflow-x-auto">
-            <table className="w-full table-fixed border-collapse text-left text-sm">
+            <table className="w-full min-w-[900px] table-fixed border-collapse text-left text-sm">
               <colgroup>
-                <col className="w-[30%]" />
-                <col className="w-[14%]" />
-                <col className="w-[14%]" />
-                <col className="w-[20%]" />
+                <col className="w-[22%]" />
                 <col className="w-[12%]" />
                 <col className="w-[10%]" />
+                <col className="w-[22%]" />
+                <col className="w-[14%]" />
+                <col className="w-[12%]" />
               </colgroup>
               <thead>
                 <tr className="sticky top-0 z-[1] border-b border-[var(--border)] bg-[var(--surface)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
-                  <th className="p-3">{t("remark")}</th>
-                  <th className="p-3">{t("protocol")}</th>
-                  <th className="p-3">{t("host")}</th>
-                  <th className="p-3">{t("pages.inbounds.totalDownUp") || "Up / down"}</th>
-                  <th className="p-3">{t("status")}</th>
+                  <InboundSortableTh
+                    label={t("remark")}
+                    sortKey="remark"
+                    activeKey={sortKey}
+                    dir={sortDir}
+                    onSort={toggleInboundSort}
+                  />
+                  <InboundSortableTh
+                    label={t("protocol")}
+                    sortKey="protocol"
+                    activeKey={sortKey}
+                    dir={sortDir}
+                    onSort={toggleInboundSort}
+                  />
+                  <InboundSortableTh
+                    label={t("host")}
+                    sortKey="port"
+                    activeKey={sortKey}
+                    dir={sortDir}
+                    onSort={toggleInboundSort}
+                    className="tabular-nums"
+                  />
+                  <InboundSortableTh
+                    label={t("pages.inbounds.totalDownUp", {
+                      defaultValue: "Up / down",
+                    })}
+                    sortKey="used"
+                    activeKey={sortKey}
+                    dir={sortDir}
+                    onSort={toggleInboundSort}
+                  />
+                  <InboundSortableTh
+                    label={t("status")}
+                    sortKey="status"
+                    activeKey={sortKey}
+                    dir={sortDir}
+                    onSort={toggleInboundSort}
+                  />
                   <th className="p-3">{t("pages.inbounds.operate")}</th>
                 </tr>
+                {filtersVisible ? (
+                  <tr className="border-b border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)]">
+                    <th className="p-2 align-top font-normal">
+                      <InboundColumnFilterInput
+                        value={columnFilters.remark}
+                        onChange={(v) =>
+                          setColumnFilters((f) => ({ ...f, remark: v }))
+                        }
+                        placeholder={t("pages.clients.filterColEmail", {
+                          defaultValue: "Contains…",
+                        })}
+                      />
+                    </th>
+                    <th className="p-2 align-top font-normal">
+                      <InboundColumnFilterInput
+                        value={columnFilters.protocol}
+                        onChange={(v) =>
+                          setColumnFilters((f) => ({ ...f, protocol: v }))
+                        }
+                        placeholder={t("pages.clients.filterColComment", {
+                          defaultValue: "Contains…",
+                        })}
+                      />
+                    </th>
+                    <th className="p-2 align-top font-normal">
+                      <InboundColumnFilterInput
+                        value={columnFilters.port}
+                        onChange={(v) =>
+                          setColumnFilters((f) => ({ ...f, port: v }))
+                        }
+                        placeholder={t("pages.inbounds.filterPort", {
+                          defaultValue: "Contains…",
+                        })}
+                      />
+                    </th>
+                    <th className="p-2 align-top font-normal">
+                      <CompareModeFilterField
+                        mode="traffic"
+                        compareOp={trafficCompareOp}
+                        onCompareOpChange={setTrafficCompareOp}
+                        value={columnFilters.traffic}
+                        onValueChange={(v) =>
+                          setColumnFilters((f) => ({ ...f, traffic: v }))
+                        }
+                        placeholder={
+                          trafficCompareOp === ""
+                            ? t("pages.clients.filterColTraffic", {
+                                defaultValue: "Contains…",
+                              })
+                            : t("pages.clients.filterTrafficAmount", {
+                                defaultValue: "e.g. 10 gb",
+                              })
+                        }
+                        className="w-full"
+                      />
+                    </th>
+                    <th className="p-2 align-top font-normal">
+                      <SelectNative
+                        className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                        value={filterStatus}
+                        onChange={(e) =>
+                          setFilterStatus(e.target.value as InboundFilterStatus)
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                        aria-label={t("status")}
+                      >
+                        <option value="">
+                          {t("pages.clients.filterConnAll", {
+                            defaultValue: "All",
+                          })}
+                        </option>
+                        <option value="enabled">{t("enabled")}</option>
+                        <option value="disabled">{t("disabled")}</option>
+                      </SelectNative>
+                    </th>
+                    <th className="p-2" aria-hidden />
+                  </tr>
+                ) : null}
               </thead>
               <tbody>
-                {rows.map((r) => (
-                  <tr
-                    key={r.id}
-                    className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
-                  >
+                {displayedInboundRows.length === 0 ? (
+                  <tr>
                     <td
-                      className="truncate p-3 font-medium text-[var(--fg)]"
-                      title={r.remark || "—"}
+                      colSpan={6}
+                      className="px-4 py-10 text-center text-sm text-[var(--fg-muted)]"
                     >
-                      {r.remark || "—"}
-                    </td>
-                    <td className="truncate p-3" title={r.protocol}>
-                      {r.protocol}
-                    </td>
-                    <td className="p-3 font-mono tabular-nums">{r.port}</td>
-                    <td className="p-3 tabular-nums whitespace-nowrap">
-                      {sizeFormat(r.up)} / {sizeFormat(r.down)}
-                    </td>
-                    <td className="p-3">
-                      <StatusPill
-                        active={r.enable}
-                        activeLabel={t("enabled")}
-                        inactiveLabel={t("disabled")}
-                      />
-                    </td>
-                    <td className="p-3">
-                      <div className="flex flex-wrap gap-1">
-                        <Button
-                          variant="secondary"
-                          className="!p-2"
-                          onClick={() => void openEdit(r.id)}
-                          aria-label={t("edit")}
-                        >
-                          <Pencil size={16} />
-                        </Button>
-                        <Button
-                          variant="danger"
-                          className="!p-2"
-                          onClick={() => setDeleteId(r.id)}
-                          aria-label={t("delete")}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
-                      </div>
+                      {t("pages.inbounds.filterNoResults", {
+                        defaultValue: "No inbounds match the current filters.",
+                      })}
                     </td>
                   </tr>
-                ))}
+                ) : (
+                  displayedInboundRows.map((r) => (
+                    <tr
+                      key={r.id}
+                      className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                    >
+                      <td
+                        className="truncate p-3 font-medium text-[var(--fg)]"
+                        title={r.remark || "—"}
+                      >
+                        {r.remark || "—"}
+                      </td>
+                      <td className="truncate p-3" title={r.protocol}>
+                        {r.protocol}
+                      </td>
+                      <td className="p-3 font-mono tabular-nums">{r.port}</td>
+                      <td className="p-3 tabular-nums whitespace-nowrap">
+                        {sizeFormat(r.up)} / {sizeFormat(r.down)}
+                      </td>
+                      <td className="p-3">
+                        <Switch
+                          size="sm"
+                          checked={r.enable}
+                          disabled={toggleEnableBusyId === r.id}
+                          onChange={(next) => void setInboundEnableFromRow(r.id, next)}
+                          ariaLabel={`${t("enable")} — ${r.remark || `inbound ${r.id}`}`}
+                        />
+                      </td>
+                      <td className="p-3">
+                        <div className="flex flex-wrap gap-1">
+                          <Button
+                            variant="secondary"
+                            className="!p-2"
+                            onClick={() => void openEdit(r.id)}
+                            aria-label={t("edit")}
+                          >
+                            <Pencil size={16} />
+                          </Button>
+                          <Button
+                            variant="danger"
+                            className="!p-2"
+                            onClick={() => setDeleteId(r.id)}
+                            aria-label={t("delete")}
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
               </tbody>
             </table>
           </div>
@@ -861,38 +1384,19 @@ export function InboundsPage() {
         }
         width={isEdit ? 960 : 880}
         dialogClassName="md:max-h-[calc(100dvh-2rem)]"
-        bodyClassName="md:overflow-y-visible"
         footer={
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex flex-wrap gap-2">
-              {!isEdit ? (
-                <>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="!gap-1.5"
-                    onClick={copyAddEndpoint}
-                  >
-                    <Copy size={14} />
-                    {t("pages.inbounds.addInboundCopyApiUrl")}
-                  </Button>
-                  <Link
-                    href={p("panel/api-docs")}
-                    onClick={() => setModalOpen(false)}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-[var(--border-strong)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--fg)] hover:bg-[var(--surface-strong)]"
-                  >
-                    <BookOpen size={14} />
-                    {t("pages.inbounds.addInboundApiReference")}
-                  </Link>
-                </>
-              ) : (
-                <span className="text-xs text-[var(--fg-subtle)]">
-                  {t("pages.inbounds.editInboundHint", {
-                    defaultValue: "Protocol cannot be changed for an existing inbound.",
-                  })}
-                </span>
-              )}
-            </div>
+          <div
+            className={`flex flex-wrap items-center gap-2 ${
+              isEdit ? "justify-between" : "justify-end"
+            }`}
+          >
+            {isEdit ? (
+              <span className="text-xs text-[var(--fg-subtle)]">
+                {t("pages.inbounds.editInboundHint", {
+                  defaultValue: "Protocol cannot be changed for an existing inbound.",
+                })}
+              </span>
+            ) : null}
             <div className="flex flex-wrap gap-2">
               <Button
                 variant="secondary"
@@ -984,6 +1488,7 @@ export function InboundsPage() {
                   onChange={(id) => setStep(id as InboundStepId)}
                   variant="pill"
                   size="sm"
+                  iconOnly
                 />
               </div>
             ) : (
@@ -991,6 +1496,7 @@ export function InboundsPage() {
                 steps={stepperItems}
                 activeId={step}
                 onSelect={(id) => setStep(id as InboundStepId)}
+                variant="iconsOnly"
               />
             )}
 
@@ -1126,11 +1632,12 @@ export function InboundsPage() {
                 </div>
               </div>
 
-              <div className="mt-3">
-                <CheckboxField
+              <div className="mt-3 flex items-center justify-between gap-3">
+                <span className="text-sm text-[var(--fg-muted)]">{t("enable")}</span>
+                <Switch
                   checked={form.enable}
-                  onChange={(e) => setForm((f) => ({ ...f, enable: e.target.checked }))}
-                  label={t("enable")}
+                  onChange={(next) => setForm((f) => ({ ...f, enable: next }))}
+                  ariaLabel={t("enable")}
                 />
               </div>
             </InboundFormSection>
@@ -1167,6 +1674,157 @@ export function InboundsPage() {
                     }
                   />
                 </div>
+              ) : streamTransportMode === "shadowsocks" ? (
+                <>
+                  <p className="mb-3 text-xs text-[var(--fg-subtle)]">
+                    {form.protocol === "mixed"
+                      ? t("pages.inbounds.mixedStreamHint", {
+                          defaultValue:
+                            "Mixed serves HTTP and SOCKS on one port. Use plain TCP or WebSocket for the stream (no TLS/REALITY on this step — that is for VLESS, VMess, Trojan).",
+                        })
+                      : t("pages.inbounds.shadowsocksStreamHint", {
+                          defaultValue:
+                            "Shadowsocks already encrypts payload. The stream is plain TCP or WebSocket (no TLS/REALITY here — that applies to VLESS, VMess, Trojan).",
+                        })}
+                  </p>
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="text-xs"
+                      onClick={() => applyStreamFormPresetShadowsocks("tcp")}
+                    >
+                      {t("pages.inbounds.presetTcp", { defaultValue: "TCP / no TLS" })}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="text-xs"
+                      onClick={() => applyStreamFormPresetShadowsocks("ws")}
+                    >
+                      {t("pages.inbounds.presetShadowsocksWs", { defaultValue: "WebSocket" })}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-net-ss"
+                      >
+                        {t("pages.inbounds.streamNetwork", { defaultValue: "Network" })}
+                      </label>
+                      <SelectNative
+                        id="in-net-ss"
+                        value={form.streamForm.network === "ws" ? "ws" : "tcp"}
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setStreamFormField(
+                            "network",
+                            (v === "ws" ? "ws" : "tcp") as StreamFormState["network"],
+                          );
+                        }}
+                      >
+                        <option value="tcp">TCP</option>
+                        <option value="ws">WebSocket</option>
+                      </SelectNative>
+                    </div>
+                    <div className="flex min-h-[2.5rem] items-end pb-0.5 text-xs leading-snug text-[var(--fg-subtle)]">
+                      {t("pages.inbounds.streamSecurityNoneForSs", {
+                        defaultValue: "Stream security is none (Xray default for this protocol).",
+                      })}
+                    </div>
+                  </div>
+                  {form.streamForm.network === "tcp" ? (
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label
+                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                          htmlFor="in-hdr-ss"
+                        >
+                          {t("pages.inbounds.tcpHeaderType", { defaultValue: "TCP header" })}
+                        </label>
+                        <SelectNative
+                          id="in-hdr-ss"
+                          value={form.streamForm.tcpHeaderType}
+                          onChange={(e) =>
+                            setStreamFormField(
+                              "tcpHeaderType",
+                              e.target.value as StreamFormState["tcpHeaderType"],
+                            )
+                          }
+                        >
+                          <option value="none">none</option>
+                          <option value="http">http</option>
+                        </SelectNative>
+                      </div>
+                      <div className="flex items-end pb-1">
+                        <CheckboxField
+                          checked={form.streamForm.acceptProxyProtocol}
+                          onChange={(e) =>
+                            setStreamFormField(
+                              "acceptProxyProtocol",
+                              e.target.checked,
+                            )
+                          }
+                          label={t("pages.inbounds.acceptProxyProtocol", {
+                            defaultValue: "Accept proxy protocol",
+                          })}
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                  {form.streamForm.network === "ws" ? (
+                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label
+                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                          htmlFor="in-wspath-ss"
+                        >
+                          {t("pages.inbounds.wsPath", { defaultValue: "WS path" })}
+                        </label>
+                        <div className="flex gap-2">
+                          <Input
+                            id="in-wspath-ss"
+                            className="min-w-0 flex-1"
+                            value={form.streamForm.wsPath}
+                            onChange={(e) =>
+                              setStreamFormField("wsPath", e.target.value)
+                            }
+                            placeholder="/"
+                          />
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="shrink-0 text-xs"
+                            onClick={() =>
+                              setStreamFormField("wsPath", randomWsPath())
+                            }
+                          >
+                            {t("pages.inbounds.genRandomWsPath", {
+                              defaultValue: "Random path",
+                            })}
+                          </Button>
+                        </div>
+                      </div>
+                      <div>
+                        <label
+                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                          htmlFor="in-wshost-ss"
+                        >
+                          {t("pages.inbounds.wsHost", { defaultValue: "Host header" })}
+                        </label>
+                        <Input
+                          id="in-wshost-ss"
+                          value={form.streamForm.wsHost}
+                          onChange={(e) =>
+                            setStreamFormField("wsHost", e.target.value)
+                          }
+                          placeholder="optional"
+                        />
+                      </div>
+                    </div>
+                  ) : null}
+                </>
               ) : (
                 <>
                   <div className="mb-3 flex flex-wrap gap-2">
@@ -2030,6 +2688,63 @@ export function InboundsPage() {
               </div>
             ) : null}
 
+            {form.protocol === "mixed" ? (
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-mixed-user"
+                  >
+                    {t("pages.inbounds.mixedAccountUser", {
+                      defaultValue: "Account user (SOCKS/HTTP)",
+                    })}
+                  </label>
+                  <Input
+                    id="in-mixed-user"
+                    className="font-mono text-xs"
+                    value={form.mixedUser}
+                    onChange={(e) =>
+                      setForm((f) => ({ ...f, mixedUser: e.target.value }))
+                    }
+                    autoComplete="off"
+                  />
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-mixed-pass"
+                  >
+                    {t("password")}
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="in-mixed-pass"
+                      className="min-w-0 flex-1 font-mono text-xs"
+                      value={form.mixedPassword}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, mixedPassword: e.target.value }))
+                      }
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() =>
+                        setForm((f) => ({ ...f, mixedPassword: randomPassword(12) }))
+                      }
+                    >
+                      {t("pages.inbounds.addInboundTrojanRegen")}
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-[var(--fg-subtle)] sm:col-span-2">
+                  {t("pages.inbounds.mixedAuthHint", {
+                    defaultValue:
+                      "First saved account in settings; panel clients map email local-part to this user when syncing to Xray.",
+                  })}
+                </p>
+              </div>
+            ) : null}
+
             {(form.protocol === "hysteria" || form.protocol === "hysteria2") ? (
               <div>
                 <label
@@ -2112,7 +2827,8 @@ export function InboundsPage() {
             {form.protocol !== "vless" &&
             form.protocol !== "trojan" &&
             !isHysteriaFamily &&
-            form.protocol !== "shadowsocks" ? (
+            form.protocol !== "shadowsocks" &&
+            form.protocol !== "mixed" ? (
               <p className="text-xs text-[var(--fg-subtle)]">
                 {t("pages.inbounds.sectionAuthNone", {
                   defaultValue:
@@ -2206,6 +2922,11 @@ export function InboundsPage() {
       <ConfirmDialog
         open={deleteId != null}
         title={t("sure")}
+        description={
+          deleteId != null
+            ? rows.find((x) => x.id === deleteId)?.remark?.trim() || `#${deleteId}`
+            : undefined
+        }
         confirmLabel={t("delete")}
         cancelLabel={t("cancel")}
         onCancel={() => setDeleteId(null)}

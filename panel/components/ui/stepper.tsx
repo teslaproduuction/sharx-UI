@@ -21,6 +21,8 @@ type StepperProps = {
   className?: string;
   /** allow the user to click any step (default: only done/current) */
   allowJump?: boolean;
+  /** Only step icons on desktop; label + description in `title` tooltip (and mobile summary). */
+  variant?: "default" | "iconsOnly";
 };
 
 function stateOf(item: StepperItem, idx: number, activeIdx: number): StepState {
@@ -28,6 +30,13 @@ function stateOf(item: StepperItem, idx: number, activeIdx: number): StepState {
   if (idx < activeIdx) return "done";
   if (idx === activeIdx) return "current";
   return "pending";
+}
+
+function stepTooltipText(s: StepperItem | undefined): string | undefined {
+  if (s == null) return undefined;
+  const d = s.description?.trim();
+  if (d) return `${s.label} — ${d}`;
+  return s.label;
 }
 
 const dotClass: Record<StepState, string> = {
@@ -52,26 +61,39 @@ export function Stepper({
   onSelect,
   className = "",
   allowJump = false,
+  variant = "default",
 }: StepperProps) {
   const reduce = useReducedMotion();
   const activeIdx = Math.max(
     0,
     steps.findIndex((s) => s.id === activeId),
   );
+  const iconsOnly = variant === "iconsOnly";
+  const tooltip = (s: StepperItem | undefined) => stepTooltipText(s);
 
   return (
     <div className={`relative ${className}`}>
       {/* Mobile: compact "Step N / M" summary */}
-      <div className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--fg-muted)] md:hidden">
-        <span className="truncate font-medium text-[var(--fg)]">
-          {steps[activeIdx]?.label}
+      <div
+        className="mb-2 flex items-center justify-between gap-2 rounded-xl border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-xs text-[var(--fg-muted)] md:hidden"
+        title={iconsOnly ? tooltip(steps[activeIdx]) : undefined}
+      >
+        <span
+          className="truncate font-medium text-[var(--fg)]"
+          title={!iconsOnly ? tooltip(steps[activeIdx]) : undefined}
+        >
+          {iconsOnly
+            ? `Step ${activeIdx + 1}`
+            : steps[activeIdx]?.label}
         </span>
-        <span className="tabular-nums">
+        <span className="tabular-nums text-[var(--fg-muted)]">
           {activeIdx + 1} / {steps.length}
         </span>
       </div>
 
-      <ol className="hidden items-start gap-1 md:flex">
+      <ol
+        className={`hidden items-start gap-1 md:flex ${iconsOnly ? "md:justify-center" : ""}`}
+      >
         {steps.map((s, idx) => {
           const st = stateOf(s, idx, activeIdx);
           const Icon = s.icon;
@@ -81,12 +103,19 @@ export function Stepper({
             (allowJump || st === "done" || st === "current");
           const last = idx === steps.length - 1;
           return (
-            <li key={s.id} className="group flex min-w-0 flex-1 items-start">
+            <li
+              key={s.id}
+              className={`group flex min-w-0 items-start ${iconsOnly ? "flex-none" : "flex-1"}`}
+            >
               <button
                 type="button"
+                title={tooltip(s)}
+                aria-label={tooltip(s)}
                 onClick={clickable ? () => onSelect?.(s.id) : undefined}
                 disabled={!clickable}
-                className={`flex min-w-0 flex-1 items-start gap-2.5 rounded-xl p-1.5 text-left transition-colors ${
+                className={`flex min-w-0 items-start gap-2.5 rounded-xl p-1.5 text-left transition-colors ${
+                  iconsOnly ? "flex-none flex-col items-center" : "flex-1"
+                } ${
                   clickable
                     ? "hover:bg-[var(--surface)]"
                     : "cursor-default"
@@ -112,19 +141,27 @@ export function Stepper({
                     )}
                   </motion.span>
                 </span>
-                <div className="min-w-0 pt-1">
-                  <div className={`truncate text-sm font-medium ${labelClass[st]}`}>
-                    {s.label}
-                  </div>
-                  {s.description ? (
-                    <div className="truncate text-[11px] text-[var(--fg-subtle)]">
-                      {s.description}
+                {!iconsOnly ? (
+                  <div className="min-w-0 pt-1">
+                    <div className={`truncate text-sm font-medium ${labelClass[st]}`}>
+                      {s.label}
                     </div>
-                  ) : null}
-                </div>
+                    {s.description ? (
+                      <div
+                        className="truncate text-[11px] text-[var(--fg-subtle)]"
+                        title={s.description}
+                      >
+                        {s.description}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
               </button>
               {!last ? (
-                <div className="mx-1 mt-5 h-px flex-1 bg-[var(--border)]" aria-hidden />
+                <div
+                  className={`mx-1 h-px flex-1 bg-[var(--border)] ${iconsOnly ? "mt-4 w-6 min-w-[1rem] max-w-10 self-center" : "mt-5"}`}
+                  aria-hidden
+                />
               ) : null}
             </li>
           );

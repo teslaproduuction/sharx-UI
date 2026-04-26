@@ -65,6 +65,13 @@ export function MetricsBlock({
               {t("pages.publicSub.status", { defaultValue: "Status" })}
             </div>
             <div className={shell.metricValue}>{data.user.userStatus}</div>
+            {data.user.isOnline != null ? (
+              <div className="mt-0.5 text-[11px] text-[#8b949e]">
+                {data.user.isOnline
+                  ? t("online", { defaultValue: "Online" })
+                  : t("offline", { defaultValue: "Offline" })}
+              </div>
+            ) : null}
           </div>
         </div>
       </div>,

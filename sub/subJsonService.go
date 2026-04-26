@@ -212,15 +212,23 @@ func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, 
 
 		var newOutbounds []json_util.RawMessage
 
-		switch inbound.Protocol {
-		case "vmess":
+		switch string(model.NormalizeProtocol(inbound.Protocol)) {
+		case string(model.VMESS):
 			newOutbounds = append(newOutbounds, s.genVnext(inbound, streamSettings, client))
-		case "vless":
+		case string(model.VLESS):
 			newOutbounds = append(newOutbounds, s.genVless(inbound, streamSettings, client))
-		case "trojan", "shadowsocks":
+		case string(model.Trojan), string(model.Shadowsocks):
 			newOutbounds = append(newOutbounds, s.genServer(inbound, streamSettings, client))
-		case "hysteria", "hysteria2":
+		case string(model.Mixed):
+			if mx := s.genMixed(inbound, streamSettings, client); len(mx) > 0 {
+				newOutbounds = append(newOutbounds, mx)
+			}
+		case string(model.Hysteria), string(model.Hysteria2):
 			newOutbounds = append(newOutbounds, s.genHy(inbound, newStream, client))
+		}
+
+		if len(newOutbounds) == 0 {
+			continue
 		}
 
 		newOutbounds = append(newOutbounds, s.defaultOutbounds...)
@@ -235,6 +243,47 @@ func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, 
 	}
 
 	return newJsonArray
+}
+
+// effectivePassword resolves ClientEntity password or falls back to inbound settings (see SubService.passwordForSubLink).
+func (s *SubJsonService) effectivePassword(inbound *model.Inbound, client model.Client) string {
+	if p := strings.TrimSpace(client.Password); p != "" {
+		return p
+	}
+	if s.SubService == nil || inbound == nil {
+		return ""
+	}
+	return s.SubService.passwordForSubLink(inbound, &model.ClientEntity{Email: client.Email, Password: client.Password})
+}
+
+// genMixed builds an Xray SOCKS outbound to a remote Mixed inbound (HTTP+SOCKS on one port).
+func (s *SubJsonService) genMixed(inbound *model.Inbound, streamSettings json_util.RawMessage, client model.Client) json_util.RawMessage {
+	pass := s.effectivePassword(inbound, client)
+	if pass == "" {
+		return nil
+	}
+	user := mixedProxyUserFromEmail(client.Email)
+	outbound := Outbound{
+		Protocol:       "socks",
+		Tag:            "proxy",
+		StreamSettings: streamSettings,
+		Settings: map[string]any{
+			"servers": []map[string]any{
+				{
+					"address": inbound.Listen,
+					"port":    inbound.Port,
+					"users": []map[string]any{
+						{"user": user, "pass": pass, "level": 8},
+					},
+				},
+			},
+		},
+	}
+	if s.mux != "" {
+		outbound.Mux = json_util.RawMessage(s.mux)
+	}
+	result, _ := json.MarshalIndent(outbound, "", "  ")
+	return result
 }
 
 func (s *SubJsonService) streamData(stream string) map[string]any {
@@ -376,14 +425,15 @@ func (s *SubJsonService) genServer(inbound *model.Inbound, streamSettings json_u
 	outbound := Outbound{}
 
 	serverData := make([]ServerSetting, 1)
+	secret := s.effectivePassword(inbound, client)
 	serverData[0] = ServerSetting{
 		Address:  inbound.Listen,
 		Port:     inbound.Port,
 		Level:    8,
-		Password: client.Password,
+		Password: secret,
 	}
 
-	if inbound.Protocol == model.Shadowsocks {
+	if model.NormalizeProtocol(inbound.Protocol) == model.Shadowsocks {
 		var inboundSettings map[string]any
 		json.Unmarshal([]byte(inbound.Settings), &inboundSettings)
 		method, _ := inboundSettings["method"].(string)
@@ -392,12 +442,12 @@ func (s *SubJsonService) genServer(inbound *model.Inbound, streamSettings json_u
 		// server password in multi-user 2022 protocols
 		if strings.HasPrefix(method, "2022") {
 			if serverPassword, ok := inboundSettings["password"].(string); ok {
-				serverData[0].Password = fmt.Sprintf("%s:%s", serverPassword, client.Password)
+				serverData[0].Password = fmt.Sprintf("%s:%s", serverPassword, secret)
 			}
 		}
 	}
 
-	outbound.Protocol = string(inbound.Protocol)
+	outbound.Protocol = string(model.NormalizeProtocol(inbound.Protocol))
 	outbound.Tag = "proxy"
 	if s.mux != "" {
 		outbound.Mux = json_util.RawMessage(s.mux)
@@ -430,9 +480,9 @@ func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any,
 		"port":    inbound.Port,
 	}
 
-	auth := client.Password
-	if client.Auth != "" {
-		auth = client.Auth
+	auth := s.effectivePassword(inbound, client)
+	if strings.TrimSpace(client.Auth) != "" {
+		auth = strings.TrimSpace(client.Auth)
 	}
 
 	hyStream, ok := newStream["hysteriaSettings"].(map[string]any)

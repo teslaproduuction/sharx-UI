@@ -193,6 +193,16 @@ func GetLogFolder() string {
 	return "/var/log/x-ui"
 }
 
+// GetDockerUpdaterURL returns the HTTP URL to trigger a sidecar updater (e.g. Watchtower /v1/update), or empty if disabled.
+func GetDockerUpdaterURL() string {
+	return strings.TrimSpace(os.Getenv("XUI_DOCKER_UPDATER_URL"))
+}
+
+// GetDockerUpdaterToken returns the Bearer token for the docker updater HTTP API, or empty if disabled.
+func GetDockerUpdaterToken() string {
+	return strings.TrimSpace(os.Getenv("XUI_DOCKER_UPDATER_TOKEN"))
+}
+
 // copyFile removed - no longer needed for PostgreSQL migration
 
 // init function removed - no longer needed for PostgreSQL migration

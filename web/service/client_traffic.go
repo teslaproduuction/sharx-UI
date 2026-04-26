@@ -35,15 +35,27 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	clientsToDisable := make(map[string]string) // map[email]tag
 	affectedInboundIds := make(map[int]bool)    // Track affected inbounds for traffic sync
 
+	// When Xray returns no client stat rows (idle period or API hiccup), do not clear the
+	// in-memory online list — otherwise the panel always shows "offline" for connected users
+	// when there is 0 B delta in the 1s window (GetTraffic uses reset_).
 	if len(traffics) == 0 {
-		// Empty onlineUsers
-		if p != nil {
-			p.SetOnlineClients(make([]string, 0))
-		}
 		return clientsToDisable, affectedInboundIds, nil
 	}
 
-	onlineClients := make([]string, 0)
+	onlineSet := make(map[string]struct{})
+	onlineList := make([]string, 0)
+	addOnline := func(email string) {
+		email = strings.TrimSpace(email)
+		if email == "" {
+			return
+		}
+		k := strings.ToLower(email)
+		if _, ok := onlineSet[k]; ok {
+			return
+		}
+		onlineSet[k] = struct{}{}
+		onlineList = append(onlineList, email)
+	}
 
 	// Group traffic by email (aggregate traffic from all inbounds for each client)
 	emailTrafficMap := make(map[string]struct {
@@ -309,14 +321,15 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			}
 		}
 
-		// Add user in onlineUsers array on traffic (only if not disabled)
-		if newTotal > 0 && client.Enable {
-			onlineClients = append(onlineClients, client.Email)
-			// Check if this is the first connection (LastOnline was 0 before update)
+		// Online for panel: any enabled client present in this Xray stats read. With reset_ stats,
+		// newTotal can be 0 for an idle 1s window; we still mark online so the panel does not
+		// show "offline" for active sessions.
+		if !client.Enable {
+			continue
+		}
+		if newTotal > 0 {
 			wasFirstConnection := client.LastOnline == 0
 			client.LastOnline = time.Now().UnixMilli()
-			
-			// Send notification about first connection
 			if wasFirstConnection {
 				go func(c *model.ClientEntity) {
 					tgbotService := Tgbot{}
@@ -326,12 +339,11 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 				}(client)
 			}
 		}
+		addOnline(client.Email)
 	}
 
-	// Set onlineUsers
-	if p != nil {
-		p.SetOnlineClients(onlineClients)
-	}
+	// Set online list for the panel (works with or without local *Process: multi-node has p==nil)
+	setPanelOnlineClients(onlineList)
 
 	// Save client entities with retry logic for database lock errors
 	maxRetries := 3

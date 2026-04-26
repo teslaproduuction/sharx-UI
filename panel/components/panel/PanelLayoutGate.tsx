@@ -2,6 +2,7 @@
 
 import { usePathname } from "next/navigation";
 import { PanelShell } from "@/components/panel/PanelShell";
+import { PanelWebSocketProvider } from "@/lib/panelWebSocket";
 
 /** Uses full shell for most panel routes; minimal chrome for the public subscription page. */
 export function PanelLayoutGate({ children }: { children: React.ReactNode }) {
@@ -10,5 +11,9 @@ export function PanelLayoutGate({ children }: { children: React.ReactNode }) {
   if (isPublicSub) {
     return <div className="min-h-screen antialiased">{children}</div>;
   }
-  return <PanelShell>{children}</PanelShell>;
+  return (
+    <PanelWebSocketProvider>
+      <PanelShell>{children}</PanelShell>
+    </PanelWebSocketProvider>
+  );
 }

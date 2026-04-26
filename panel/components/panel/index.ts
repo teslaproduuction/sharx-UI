@@ -4,3 +4,5 @@ export { Surface } from "./Surface";
 export { StatusPill } from "./StatusPill";
 export { PanelShell } from "./PanelShell";
 export { PanelLayoutGate } from "./PanelLayoutGate";
+export { PanelHeaderAppMeta } from "./PanelHeaderAppMeta";
+export { PanelTelegramNavLink } from "./PanelTelegramNavLink";

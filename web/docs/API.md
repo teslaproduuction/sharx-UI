@@ -28,6 +28,7 @@ Complete API reference for the SharX panel. This documentation covers all endpoi
 - [16. WebSocket](#16-websocket)
 - [17. Backup Endpoint](#17-backup-endpoint)
 - [18. API Documentation](#18-api-documentation)
+- [19. Worker Node HTTP API](#19-worker-node-http-api)
 
 ---
 
@@ -3182,6 +3183,114 @@ curl -X POST "http://localhost:2053/panel/client/bulk/setHwidLimit" \
 
 ---
 
+### GET `/panel/client/sessions/{id}`
+
+List **per-IP active sessions** for a client entity. Data comes from Xray stats (`user>>><email>>>online`) on the **local** Xray process (single-node mode) or from each **worker node** that has an inbound assigned to this client (multi-node mode). Requires `statsUserOnline` in the Xray policy for the core (the panel merges this into generated config).
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Client entity ID |
+
+**Example Request:**
+
+```bash
+curl -X GET "http://localhost:2053/panel/client/sessions/1" \
+  -b cookies.txt
+```
+
+**Success Response (`obj`):**
+
+```json
+{
+  "email": "user1@example.com",
+  "results": [
+    {
+      "nodeName": "Local",
+      "nodeId": null,
+      "sessions": [
+        { "ip": "198.51.100.10", "lastSeen": 1714060800 }
+      ],
+      "dropAvailable": true,
+      "error": ""
+    },
+    {
+      "nodeName": "Node-1",
+      "nodeId": 2,
+      "sessions": [
+        { "ip": "203.0.113.5", "lastSeen": 1714060900 }
+      ],
+      "dropAvailable": true,
+      "error": ""
+    }
+  ]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `email` | Client email (Xray `user` id for stats) |
+| `results[]` | One block per target (local Xray or each worker) |
+| `nodeId` | Worker DB id, or omitted/`null` for local |
+| `nodeName` | Display name (e.g. `Local` or node name) |
+| `sessions[]` | `ip` and `lastSeen` (Unix **seconds** from Xray) |
+| `dropAvailable` | `true` if the host can run conntrack-based drop (Linux + `conntrack` binary + typically `CAP_NET_ADMIN`) |
+| `error` | Non-empty if that target failed (e.g. node unreachable) |
+
+---
+
+### POST `/panel/client/sessions/drop/{id}`
+
+**Forcibly tear down** established connections for this client using **conntrack** (same idea as “kick” in other panels): the server resolves current client IPs from Xray’s online map, then runs conntrack delete for those IPs (or only the IPs you pass).
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Client entity ID |
+
+**Request Body** (JSON, optional):
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `ips` | string[] | If **empty or omitted**, drop **all** IPs currently in the user’s online map on each relevant host. If **set**, only those addresses are passed to conntrack on the relevant node(s). |
+
+**Example (drop all sessions for this client):**
+
+```bash
+curl -X POST "http://localhost:2053/panel/client/sessions/drop/1" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{}'
+```
+
+**Example (drop only specific IPs):**
+
+```bash
+curl -X POST "http://localhost:2053/panel/client/sessions/drop/1" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"ips": ["198.51.100.10"]}'
+```
+
+**Success Response:**
+
+```json
+{
+  "success": true,
+  "msg": "Connections dropped"
+}
+```
+
+**Operational notes:**
+
+- Dropping uses the **`conntrack`** tool on Linux; the panel image includes `conntrack-tools`. The container usually needs **`cap_add: [NET_ADMIN]`** for deletes to take effect. Without it, the API may still return success for “no-op” or you may get an error string in `msg` depending on the path.
+- Shared NAT: dropping by IP may affect other users behind the same public IP.
+- In **multi-node** mode, the panel calls each relevant worker’s HTTP API (see [Worker Node HTTP API](#19-worker-node-http-api)).
+
+---
+
 ### Mass Assignment to Group
 
 To assign selected clients to a group, use the group assignment endpoint:
@@ -4219,6 +4328,101 @@ curl -X GET "http://localhost:2053/panel/api/api-docs/markdown" \
 ```
 
 **Response:** Returns the API documentation as Markdown text.
+
+---
+
+## 19. Worker Node HTTP API
+
+The **autonomous worker** (sharx-node) exposes a REST API on its listen port (default **8080**), typically over **HTTPS + mTLS** with **JWT** (`Authorization: Bearer …`) when using pairing (`SECRET_KEY`). This is **not** under `/panel/`; the panel calls these URLs using each node’s stored `address` and auth from [Nodes (Multi-Node Mode)](#9-nodes-multi-node-mode).
+
+Use these endpoints for automation or debugging. For a unified UX, prefer the panel **GET/POST** `/panel/client/sessions/...` routes documented under [Clients (section 10)](#10-clients).
+
+### GET `/api/v1/user-online-sessions`
+
+Returns online IP map for one client **email** from Xray gRPC `GetStatsOnlineIpList` (counter name `user>>><email>>>online`).
+
+**Query parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `email` | string | **Required.** Client email as in Xray.inbound. |
+| `reset` | boolean | Optional. `true` to reset the online map when reading (default `false`). |
+
+**Example:**
+
+```bash
+curl -s "https://NODE:8080/api/v1/user-online-sessions?email=user1%40example.com" \
+  -H "Authorization: Bearer <JWT>"
+```
+
+**Response (`200 OK`):**
+
+```json
+{
+  "email": "user1@example.com",
+  "sessions": [
+    { "ip": "198.51.100.10", "lastSeen": 1714060800 }
+  ],
+  "dropAvailable": true
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| `dropAvailable` | Whether conntrack-based drop is available on this process (Linux + `conntrack` on `PATH`). |
+
+**Errors:** `503` with `code: "XRAY_NOT_READY"` if Xray is not running; `400` if `email` is missing.
+
+---
+
+### POST `/api/v1/drop-connections`
+
+Deletes **kernel** (conntrack) flows for the given **email(s)**: resolves IPs from the user online map (with reset, same as remna-style “kick by user”).
+
+**Request body (JSON):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `email` | string | Optional. One email. |
+| `emails` | string[] | Optional. Several emails. At least one of `email` / `emails` is required. |
+
+**Example:**
+
+```bash
+curl -s -X POST "https://NODE:8080/api/v1/drop-connections" \
+  -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"emails":["user1@example.com"]}'
+```
+
+**Response:** `{ "ok": true }` on success.
+
+**Errors:** `503` if conntrack is not available; `500` on failure.
+
+---
+
+### POST `/api/v1/drop-ips`
+
+Deletes **kernel** flows matching the given **IP addresses** (conntrack delete for each IP as source or destination).
+
+**Request body (JSON):**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ips` | string[] | **Required.** IPv4/IPv6 addresses. |
+
+**Example:**
+
+```bash
+curl -s -X POST "https://NODE:8080/api/v1/drop-ips" \
+  -H "Authorization: Bearer <JWT>" \
+  -H "Content-Type: application/json" \
+  -d '{"ips":["198.51.100.10"]}'
+```
+
+**Response:** `{ "ok": true }` on success.
+
+**Deployment:** Install `conntrack-tools` in the image and grant **`CAP_NET_ADMIN`** to the node container if drops must work; see comments in `node/docker-compose.yml`. Bridge vs `network_mode: host` affects which network namespace conntrack sees; use the same namespace as the Xray process for reliable kicks.
 
 ---
 

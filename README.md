@@ -77,18 +77,6 @@ sudo ./install_ru.sh
 # Выбрать: 1) Установить панель
 ```
 
-#### Node Installation / Установка узла 
-
-```bash
-sudo ./install.sh
-# Select: 2) Install Node
-```
-
-```bash
-sudo ./install_ru.sh
-# Выбрать: 2) Установить узел
-```
-
 #### Management Menu / Меню управления
 
 After installation, run the script again to access the management menu:
@@ -100,11 +88,15 @@ sudo ./install.sh
 ```
 
 **Menu options / Опции меню:**
-- Update Panel/Node
+- Update Panel / Обновить панель
 - Start/Stop/Restart services
 - Change ports
 - Renew SSL certificates
 - View logs and status
+
+**Panel updates / Обновление панели:** **Watchtower** in the same stack + `XUI_DOCKER_UPDATER_*` (in-UI update), or `docker compose pull` + `up -d`, or the SharX script **Update Panel** (pulls `sharx` + `watchtower`). / **Watchtower** в стеке и UI, либо `docker compose pull`, либо **2)** в `install_*.sh`. Set `WATCHTOWER_HTTP_API_TOKEN` in production. / `WATCHTOWER_HTTP_API_TOKEN` в `.env` для production.
+
+**Remote nodes / Удалённые узлы:** add and manage in the web UI (Nodes / Geography / Ноды). The install script only deploys the panel stack. / Добавляйте и ведите узлы в веб-интерфейсе. Скрипт ставит только панель. For a separate node worker, see [node/README.md](node/README.md). / Для отдельного worker см. [node/README.md](node/README.md).
 
 </details>
 
@@ -150,28 +142,7 @@ sudo ./install.sh
    - Certificate: `/app/cert/fullchain.pem`
    - Private Key: `/app/cert/privkey.pem`
 
-### Node Installation / Установка узла
-
-1. **Navigate to node directory / Перейдите в папку узла:**
-   ```bash
-   cd node
-   ```
-
-2. **Prepare certificates / Подготовьте сертификаты:**
-   ```bash
-   mkdir -p cert
-   cp /path/to/fullchain.pem cert/fullchain.pem
-   cp /path/to/privkey.pem cert/privkey.pem
-   ```
-
-3. **Start the node / Запустите узел:**
-   ```bash
-   docker compose up -d
-   ```
-
-4. **Connect to panel / Подключите к панели:**
-   - Add new node in panel's Node Management
-   - Добавьте новый узел в управлении узлами панели
+7. **Remote nodes (optional) / Удалённые узлы (по желанию):** use the web panel to register and manage nodes. For running a **separate** node container elsewhere, see [node/README.md](node/README.md). / Узлы настраиваются в веб-панели. Отдельный worker — [node/README.md](node/README.md).
 
 </details>
 

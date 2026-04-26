@@ -2,6 +2,7 @@ package controller
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -48,6 +49,8 @@ func NewServerController(g *gin.RouterGroup) *ServerController {
 func (a *ServerController) initRouter(g *gin.RouterGroup) {
 
 	g.GET("/status", a.status)
+	g.GET("/updater", a.dockerUpdaterStatus)
+	g.POST("/updater/trigger", a.dockerUpdaterTrigger)
 	g.GET("/cpuHistory/:bucket", a.getCpuHistoryBucket)
 	g.GET("/getXrayVersion", a.getXrayVersion)
 	g.GET("/getConfigJson", a.getConfigJson)
@@ -95,6 +98,29 @@ func (a *ServerController) startTask() {
 
 // status returns the current server status information.
 func (a *ServerController) status(c *gin.Context) { jsonObj(c, a.lastStatus, nil) }
+
+func (a *ServerController) dockerUpdaterStatus(c *gin.Context) {
+	jsonObj(c, gin.H{"enabled": service.DockerUpdaterConfigured()}, nil)
+}
+
+func (a *ServerController) dockerUpdaterTrigger(c *gin.Context) {
+	ctx := c.Request.Context()
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2*time.Minute {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+	}
+	err := service.TriggerDockerUpdater(ctx)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.settings.dockerUpdaterTriggerError"), err)
+		return
+	}
+	tg := service.Tgbot{}
+	if tg.IsRunning() {
+		tg.NotifyPanelAction("Docker sidecar updater triggered (e.g. Watchtower)", "", getRemoteIp(c))
+	}
+	jsonMsg(c, I18nWeb(c, "pages.settings.dockerUpdaterTriggerSuccess"), nil)
+}
 
 // getCpuHistoryBucket retrieves aggregated CPU usage history based on the specified time bucket.
 func (a *ServerController) getCpuHistoryBucket(c *gin.Context) {
@@ -343,6 +369,10 @@ func (a *ServerController) stopXrayService(c *gin.Context) {
 		"Xray service has been stopped",
 		"warning",
 	)
+	tg := service.Tgbot{}
+	if tg.IsRunning() {
+		tg.NotifyPanelAction("Xray service stopped (panel)", "", getRemoteIp(c))
+	}
 }
 
 // restartXrayService restarts the Xray service.
@@ -360,6 +390,10 @@ func (a *ServerController) restartXrayService(c *gin.Context) {
 		"Xray service has been restarted successfully",
 		"success",
 	)
+	tg := service.Tgbot{}
+	if tg.IsRunning() {
+		tg.NotifyPanelAction("Xray service restarted (panel)", "", getRemoteIp(c))
+	}
 }
 
 // getLogs retrieves the application logs based on count, level, and syslog filters.

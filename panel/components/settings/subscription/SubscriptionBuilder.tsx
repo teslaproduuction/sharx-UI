@@ -6,14 +6,15 @@ import {
   Layers,
   Megaphone,
   Palette,
-  RefreshCw,
   RotateCcw,
+  Route,
   Save,
   SlidersHorizontal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { AlertBanner, Button, Input, Tabs, TabPanels, useToast } from "@/components/ui";
+import { AlertBanner, Button, Input, MonacoJsonEditor, Tabs, TabPanels, useToast } from "@/components/ui";
+import { getSharxV2ConfigMonacoEntry } from "@/lib/sharxV2ConfigJsonSchemaForMonaco";
 import { postJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
 import {
@@ -26,6 +27,7 @@ import {
 import { AppSettingsEditor } from "./AppSettingsEditor";
 import { BlockListEditor } from "./BlockListEditor";
 import { BrandingEditor } from "./BrandingEditor";
+import { RoutingProfilesEditor } from "./RoutingProfilesEditor";
 import { JsonTemplatesEditor } from "./JsonTemplatesEditor";
 import { ResponseRulesEditor } from "./ResponseRulesEditor";
 import { SubscriptionPreview } from "./SubscriptionPreview";
@@ -35,6 +37,7 @@ type LeftTab =
   | "blocks"
   | "response-rules"
   | "app-settings"
+  | "client-routing"
   | "json-templates"
   | "raw";
 
@@ -89,6 +92,14 @@ export function SubscriptionBuilder() {
       setRawError(null);
     }
   }, [config, activeTab]);
+
+  const { rawConfigPath, rawConfigSchemaBundle } = useMemo(() => {
+    const e = getSharxV2ConfigMonacoEntry();
+    return {
+      rawConfigPath: e.fileName,
+      rawConfigSchemaBundle: [{ uri: e.uri, fileMatch: [e.fileName], schema: e.schema }],
+    };
+  }, []);
 
   const handleSetBlocks = useCallback(
     (blocks: SubpageBlock[]) => setConfig((c) => ({ ...c, blocks })),
@@ -159,6 +170,12 @@ export function SubscriptionBuilder() {
         icon: SlidersHorizontal,
       },
       {
+        id: "client-routing" as LeftTab,
+        label: t("subBuilder.tabs.clientRouting", { defaultValue: "Client routing" }),
+        icon: Route,
+        badge: config.routing?.profiles?.length || undefined,
+      },
+      {
         id: "json-templates" as LeftTab,
         label: t("subBuilder.tabs.jsonTemplates", { defaultValue: "JSON templates" }),
         icon: Braces,
@@ -169,7 +186,7 @@ export function SubscriptionBuilder() {
         icon: Code2,
       },
     ],
-    [t, config.blocks.length],
+    [t, config.blocks.length, config.routing?.profiles?.length],
   );
 
   return (
@@ -219,24 +236,28 @@ export function SubscriptionBuilder() {
               <ResponseRulesEditor config={config} onChange={setConfig} />
             ) : activeTab === "app-settings" ? (
               <AppSettingsEditor config={config} onChange={setConfig} />
+            ) : activeTab === "client-routing" ? (
+              <RoutingProfilesEditor config={config} onChange={setConfig} />
             ) : activeTab === "json-templates" ? (
               <JsonTemplatesEditor config={config} onChange={setConfig} />
             ) : (
               <div className="flex flex-col gap-2">
-                <textarea
-                  value={rawJson}
-                  onChange={(e) => handleRawChange(e.target.value)}
-                  spellCheck={false}
-                  rows={18}
-                  className="w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3 font-mono text-xs text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
-                />
+                <div className="overflow-hidden rounded-xl border border-[var(--border)]">
+                  <MonacoJsonEditor
+                    path={rawConfigPath}
+                    value={rawJson}
+                    onChange={handleRawChange}
+                    height="60vh"
+                    schemaBundle={rawConfigSchemaBundle}
+                  />
+                </div>
                 {rawError ? (
                   <AlertBanner type="error" title={rawError} />
                 ) : (
                   <p className="text-[11px] text-[var(--fg-subtle)]">
                     {t("subBuilder.raw.hint", {
                       defaultValue:
-                        "Sharx-v1 and sharx-v2 are both accepted; v1 is migrated to v2 automatically.",
+                        "Sharx-v1 and sharx-v2 are both accepted; v1 is migrated to v2 automatically. Editor validates against sharx-v2 schema; hover over keys for hints.",
                     })}
                   </p>
                 )}
@@ -251,10 +272,6 @@ export function SubscriptionBuilder() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border)] pt-4">
-        <Button type="button" variant="secondary" onClick={() => void load()} loading={loading}>
-          <RefreshCw size={16} />
-          {t("refresh", { defaultValue: "Refresh" })}
-        </Button>
         <Button type="button" variant="secondary" onClick={resetToDefault}>
           <RotateCcw size={16} />
           {t("subBuilder.resetDefault", { defaultValue: "Reset to default" })}
