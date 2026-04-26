@@ -1,18 +1,18 @@
 "use client";
 
-import { KeyRound, Lock, Settings, User } from "lucide-react";
+import { Globe, KeyRound, Lock, User } from "lucide-react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, postJson } from "@/lib/api";
-import { changeLanguage, supported } from "@/lib/i18n";
+import { changeLanguage, panelSelectLangValue, supported } from "@/lib/i18n";
 import { easeStandard, durations } from "@/lib/motion";
 import { p } from "@/lib/paths";
 import { Button, Input, SelectNative, Spinner, useToast } from "@/components/ui";
 import { PanelHeaderAppMeta, PanelTelegramNavLink, Surface } from "@/components/panel";
 
 export default function LoginPage() {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const toast = useToast();
   const reduceMotion = useReducedMotion();
   const [form, setForm] = useState({ username: "", password: "", twoFactorCode: "" });
@@ -20,8 +20,6 @@ export default function LoginPage() {
   const [two, setTwo] = useState(false);
   const [awaiting2FA, setAwaiting2FA] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
-
   useEffect(() => {
     (async () => {
       const res = (await api.post<{ success: boolean; obj: boolean }>(p("getTwoFactorEnable"))).data;
@@ -92,55 +90,42 @@ export default function LoginPage() {
       style={{ color: "var(--fg)" }}
     >
       <div className="login-backdrop" aria-hidden />
-      <header className="relative z-10 panel-navbar">
-        <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
+      <header className="panel-navbar relative z-10 overflow-visible">
+        <div className="mx-auto flex w-full max-w-7xl flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <div className="panel-navbar-brand min-w-0">
             <span className="font-heading block text-base font-bold tracking-[-0.5px] text-white">SharX</span>
             <span className="text-[10px] font-medium uppercase tracking-[0.2em] text-white/50">
               Panel
             </span>
           </div>
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex min-w-0 max-w-full flex-1 items-center justify-end gap-2 sm:max-w-none sm:flex-initial sm:gap-3">
             <PanelTelegramNavLink />
             <PanelHeaderAppMeta variant="login" />
-          <div className="relative">
-            <Button
-              variant="ghost"
-              className="!p-2"
-              type="button"
-              onClick={() => setLangOpen((v) => !v)}
-              aria-expanded={langOpen}
-              aria-label={t("menu.settings")}
-            >
-              <Settings size={18} />
-            </Button>
-            {langOpen && (
-              <>
-                <button
-                  type="button"
-                  className="fixed inset-0 z-40"
-                  aria-label="Close"
-                  onClick={() => setLangOpen(false)}
-                />
-                <div className="absolute right-0 top-11 z-50 w-56 rounded-xl border border-[var(--border-strong)] bg-[var(--bg-elevated)] p-3 shadow-2xl">
-                  <p className="mb-2 text-xs text-[var(--fg-subtle)]">{t("pages.settings.language")}</p>
-                  <SelectNative
-                    value={i18n.language}
-                    onChange={async (e) => {
-                      await changeLanguage(e.target.value);
-                      setLangOpen(false);
-                    }}
-                  >
-                    {supported.map((s) => (
-                      <option key={s.code} value={s.code}>
-                        {s.label}
-                      </option>
-                    ))}
-                  </SelectNative>
-                </div>
-              </>
-            )}
-          </div>
+            <div className="flex min-w-0 max-w-[11rem] items-center gap-1.5 sm:max-w-[14rem] sm:gap-2">
+              <Globe
+                className="size-4 shrink-0 text-white/55"
+                aria-hidden
+                strokeWidth={1.75}
+              />
+              <label htmlFor="login-lang" className="sr-only">
+                {t("pages.settings.language")}
+              </label>
+              <SelectNative
+                id="login-lang"
+                className="min-w-0 flex-1"
+                value={panelSelectLangValue()}
+                onChange={async (e) => {
+                  await changeLanguage(e.target.value);
+                }}
+                aria-label={t("pages.settings.language")}
+              >
+                {supported.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.label}
+                  </option>
+                ))}
+              </SelectNative>
+            </div>
           </div>
         </div>
       </header>
@@ -154,10 +139,40 @@ export default function LoginPage() {
             ease: easeStandard,
           }}
         >
-          <h1 className="font-heading mb-2 text-center text-3xl font-semibold tracking-tight text-[var(--fg)]">
-            {t("pages.login.hello")}
-          </h1>
-          <p className="mb-8 text-center text-sm text-[var(--fg-muted)]">SharX Panel</p>
+          <motion.h1
+            className={`font-login-welcome mb-2 text-center leading-[1.08] text-balance ${reduceMotion ? "text-[var(--fg)]" : ""}`}
+            style={{ fontSize: "clamp(1.75rem, 1rem + 2.8vw, 2.75rem)" }}
+            initial={reduceMotion ? false : { opacity: 0, y: 8, filter: "blur(6px)" }}
+            animate={reduceMotion ? { opacity: 1, y: 0, filter: "blur(0px)" } : { opacity: 1, y: 0, filter: "blur(0px)" }}
+            transition={{ duration: durations.slow, delay: 0.04, ease: easeStandard }}
+          >
+            {reduceMotion ? (
+              t("pages.login.hello")
+            ) : (
+              <motion.span
+                className="inline-block bg-clip-text text-transparent [background-size:200%_100%] [background-image:linear-gradient(105deg,var(--fg)_0%,color-mix(in_oklab,var(--accent)_26%,var(--fg))_45%,var(--fg)_100%)]"
+                initial={{ backgroundPosition: "0% 50%" }}
+                animate={{ backgroundPosition: ["0% 50%", "100% 50%"] }}
+                transition={{
+                  backgroundPosition: {
+                    duration: 6.5,
+                    ease: "easeInOut",
+                    repeat: Number.POSITIVE_INFINITY,
+                    repeatType: "reverse",
+                    delay: 0.5,
+                  },
+                }}
+              >
+                {t("pages.login.hello")}
+              </motion.span>
+            )}
+          </motion.h1>
+          <p
+            className="mb-8 text-center text-[var(--fg-muted)] text-balance"
+            style={{ fontSize: "clamp(0.875rem, 0.8rem + 0.35vw, 0.9375rem)" }}
+          >
+            SharX Panel
+          </p>
           <Surface>
             <form onSubmit={onSubmit} className="flex flex-col gap-4">
               <div>

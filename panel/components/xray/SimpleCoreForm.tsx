@@ -146,6 +146,102 @@ export function SimpleCoreForm({
           ))}
         </SelectNative>
       </div>
+
+      <div className="px-4 py-3">
+        <h3 className="text-sm font-semibold text-[var(--fg)]">
+          {t("pages.xray.simpleApiSectionTitle", { defaultValue: "API (gRPC)" })}
+        </h3>
+        <p className="mt-1 text-xs leading-relaxed text-[var(--fg-muted)]">
+          {t("pages.xray.simpleApiSectionHint", {
+            defaultValue: "Handler / Logger / Stats must match the dokodemo-door inbound tag used for the panel.",
+          })}
+        </p>
+      </div>
+      <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(160px,260px)_1fr] sm:items-start">
+        <div className="min-w-0">
+          <div className="text-sm font-medium text-[var(--fg-muted)]">{t("pages.xray.simpleApiTag", { defaultValue: "API tag" })}</div>
+          <div className="mt-0.5 text-xs text-[var(--fg-subtle)]">{t("pages.xray.simpleApiTagDesc", { defaultValue: "Same as the API inbound `tag` (e.g. api)." })}</div>
+        </div>
+        <Input
+          value={v.apiTag}
+          onChange={(e) => onPatch({ apiTag: e.target.value })}
+          className="w-full font-mono text-xs"
+          autoComplete="off"
+        />
+      </div>
+      <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(160px,260px)_1fr] sm:items-start sm:gap-y-1">
+        <div className="min-w-0 sm:row-span-3">
+          <div className="text-sm font-medium text-[var(--fg-muted)]">{t("pages.xray.simpleApiServices", { defaultValue: "API services" })}</div>
+        </div>
+        <div className="flex flex-col gap-2">
+          <CheckboxField
+            label="HandlerService"
+            checked={v.apiHandlerService}
+            onChange={(e) => onPatch({ apiHandlerService: e.target.checked })}
+          />
+          <CheckboxField
+            label="LoggerService"
+            checked={v.apiLoggerService}
+            onChange={(e) => onPatch({ apiLoggerService: e.target.checked })}
+          />
+          <CheckboxField
+            label="StatsService"
+            checked={v.apiStatsService}
+            onChange={(e) => onPatch({ apiStatsService: e.target.checked })}
+          />
+        </div>
+      </div>
+
+      <div className="px-4 py-3">
+        <h3 className="text-sm font-semibold text-[var(--fg)]">
+          {t("pages.xray.simplePolicySectionTitle", { defaultValue: "Policy & stats" })}
+        </h3>
+        <p className="mt-1 text-xs leading-relaxed text-[var(--fg-muted)]">
+          {t("pages.xray.simplePolicySectionHint", {
+            defaultValue: "Toggles for common `policy.levels.0` and `policy.system` stat switches.",
+          })}
+        </p>
+      </div>
+      <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(160px,260px)_1fr] sm:items-start">
+        <div className="min-w-0 text-xs font-medium text-[var(--fg-muted)]">policy.levels.0</div>
+        <div className="flex flex-col gap-2">
+          <CheckboxField
+            label="statsUserUplink"
+            checked={v.policyLevel0StatsUserUplink}
+            onChange={(e) => onPatch({ policyLevel0StatsUserUplink: e.target.checked })}
+          />
+          <CheckboxField
+            label="statsUserDownlink"
+            checked={v.policyLevel0StatsUserDownlink}
+            onChange={(e) => onPatch({ policyLevel0StatsUserDownlink: e.target.checked })}
+          />
+        </div>
+      </div>
+      <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(160px,260px)_1fr] sm:items-start">
+        <div className="min-w-0 text-xs font-medium text-[var(--fg-muted)]">policy.system</div>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <CheckboxField
+            label="statsInboundUplink"
+            checked={v.policySystemStatsInboundUplink}
+            onChange={(e) => onPatch({ policySystemStatsInboundUplink: e.target.checked })}
+          />
+          <CheckboxField
+            label="statsInboundDownlink"
+            checked={v.policySystemStatsInboundDownlink}
+            onChange={(e) => onPatch({ policySystemStatsInboundDownlink: e.target.checked })}
+          />
+          <CheckboxField
+            label="statsOutboundUplink"
+            checked={v.policySystemStatsOutboundUplink}
+            onChange={(e) => onPatch({ policySystemStatsOutboundUplink: e.target.checked })}
+          />
+          <CheckboxField
+            label="statsOutboundDownlink"
+            checked={v.policySystemStatsOutboundDownlink}
+            onChange={(e) => onPatch({ policySystemStatsOutboundDownlink: e.target.checked })}
+          />
+        </div>
+      </div>
     </div>
   );
 }

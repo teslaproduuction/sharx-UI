@@ -37,7 +37,7 @@ import { normalizeAllSetting } from "@/lib/allSetting";
 import { getJson, postJson } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/copyToClipboard";
 import { getPanelTimeZoneOptions } from "@/lib/panelTimeZones";
-import { changeLanguage, supported } from "@/lib/i18n";
+import { changeLanguage, panelSelectLangValue, supported } from "@/lib/i18n";
 import { linkP, panel, p } from "@/lib/paths";
 import {
   applyPanelTheme,
@@ -382,7 +382,7 @@ export function SettingsPage() {
           >
             <Row label={t("pages.settings.language")}>
               <SelectNative
-                value={i18n.resolvedLanguage || i18n.language}
+                value={panelSelectLangValue()}
                 onChange={async (e) => {
                   await changeLanguage(e.target.value);
                 }}

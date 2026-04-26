@@ -3657,7 +3657,20 @@ export function ClientsPage() {
                 <div className="mb-2 text-xs font-semibold text-[var(--fg)]">
                   {row.remark || `Inbound ${row.inboundId}`} · {row.protocol}
                 </div>
-                <pre className="max-h-36 overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--surface)] p-2 font-mono text-[11px] text-[var(--fg-muted)]">
+                {row.protocol === "wireguard" ? (
+                  <p className="mb-2 text-xs text-[var(--fg-subtle)]">
+                    {t("pages.clients.keysWireGuardHint", {
+                      defaultValue:
+                        "WireGuard does not use a v2ray:// link. The block is server + setup notes. In the inbound’s WireGuard peers, add each device’s public key; set optional email on a peer to match this client and show that row in this card.",
+                    })}
+                  </p>
+                ) : null}
+                <pre
+                  className={cx(
+                    "overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--surface)] p-2 font-mono text-[11px] text-[var(--fg-muted)]",
+                    row.protocol === "wireguard" ? "max-h-[min(50vh,22rem)]" : "max-h-36",
+                  )}
+                >
                   {row.link}
                 </pre>
                 <Button
@@ -3667,7 +3680,9 @@ export function ClientsPage() {
                   onClick={() => copyText(row.link)}
                 >
                   <Copy size={12} className="mr-1 inline" />
-                  {t("copy")}
+                  {row.protocol === "wireguard"
+                    ? t("pages.clients.copyWireGuardDetails", { defaultValue: "Copy" })
+                    : t("copy")}
                 </Button>
               </div>
             ))}

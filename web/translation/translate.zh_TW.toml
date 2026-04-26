@@ -96,6 +96,7 @@
 "outbounds" = "出站列表"
 "settings" = "面板設定"
 "xray" = "Xray 設定"
+"xrayTemplate" = "範本"
 "apiDocs" = "API 文件"
 "apiDocsDesc" = "此版本附帶的 HTTP API 說明（Markdown，非 OpenAPI）。"
 "apiDocsTocTitle" = "本頁目錄"

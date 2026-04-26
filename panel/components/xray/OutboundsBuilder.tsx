@@ -6,6 +6,9 @@ import type { TFunction } from "i18next";
 import {
   type OutboundFormRow,
   OUTBOUND_PROTOCOL_OPTIONS,
+  OUTBOUND_STREAM_NETWORK_OPTIONS,
+  OUTBOUND_STREAM_SECURITY_OPTIONS,
+  OUTBOUND_VLESS_FLOW_OPTIONS,
   moveRow,
   newOutboundRow,
   parseOutboundsSection,
@@ -30,6 +33,10 @@ function asRec(v: unknown): Record<string, unknown> {
 
 function asArr<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function isInStringList<T extends string>(v: string, list: readonly T[]): v is T {
+  return (list as readonly string[]).includes(v);
 }
 
 function ensureVless(row: OutboundFormRow): OutboundFormRow {
@@ -199,8 +206,39 @@ function OutboundSettingsBody({
     const str = asRec(v.raw.streamSettings);
     const vn0 = asRec(asArr<Record<string, unknown>>(s.vnext)[0]);
     const u0 = asRec(asArr<Record<string, unknown>>(vn0.users)[0]);
+    const flowVal = String(u0.flow ?? "");
+    const flowInPreset = isInStringList(flowVal, OUTBOUND_VLESS_FLOW_OPTIONS);
+    const netVal = str.network != null && str.network !== "" ? String(str.network) : "tcp";
+    const netInPreset = isInStringList(netVal, OUTBOUND_STREAM_NETWORK_OPTIONS);
+    const secVal = str.security != null && str.security !== "" ? String(str.security) : "none";
+    const secInPreset = isInStringList(secVal, OUTBOUND_STREAM_SECURITY_OPTIONS);
     const patchStream = (patch: Record<string, unknown>) => {
       onRow({ ...v, raw: { ...v.raw, streamSettings: { ...str, ...patch } } });
+    };
+    const applyStreamSecurity = (nextSec: string) => {
+      const next: Record<string, unknown> = { ...str, security: nextSec };
+      if (nextSec !== "reality") delete next.realitySettings;
+      if (nextSec !== "tls") delete next.tlsSettings;
+      onRow({ ...v, raw: { ...v.raw, streamSettings: next } });
+    };
+    const rs = asRec(str.realitySettings);
+    const tls = asRec(str.tlsSettings);
+    const patchReality = (patch: Record<string, unknown>) => {
+      patchStream({ realitySettings: { ...rs, ...patch } });
+    };
+    const patchTls = (patch: Record<string, unknown>) => {
+      patchStream({ tlsSettings: { ...tls, ...patch } });
+    };
+    const tlsAlpnStr = Array.isArray(tls.alpn)
+      ? tls.alpn.filter((x): x is string => typeof x === "string").join(", ")
+      : typeof tls.alpn === "string"
+        ? tls.alpn
+        : "";
+    const setUserFlow = (nextFlow: string) => {
+      const users = [asRec({ ...u0, flow: nextFlow })];
+      const nvn = { ...vn0, users };
+      const vnext = [nvn, ...asArr<Record<string, unknown>>(s.vnext).slice(1)];
+      onRow({ ...v, raw: { ...v.raw, settings: { ...s, vnext } } });
     };
     return (
       <div className="mt-2 space-y-2">
@@ -249,41 +287,218 @@ function OutboundSettingsBody({
             />
           </div>
           <div>
-            <label className="text-xs text-[var(--fg-muted)]">flow</label>
-            <Input
+            <label className="text-xs text-[var(--fg-muted)]">
+              {t("pages.xray.outbound.vlessFlow", { defaultValue: "flow" })}
+            </label>
+            <SelectNative
               className="mt-1 w-full"
-              value={String(u0.flow ?? "")}
+              value={flowVal}
               disabled={readOnly}
               onChange={(e) => {
-                const users = [asRec({ ...u0, flow: e.target.value })];
-                const nvn = { ...vn0, users };
-                const vnext = [nvn, ...asArr<Record<string, unknown>>(s.vnext).slice(1)];
-                onRow({ ...v, raw: { ...v.raw, settings: { ...s, vnext } } });
+                setUserFlow(e.target.value);
               }}
-              placeholder="xtls-rprx-vision"
-            />
+            >
+              {!flowInPreset && flowVal !== "" ? (
+                <option value={flowVal}>{flowVal}</option>
+              ) : null}
+              {OUTBOUND_VLESS_FLOW_OPTIONS.map((f) => (
+                <option key={f || "empty"} value={f}>
+                  {f === "" ? t("none") : f}
+                </option>
+              ))}
+            </SelectNative>
           </div>
         </div>
         <div className="grid gap-2 border-t border-[var(--border)] pt-2 sm:grid-cols-2">
           <div>
-            <label className="text-xs text-[var(--fg-muted)]">stream network</label>
-            <Input
+            <label className="text-xs text-[var(--fg-muted)]">
+              {t("pages.xray.outbound.streamNetwork", { defaultValue: "Stream network" })}
+            </label>
+            <SelectNative
               className="mt-1 w-full"
-              value={String(str.network ?? "tcp")}
+              value={netVal}
               disabled={readOnly}
-              onChange={(e) => patchStream({ network: e.target.value })}
-            />
+              onChange={(e) => {
+                patchStream({ network: e.target.value });
+              }}
+            >
+              {!netInPreset ? <option value={netVal}>{netVal}</option> : null}
+              {OUTBOUND_STREAM_NETWORK_OPTIONS.map((n) => (
+                <option key={n} value={n}>
+                  {n}
+                </option>
+              ))}
+            </SelectNative>
           </div>
           <div>
-            <label className="text-xs text-[var(--fg-muted)]">stream security</label>
-            <Input
+            <label className="text-xs text-[var(--fg-muted)]">
+              {t("pages.xray.outbound.streamSecurity", { defaultValue: "Stream security" })}
+            </label>
+            <SelectNative
               className="mt-1 w-full"
-              value={String(str.security ?? "none")}
+              value={secVal}
               disabled={readOnly}
-              onChange={(e) => patchStream({ security: e.target.value })}
-              placeholder="none | tls | reality"
-            />
+              onChange={(e) => {
+                applyStreamSecurity(e.target.value);
+              }}
+            >
+              {!secInPreset ? <option value={secVal}>{secVal}</option> : null}
+              {OUTBOUND_STREAM_SECURITY_OPTIONS.map((sopt) => (
+                <option key={sopt} value={sopt}>
+                  {sopt}
+                </option>
+              ))}
+            </SelectNative>
           </div>
+        </div>
+        {secVal === "reality" ? (
+          <div className="space-y-2 border-t border-[var(--border)] pt-2">
+            <p className="text-xs font-medium text-[var(--fg-muted)]">
+              {t("pages.xray.outbound.vlessRealityTitle", { defaultValue: "REALITY (client)" })}
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div className="sm:col-span-2">
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realityPublicKey", { defaultValue: "publicKey" })}
+                </label>
+                <Input
+                  className="mt-1 w-full font-mono text-xs"
+                  value={String(rs.publicKey ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ publicKey: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realityFingerprint", { defaultValue: "fingerprint" })}
+                </label>
+                <Input
+                  className="mt-1 w-full"
+                  value={String(rs.fingerprint ?? "chrome")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ fingerprint: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realityServerName", { defaultValue: "serverName (SNI)" })}
+                </label>
+                <Input
+                  className="mt-1 w-full"
+                  value={String(rs.serverName ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ serverName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realityShortId", { defaultValue: "shortId" })}
+                </label>
+                <Input
+                  className="mt-1 w-full font-mono text-xs"
+                  value={String(rs.shortId ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ shortId: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realitySpiderX", { defaultValue: "spiderX" })}
+                </label>
+                <Input
+                  className="mt-1 w-full"
+                  value={String(rs.spiderX ?? "/")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ spiderX: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.realityMldsa65Verify", { defaultValue: "mldsa65Verify" })}
+                </label>
+                <Input
+                  className="mt-1 w-full font-mono text-xs"
+                  value={String(rs.mldsa65Verify ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => patchReality({ mldsa65Verify: e.target.value })}
+                />
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {secVal === "tls" ? (
+          <div className="space-y-2 border-t border-[var(--border)] pt-2">
+            <p className="text-xs font-medium text-[var(--fg-muted)]">
+              {t("pages.xray.outbound.vlessTlsTitle", { defaultValue: "TLS (client)" })}
+            </p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.tlsServerName", { defaultValue: "serverName (SNI)" })}
+                </label>
+                <Input
+                  className="mt-1 w-full"
+                  value={String(tls.serverName ?? "")}
+                  disabled={readOnly}
+                  onChange={(e) => patchTls({ serverName: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.xray.outbound.tlsAlpn", { defaultValue: "alpn (comma-separated)" })}
+                </label>
+                <Input
+                  className="mt-1 w-full"
+                  value={tlsAlpnStr}
+                  disabled={readOnly}
+                  placeholder="h2, http/1.1"
+                  onChange={(e) => {
+                    const parts = e.target.value
+                      .split(",")
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    patchTls({ alpn: parts.length ? parts : [] });
+                  }}
+                />
+              </div>
+              <div className="flex items-end gap-2 sm:col-span-2">
+                <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--fg-muted)]">
+                  <input
+                    type="checkbox"
+                    className="rounded border-[var(--border)]"
+                    checked={Boolean(tls.allowInsecure)}
+                    disabled={readOnly}
+                    onChange={(e) => patchTls({ allowInsecure: e.target.checked })}
+                  />
+                  {t("pages.xray.outbound.tlsAllowInsecure", { defaultValue: "allowInsecure" })}
+                </label>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        <div className="border-t border-[var(--border)] pt-2">
+          <label className="text-xs text-[var(--fg-muted)]">
+            {t("pages.xray.outbound.streamSettingsJson", { defaultValue: "streamSettings (JSON)" })}
+          </label>
+          <p className="mb-1 text-[11px] leading-snug text-[var(--fg-muted)]">
+            {t("pages.xray.outbound.streamSettingsJsonHint", {
+              defaultValue: "tcpSettings, wsSettings, grpcSettings, etc. Edit here if not covered above.",
+            })}
+          </p>
+          <textarea
+            className="min-h-[140px] w-full rounded-lg border border-[var(--border)] bg-[var(--bg)] p-2 font-mono text-xs text-[var(--fg)]"
+            value={JSON.stringify(str, null, 2)}
+            readOnly={readOnly}
+            spellCheck={false}
+            onChange={(e) => {
+              try {
+                const parsed = JSON.parse(e.target.value) as Record<string, unknown>;
+                onRow({ ...v, raw: { ...v.raw, streamSettings: parsed } });
+              } catch {
+                /* ignore */
+              }
+            }}
+          />
         </div>
       </div>
     );

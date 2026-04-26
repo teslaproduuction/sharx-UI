@@ -96,6 +96,7 @@
 "outbounds" = "Outbounds"
 "settings" = "Panel Settings"
 "xray" = "Xray Configs"
+"xrayTemplate" = "Modelo"
 "apiDocs" = "Documentação da API"
 "apiDocsDesc" = "Referência HTTP API em Markdown (não OpenAPI) incluída nesta build."
 "apiDocsTocTitle" = "Nesta página"

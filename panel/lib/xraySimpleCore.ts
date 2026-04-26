@@ -2,6 +2,13 @@
  * Read/patch a small subset of Xray template JSON for a beginner-friendly UI.
  */
 
+const DEFAULT_API_TAG = "api";
+const API_SERVICE_NAMES = [
+  "HandlerService",
+  "LoggerService",
+  "StatsService",
+] as const;
+
 export type XraySimpleCore = {
   loglevel: string;
   /** Xray "access" log: "none" or a file path */
@@ -11,6 +18,17 @@ export type XraySimpleCore = {
   dnsLog: boolean;
   maskAddress: string;
   domainStrategy: string;
+  /** gRPC API `tag` (dokodemo-door inbound with same tag) */
+  apiTag: string;
+  apiHandlerService: boolean;
+  apiLoggerService: boolean;
+  apiStatsService: boolean;
+  policyLevel0StatsUserUplink: boolean;
+  policyLevel0StatsUserDownlink: boolean;
+  policySystemStatsInboundUplink: boolean;
+  policySystemStatsInboundDownlink: boolean;
+  policySystemStatsOutboundUplink: boolean;
+  policySystemStatsOutboundDownlink: boolean;
 };
 
 const DEFAULT_LOG = {
@@ -20,6 +38,22 @@ const DEFAULT_LOG = {
   loglevel: "warning",
   maskAddress: "",
 } as const;
+
+const DEFAULT_POLICY: {
+  policyLevel0StatsUserUplink: boolean;
+  policyLevel0StatsUserDownlink: boolean;
+  policySystemStatsInboundUplink: boolean;
+  policySystemStatsInboundDownlink: boolean;
+  policySystemStatsOutboundUplink: boolean;
+  policySystemStatsOutboundDownlink: boolean;
+} = {
+  policyLevel0StatsUserUplink: true,
+  policyLevel0StatsUserDownlink: true,
+  policySystemStatsInboundUplink: true,
+  policySystemStatsInboundDownlink: true,
+  policySystemStatsOutboundUplink: true,
+  policySystemStatsOutboundDownlink: true,
+};
 
 const LOG_LEVELS = ["debug", "info", "warning", "error", "none"] as const;
 
@@ -33,15 +67,25 @@ export function isKnownDomainStrategy(v: string): boolean {
   return (DOMAIN_STRATEGIES as readonly string[]).includes(v);
 }
 
+function defaultSimpleCoreBase(): XraySimpleCore {
+  return {
+    ...DEFAULT_LOG,
+    maskAddress: "",
+    domainStrategy: "AsIs",
+    apiTag: DEFAULT_API_TAG,
+    apiHandlerService: true,
+    apiLoggerService: true,
+    apiStatsService: true,
+    ...DEFAULT_POLICY,
+  };
+}
+
 export function extractSimpleCore(templateStr: string): XraySimpleCore {
   let root: Record<string, unknown>;
   try {
     root = JSON.parse(templateStr) as Record<string, unknown>;
   } catch {
-    return {
-      ...DEFAULT_LOG,
-      domainStrategy: "AsIs",
-    };
+    return defaultSimpleCoreBase();
   }
 
   let log = DEFAULT_LOG as unknown as Record<string, unknown>;
@@ -68,6 +112,58 @@ export function extractSimpleCore(templateStr: string): XraySimpleCore {
     if (typeof ds === "string" && ds) domainStrategy = ds;
   }
 
+  let apiTag = DEFAULT_API_TAG;
+  let apiHandlerService = true;
+  let apiLoggerService = true;
+  let apiStatsService = true;
+  const rawApi = root.api;
+  if (rawApi && typeof rawApi === "object" && !Array.isArray(rawApi)) {
+    const ao = rawApi as Record<string, unknown>;
+    if (typeof ao.tag === "string" && ao.tag.trim()) apiTag = ao.tag;
+    const sv = ao.services;
+    if (Array.isArray(sv)) {
+      const set = new Set(sv.map((x) => String(x)));
+      apiHandlerService = set.has("HandlerService");
+      apiLoggerService = set.has("LoggerService");
+      apiStatsService = set.has("StatsService");
+    }
+  }
+
+  const pol = { ...DEFAULT_POLICY };
+  const rawPolicy = root.policy;
+  if (rawPolicy && typeof rawPolicy === "object" && !Array.isArray(rawPolicy)) {
+    const p = rawPolicy as Record<string, unknown>;
+    const sys = p.system;
+    if (sys && typeof sys === "object" && !Array.isArray(sys)) {
+      const s = sys as Record<string, unknown>;
+      if (typeof s.statsInboundUplink === "boolean") {
+        pol.policySystemStatsInboundUplink = s.statsInboundUplink;
+      }
+      if (typeof s.statsInboundDownlink === "boolean") {
+        pol.policySystemStatsInboundDownlink = s.statsInboundDownlink;
+      }
+      if (typeof s.statsOutboundUplink === "boolean") {
+        pol.policySystemStatsOutboundUplink = s.statsOutboundUplink;
+      }
+      if (typeof s.statsOutboundDownlink === "boolean") {
+        pol.policySystemStatsOutboundDownlink = s.statsOutboundDownlink;
+      }
+    }
+    const levels = p.levels;
+    if (levels && typeof levels === "object" && !Array.isArray(levels)) {
+      const l0 = (levels as Record<string, unknown>)["0"];
+      if (l0 && typeof l0 === "object" && !Array.isArray(l0)) {
+        const z = l0 as Record<string, unknown>;
+        if (typeof z.statsUserUplink === "boolean") {
+          pol.policyLevel0StatsUserUplink = z.statsUserUplink;
+        }
+        if (typeof z.statsUserDownlink === "boolean") {
+          pol.policyLevel0StatsUserDownlink = z.statsUserDownlink;
+        }
+      }
+    }
+  }
+
   return {
     loglevel,
     access,
@@ -75,6 +171,11 @@ export function extractSimpleCore(templateStr: string): XraySimpleCore {
     dnsLog,
     maskAddress,
     domainStrategy,
+    apiTag,
+    apiHandlerService,
+    apiLoggerService,
+    apiStatsService,
+    ...pol,
   };
 }
 
@@ -92,6 +193,24 @@ function asRoutingObject(v: unknown): Record<string, unknown> {
   return {};
 }
 
+function asPolicyObject(v: unknown): Record<string, unknown> {
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    return { ...(v as Record<string, unknown>) };
+  }
+  return {};
+}
+
+function asApiObject(v: unknown): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    tag: DEFAULT_API_TAG,
+    services: [...API_SERVICE_NAMES] as string[],
+  };
+  if (v && typeof v === "object" && !Array.isArray(v)) {
+    return { ...base, ...(v as Record<string, unknown>) };
+  }
+  return { ...base };
+}
+
 export function patchSimpleCore(templateStr: string, next: Partial<XraySimpleCore>): string {
   const root = JSON.parse(templateStr) as Record<string, unknown>;
   const log = asLogObject(root.log);
@@ -106,6 +225,77 @@ export function patchSimpleCore(templateStr: string, next: Partial<XraySimpleCor
     const routing = asRoutingObject(root.routing);
     routing.domainStrategy = next.domainStrategy;
     root.routing = routing;
+  }
+
+  const needApi =
+    next.apiTag !== undefined ||
+    next.apiHandlerService !== undefined ||
+    next.apiLoggerService !== undefined ||
+    next.apiStatsService !== undefined;
+  if (needApi) {
+    const cur = extractSimpleCore(templateStr);
+    const api = asApiObject(root.api);
+    const tag = next.apiTag !== undefined ? next.apiTag.trim() || DEFAULT_API_TAG : cur.apiTag;
+    api.tag = tag;
+    const h = next.apiHandlerService ?? cur.apiHandlerService;
+    const lg = next.apiLoggerService ?? cur.apiLoggerService;
+    const st = next.apiStatsService ?? cur.apiStatsService;
+    const services: string[] = [];
+    if (h) services.push("HandlerService");
+    if (lg) services.push("LoggerService");
+    if (st) services.push("StatsService");
+    api.services = services;
+    root.api = api;
+  }
+
+  const needPolicy =
+    next.policyLevel0StatsUserUplink !== undefined ||
+    next.policyLevel0StatsUserDownlink !== undefined ||
+    next.policySystemStatsInboundUplink !== undefined ||
+    next.policySystemStatsInboundDownlink !== undefined ||
+    next.policySystemStatsOutboundUplink !== undefined ||
+    next.policySystemStatsOutboundDownlink !== undefined;
+  if (needPolicy) {
+    const cur = extractSimpleCore(templateStr);
+    const policy = asPolicyObject(root.policy);
+    let levels = policy.levels;
+    if (!levels || typeof levels !== "object" || Array.isArray(levels)) {
+      levels = {};
+      policy.levels = levels;
+    }
+    const levelsRec = levels as Record<string, unknown>;
+    let z = levelsRec["0"];
+    if (!z || typeof z !== "object" || Array.isArray(z)) {
+      z = {};
+      levelsRec["0"] = z;
+    }
+    const z0 = z as Record<string, unknown>;
+    if (next.policyLevel0StatsUserUplink !== undefined) {
+      z0.statsUserUplink = next.policyLevel0StatsUserUplink;
+    } else {
+      z0.statsUserUplink = cur.policyLevel0StatsUserUplink;
+    }
+    if (next.policyLevel0StatsUserDownlink !== undefined) {
+      z0.statsUserDownlink = next.policyLevel0StatsUserDownlink;
+    } else {
+      z0.statsUserDownlink = cur.policyLevel0StatsUserDownlink;
+    }
+
+    let system = policy.system;
+    if (!system || typeof system !== "object" || Array.isArray(system)) {
+      system = {};
+      policy.system = system;
+    }
+    const sys = system as Record<string, unknown>;
+    const sInU = next.policySystemStatsInboundUplink ?? cur.policySystemStatsInboundUplink;
+    const sInD = next.policySystemStatsInboundDownlink ?? cur.policySystemStatsInboundDownlink;
+    const sOuU = next.policySystemStatsOutboundUplink ?? cur.policySystemStatsOutboundUplink;
+    const sOuD = next.policySystemStatsOutboundDownlink ?? cur.policySystemStatsOutboundDownlink;
+    sys.statsInboundUplink = sInU;
+    sys.statsInboundDownlink = sInD;
+    sys.statsOutboundUplink = sOuU;
+    sys.statsOutboundDownlink = sOuD;
+    root.policy = policy;
   }
 
   return JSON.stringify(root, null, 2);

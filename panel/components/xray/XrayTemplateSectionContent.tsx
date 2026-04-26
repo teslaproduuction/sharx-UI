@@ -76,49 +76,57 @@ export function XrayTemplateSectionContent({
 
   const showJsonToggle =
     !loading && templateOk && (navId === "outbounds" || navId === "dns" || navId === "routing");
+  const showJsonModeButton =
+    navId === "outbounds" || navId === "dns" || (navId === "routing" && routingKind === "visual");
 
   return (
     <div className="min-w-0 space-y-2">
       {showJsonToggle ? (
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2">
           {navId === "routing" && routingKind === "advanced" ? (
-            <p className="mr-auto text-xs text-amber-200/90">{t("pages.xray.routingBuilder.advancedOnly")}</p>
+            <p className="min-w-0 flex-1 text-xs text-amber-200/90 sm:min-w-[12rem]">
+              {t("pages.xray.routingBuilder.advancedOnly")}
+            </p>
           ) : null}
-          {navId === "outbounds" ? (
-            <Button
-              type="button"
-              variant="secondary"
-              className="!py-1.5 !text-xs"
-              onClick={() => setJsonMode((m) => ({ ...m, outbounds: !m.outbounds }))}
-            >
-              {jsonMode.outbounds
-                ? t("pages.xray.templateSection.visualBuilder")
-                : t("pages.xray.templateSection.editAsJson")}
-            </Button>
-          ) : null}
-          {navId === "dns" ? (
-            <Button
-              type="button"
-              variant="secondary"
-              className="!py-1.5 !text-xs"
-              onClick={() => setJsonMode((m) => ({ ...m, dns: !m.dns }))}
-            >
-              {jsonMode.dns
-                ? t("pages.xray.templateSection.visualBuilder")
-                : t("pages.xray.templateSection.editAsJson")}
-            </Button>
-          ) : null}
-          {navId === "routing" && routingKind === "visual" ? (
-            <Button
-              type="button"
-              variant="secondary"
-              className="!py-1.5 !text-xs"
-              onClick={() => setJsonMode((m) => ({ ...m, routing: !m.routing }))}
-            >
-              {jsonMode.routing
-                ? t("pages.xray.templateSection.visualBuilder")
-                : t("pages.xray.templateSection.editAsJson")}
-            </Button>
+          {showJsonModeButton ? (
+            <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {navId === "outbounds" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!py-1.5 !text-xs"
+                  onClick={() => setJsonMode((m) => ({ ...m, outbounds: !m.outbounds }))}
+                >
+                  {jsonMode.outbounds
+                    ? t("pages.xray.templateSection.visualBuilder")
+                    : t("pages.xray.templateSection.editAsJson")}
+                </Button>
+              ) : null}
+              {navId === "dns" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!py-1.5 !text-xs"
+                  onClick={() => setJsonMode((m) => ({ ...m, dns: !m.dns }))}
+                >
+                  {jsonMode.dns
+                    ? t("pages.xray.templateSection.visualBuilder")
+                    : t("pages.xray.templateSection.editAsJson")}
+                </Button>
+              ) : null}
+              {navId === "routing" && routingKind === "visual" ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!py-1.5 !text-xs"
+                  onClick={() => setJsonMode((m) => ({ ...m, routing: !m.routing }))}
+                >
+                  {jsonMode.routing
+                    ? t("pages.xray.templateSection.visualBuilder")
+                    : t("pages.xray.templateSection.editAsJson")}
+                </Button>
+              ) : null}
+            </div>
           ) : null}
         </div>
       ) : null}

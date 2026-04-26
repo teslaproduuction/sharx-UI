@@ -72,9 +72,21 @@ async function loadBundle(lang: string) {
   return (await r.json()) as Record<string, string>;
 }
 
+function isSupportedPanelCode(code: string | undefined | null): code is (typeof supported)[number]["code"] {
+  return Boolean(code && supported.some((s) => s.code === code));
+}
+
+/** Same preference the panel uses everywhere: `sharx:lang` in localStorage. */
+function getValidStoredPanelLangCode(): (typeof supported)[number]["code"] | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(STORAGE_KEY)?.trim() ?? "";
+  if (isSupportedPanelCode(raw)) return raw;
+  return null;
+}
+
 function getInitialLang() {
   if (typeof window === "undefined") return "en";
-  return localStorage.getItem(STORAGE_KEY) || "en";
+  return getValidStoredPanelLangCode() ?? "en";
 }
 
 export function setStoredLang(code: string) {
@@ -105,10 +117,41 @@ export function initI18n() {
 }
 
 export async function changeLanguage(code: string) {
+  if (!isSupportedPanelCode(code)) {
+    return;
+  }
   setStoredLang(code);
   const tr = await loadBundle(code);
   i18n.addResourceBundle(code, "translation", tr, true, true);
   await i18n.changeLanguage(code);
+}
+
+/**
+ * Value for the language `<select>` on the login page and in settings: same as `STORAGE_KEY` (`sharx:lang`)
+ * when set; otherwise normalize i18n BCP-47 to a `supported` code. Must match a `<option value>`.
+ */
+export function panelSelectLangValue(): string {
+  const fromStorage = getValidStoredPanelLangCode();
+  if (fromStorage) {
+    return fromStorage;
+  }
+  const raw = (i18n.resolvedLanguage || i18n.language || "en").trim();
+  if (!raw) return "en";
+  if (supported.some((s) => s.code === raw)) {
+    return raw;
+  }
+  const lower = raw.toLowerCase();
+  if (lower === "tw" || lower.startsWith("zh-tw") || lower.startsWith("zh-hk")) {
+    return "tw";
+  }
+  if (lower.startsWith("zh")) {
+    return "zh";
+  }
+  const primary = lower.split(/[-_]/)[0] || "en";
+  if (supported.some((s) => s.code === primary)) {
+    return primary;
+  }
+  return "en";
 }
 
 export { i18n };

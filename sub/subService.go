@@ -454,6 +454,8 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		return s.genShadowsocksLink(&in, email)
 	case model.Mixed:
 		return s.genMixedLink(&in, email)
+	case model.WireGuard:
+		return s.buildWireguardPanelInfo(&in, email)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLink(&in, email)
@@ -464,11 +466,22 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 
 // getLinkWithClient generates a subscription link using ClientEntity data (new architecture)
 func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
-	if inbound == nil || client == nil {
+	if inbound == nil {
 		return ""
 	}
 	in := *inbound
 	in.Protocol = model.Protocol(strings.ToLower(strings.TrimSpace(string(inbound.Protocol))))
+	// WireGuard: optional ClientEntity; email is used to match a peer in inbound JSON
+	if in.Protocol == model.WireGuard {
+		email := ""
+		if client != nil {
+			email = client.Email
+		}
+		return s.buildWireguardPanelInfo(&in, email)
+	}
+	if client == nil {
+		return ""
+	}
 	switch in.Protocol {
 	case model.VMESS:
 		return s.genVmessLinkWithClient(&in, client)

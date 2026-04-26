@@ -3,6 +3,8 @@
  * Matches structures used by the legacy web UI (x-ui style).
  */
 
+import { newWireGuardPeerKeypairBase64 } from "./wireguardKeypair";
+
 export type InboundFormProtocol =
   | "vless"
   | "vmess"
@@ -10,7 +12,8 @@ export type InboundFormProtocol =
   | "shadowsocks"
   | "mixed"
   | "hysteria"
-  | "hysteria2";
+  | "hysteria2"
+  | "wireguard";
 
 function randomId(length: number): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -33,6 +36,181 @@ function randomPassword(bytes = 16): string {
     for (let i = 0; i < arr.length; i += 1) arr[i] = Math.floor(Math.random() * 256);
   }
   return Array.from(arr, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** 32-byte WireGuard / Xray `secretKey` as standard base64. */
+function randomKey32Base64(): string {
+  const arr = new Uint8Array(32);
+  if (typeof crypto !== "undefined" && crypto.getRandomValues) {
+    crypto.getRandomValues(arr);
+  } else {
+    for (let i = 0; i < 32; i += 1) arr[i] = Math.floor(Math.random() * 256);
+  }
+  let bin = "";
+  for (let i = 0; i < 32; i += 1) bin += String.fromCharCode(arr[i]!);
+  return btoa(bin);
+}
+
+/** New `secretKey` for WireGuard server (Xray inbound `settings`). */
+export function newWireGuardSecretKeyBase64(): string {
+  return randomKey32Base64();
+}
+
+function splitListLinesOrCommas(s: string): string[] {
+  return s
+    .split(/[,\n]+/g)
+    .map((x) => x.trim())
+    .filter((x) => x.length > 0);
+}
+
+/** One row in the WireGuard peers form (Xray public keys, optional PSK, optional allowedIPs). */
+export type WireguardPeerFormRow = {
+  publicKey: string;
+  preSharedKey: string;
+  /** Comma- or newline-separated CIDRs. */
+  allowedIps: string;
+  /**
+   * Client [Interface] private (base64), for admin to hand to user. Not in Xray JSON.
+   * Shown when generated here; may be empty if the peer was loaded from the server or keys were pasted manually.
+   */
+  clientPrivateKey?: string;
+};
+
+export type WireguardFormState = {
+  mtu: number;
+  secretKey: string;
+  /** One CIDR per line (maps to `address`). */
+  address: string;
+  peers: WireguardPeerFormRow[];
+  noKernelTun: boolean;
+  /** Optional positive integer; empty = omitted when saving. */
+  workers: string;
+};
+
+export function defaultWireguardForm(): WireguardFormState {
+  const p = newWireGuardPeerKeypairBase64();
+  return {
+    mtu: 1420,
+    secretKey: newWireGuardSecretKeyBase64(),
+    address: "10.8.0.1/32",
+    /** One client row: public on server, private for user, typical AllowedIP. */
+    peers: [
+      {
+        publicKey: p.publicKeyB64,
+        preSharedKey: "",
+        allowedIps: "10.8.0.2/32",
+        clientPrivateKey: p.privateKeyB64,
+      },
+    ],
+    noKernelTun: true,
+    workers: "2",
+  };
+}
+
+export function parseWireguardSettingsToForm(settingsStr: string): WireguardFormState {
+  const base: WireguardFormState = {
+    mtu: 1420,
+    secretKey: "",
+    address: "10.8.0.1/32",
+    peers: [],
+    noKernelTun: true,
+    workers: "",
+  };
+  try {
+    const root = JSON.parse(settingsStr || "{}") as Record<string, unknown>;
+    if (typeof root.mtu === "number" && root.mtu > 0) base.mtu = root.mtu;
+    if (typeof root.secretKey === "string") base.secretKey = root.secretKey;
+    const addr = root.address;
+    if (Array.isArray(addr)) {
+      const lines = addr
+        .map((a) => (typeof a === "string" ? a.trim() : ""))
+        .filter(Boolean);
+      if (lines.length) base.address = lines.join("\n");
+    }
+    if (typeof root.noKernelTun === "boolean") {
+      base.noKernelTun = root.noKernelTun;
+    }
+    if (typeof root.workers === "number" && root.workers > 0) {
+      base.workers = String(root.workers);
+    }
+    const pr = root.peers;
+    if (Array.isArray(pr)) {
+      const rows: WireguardPeerFormRow[] = [];
+      for (const p of pr) {
+        if (typeof p !== "object" || p === null) continue;
+        const o = p as Record<string, unknown>;
+        if (typeof o.publicKey !== "string") continue;
+        const allowed = o.allowedIPs ?? o.allowedIps;
+        let allowedIps = "";
+        if (Array.isArray(allowed)) {
+          allowedIps = allowed
+            .map((a) => (typeof a === "string" ? a.trim() : ""))
+            .filter(Boolean)
+            .join("\n");
+        } else if (typeof allowed === "string") {
+          allowedIps = allowed;
+        }
+        rows.push({
+          publicKey: o.publicKey,
+          preSharedKey:
+            typeof o.preSharedKey === "string" ? o.preSharedKey : "",
+          allowedIps: allowedIps,
+          clientPrivateKey: "",
+        });
+      }
+      base.peers = rows;
+    }
+  } catch {
+    /* use base */
+  }
+  return base;
+}
+
+export type WireguardInboundApiPeer = {
+  publicKey: string;
+  preSharedKey?: string;
+  allowedIPs: string[];
+};
+
+export type WireguardInboundApiPayload = {
+  mtu: number;
+  secretKey: string;
+  address: string[];
+  peers: WireguardInboundApiPeer[];
+  noKernelTun: boolean;
+  workers?: number;
+};
+
+export function buildWireguardInboundApiPayload(
+  w: WireguardFormState,
+): WireguardInboundApiPayload {
+  const addrs = splitListLinesOrCommas(w.address);
+  const address = addrs.length > 0 ? addrs : ["10.8.0.1/32"];
+  const mtu = Number.isFinite(w.mtu) && w.mtu > 0 ? w.mtu : 1420;
+  const peers: WireguardInboundApiPeer[] = [];
+  for (const p of w.peers) {
+    const pk = p.publicKey.trim();
+    if (pk === "") continue;
+    const e: WireguardInboundApiPeer = {
+      publicKey: pk,
+      allowedIPs: splitListLinesOrCommas(p.allowedIps),
+    };
+    const psk = p.preSharedKey.trim();
+    if (psk !== "") e.preSharedKey = psk;
+    peers.push(e);
+  }
+  const wu = parseInt(w.workers.trim(), 10);
+  const out: WireguardInboundApiPayload = {
+    mtu,
+    secretKey: w.secretKey.trim(),
+    address,
+    peers,
+    noKernelTun: w.noKernelTun,
+  };
+  if (Number.isFinite(wu) && wu > 0) {
+    out.workers = wu;
+  }
+  return out;
 }
 
 export function newClientUUID(): string {
@@ -284,7 +462,7 @@ function parseHeaderType(tcp: Record<string, unknown> | undefined): "none" | "ht
 }
 
 /** How the inbound transport editor maps to streamSettings (UI varies by protocol). */
-export type InboundStreamTransportMode = "hysteria" | "shadowsocks" | "full";
+export type InboundStreamTransportMode = "hysteria" | "shadowsocks" | "wireguard" | "full";
 
 export function getInboundStreamTransportMode(
   protocol: InboundFormProtocol,
@@ -292,6 +470,7 @@ export function getInboundStreamTransportMode(
   if (protocol === "hysteria" || protocol === "hysteria2") return "hysteria";
   /** TCP/WS, stream security none — same editor for SS and mixed (HTTP+SOCKS proxy). */
   if (protocol === "shadowsocks" || protocol === "mixed") return "shadowsocks";
+  if (protocol === "wireguard") return "wireguard";
   return "full";
 }
 
@@ -366,6 +545,9 @@ export function parseStreamSettingsToForm(
   protocol: InboundFormProtocol,
 ): StreamFormState {
   const base = defaultStreamForm();
+  if (protocol === "wireguard") {
+    return base;
+  }
   if (protocol === "hysteria" || protocol === "hysteria2") {
     try {
       const root = JSON.parse(json) as Record<string, unknown>;
@@ -497,6 +679,9 @@ export function buildStreamSettingsFromForm(
   state: StreamFormState,
   protocol: InboundFormProtocol,
 ): string {
+  if (protocol === "wireguard") {
+    return "{}";
+  }
   if (protocol === "hysteria") {
     return JSON.stringify({
       network: "hysteria",

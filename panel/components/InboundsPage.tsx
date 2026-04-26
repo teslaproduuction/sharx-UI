@@ -26,6 +26,8 @@ import {
   buildSettingsJson,
   buildSniffingFromForm,
   buildStreamSettingsFromForm,
+  buildWireguardInboundApiPayload,
+  defaultWireguardForm,
   defaultSniffingForm,
   defaultSniffingString,
   defaultStreamForm,
@@ -33,7 +35,9 @@ import {
   getInboundStreamTransportMode,
   hostFromRealityTarget,
   mergeFirstClientIntoSettings,
+  newWireGuardSecretKeyBase64,
   parseFirstClientFromSettings,
+  parseWireguardSettingsToForm,
   parseSniffingToForm,
   parseStreamSettingsToForm,
   randomPassword,
@@ -49,6 +53,7 @@ import {
   type SniffingFormState,
   type StreamFormState,
 } from "@/lib/inboundDefaults";
+import { newWireGuardPeerKeypairBase64 } from "@/lib/wireguardKeypair";
 import { sizeFormat } from "@/lib/format";
 import {
   joinNameFlag,
@@ -339,6 +344,7 @@ const PROTOCOLS: { value: InboundFormProtocol; label: string }[] = [
   { value: "shadowsocks", label: "Shadowsocks" },
   { value: "mixed", label: "Mixed" },
   { value: "hysteria2", label: "Hysteria 2" },
+  { value: "wireguard", label: "WireGuard" },
 ];
 
 const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
@@ -349,6 +355,7 @@ const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
   "mixed",
   "hysteria",
   "hysteria2",
+  "wireguard",
 ]);
 
 const TRAFFIC_RESET: { value: string; labelKey: string }[] = [
@@ -456,6 +463,7 @@ const PROTOCOL_TONE: Record<string, "accent" | "info" | "warning" | "success" | 
   mixed: "neutral",
   hysteria2: "accent",
   hysteria: "accent",
+  wireguard: "success",
 };
 
 const defaultForm = () => ({
@@ -472,6 +480,7 @@ const defaultForm = () => ({
   ssPassword: randomPassword(12),
   mixedUser: "proxy",
   mixedPassword: randomPassword(12),
+  wireguardForm: defaultWireguardForm(),
   totalGb: "0",
   trafficReset: "never",
   streamForm: defaultStreamForm(),
@@ -495,6 +504,8 @@ export function InboundsPage() {
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [form, setForm] = useState(defaultForm);
   const [nodeIds, setNodeIds] = useState<Record<number, boolean>>({});
+  /** When false/loading, the wizard omits the “Nodes” step (standalone / single node). */
+  const [multiNodeMode, setMultiNodeMode] = useState<boolean | null>(null);
   const [baselineSettings, setBaselineSettings] = useState("");
   const [preserveTraffic, setPreserveTraffic] = useState({
     up: 0,
@@ -537,6 +548,17 @@ export function InboundsPage() {
     }
   }, []);
 
+  const loadMultiNodeMode = useCallback(async () => {
+    const s = await postJson<Record<string, unknown>>(panel("setting/all"));
+    if (s.success && s.obj) {
+      setMultiNodeMode(
+        Boolean((s.obj as { multiNodeMode?: boolean }).multiNodeMode),
+      );
+    } else {
+      setMultiNodeMode(false);
+    }
+  }, []);
+
   useEffect(() => {
     void load();
   }, [load]);
@@ -567,8 +589,11 @@ export function InboundsPage() {
   }, [ws, load]);
 
   useEffect(() => {
-    if (modalOpen) void loadNodes();
-  }, [modalOpen, loadNodes]);
+    if (modalOpen) {
+      void loadNodes();
+      void loadMultiNodeMode();
+    }
+  }, [modalOpen, loadNodes, loadMultiNodeMode]);
 
   const resetAddForm = useCallback(() => {
     setForm(defaultForm());
@@ -625,6 +650,10 @@ export function InboundsPage() {
         ssPassword: parsed.ssPassword ?? randomPassword(12),
         mixedUser: parsed.mixedUser ?? "proxy",
         mixedPassword: parsed.mixedPassword ?? randomPassword(12),
+        wireguardForm:
+          proto === "wireguard"
+            ? parseWireguardSettingsToForm(ib.settings || "{}")
+            : defaultWireguardForm(),
         totalGb: totalBytesToGbInput(ib.total ?? 0),
         trafficReset: ib.trafficReset || "never",
         streamForm: parseStreamSettingsToForm(
@@ -650,11 +679,27 @@ export function InboundsPage() {
   };
 
   const applyStreamPresetForProtocol = (protocol: InboundFormProtocol) => {
-    setForm((f) => ({
-      ...f,
-      protocol,
-      streamForm: defaultStreamForm(),
-    }));
+    setForm((f) => {
+      const isSwitchingToWg = protocol === "wireguard" && f.protocol !== "wireguard";
+      const out = {
+        ...f,
+        protocol,
+        streamForm: defaultStreamForm(),
+        wireguardForm: isSwitchingToWg ? defaultWireguardForm() : f.wireguardForm,
+      };
+      if (isSwitchingToWg) {
+        out.port = 51820;
+        if (!f.remark.trim()) {
+          out.remark = t("pages.inbounds.wireguardDefaultRemark", {
+            defaultValue: "WireGuard",
+          });
+        }
+        if (!f.listen.trim()) {
+          out.listen = "0.0.0.0";
+        }
+      }
+      return out;
+    });
   };
 
   const applyStreamFormPreset = (preset: "tcp" | "tcpTls") => {
@@ -748,7 +793,9 @@ export function InboundsPage() {
     };
 
     let settings: string;
-    if (editId != null) {
+    if (form.protocol === "wireguard") {
+      settings = "{}";
+    } else if (editId != null) {
       settings = mergeFirstClientIntoSettings(baselineSettings, form.protocol, patch);
     } else {
       settings = buildSettingsJson(form.protocol, patch);
@@ -782,6 +829,9 @@ export function InboundsPage() {
       };
       if (editId != null) {
         body.allTime = preserveTraffic.allTime;
+      }
+      if (form.protocol === "wireguard") {
+        body.wireguard = buildWireguardInboundApiPayload(form.wireguardForm);
       }
       if (selectedNodeIds.length > 0) {
         body.nodeIds = selectedNodeIds;
@@ -880,36 +930,71 @@ export function InboundsPage() {
 
   const isEdit = editId != null;
 
-  const stepIdx = INBOUND_STEP_ORDER.indexOf(step);
-  const isLastStep = stepIdx >= INBOUND_STEP_ORDER.length - 1;
-  const isFirstStep = stepIdx <= 0;
+  const inboundStepOrder = useMemo<InboundStepId[]>(
+    () =>
+      multiNodeMode === true
+        ? [...INBOUND_STEP_ORDER]
+        : INBOUND_STEP_ORDER.filter((id) => id !== "nodes"),
+    [multiNodeMode],
+  );
+
+  useEffect(() => {
+    if (step === "nodes" && multiNodeMode !== true) {
+      setStep("sniffing");
+    }
+  }, [step, multiNodeMode]);
+
+  const stepIdx = inboundStepOrder.indexOf(step);
+  const isLastStep =
+    inboundStepOrder.length > 0 &&
+    stepIdx === inboundStepOrder.length - 1;
+  const isFirstStep = stepIdx === 0;
   const goNextStep = useCallback(() => {
     setStep((s) => {
-      const idx = INBOUND_STEP_ORDER.indexOf(s);
-      return INBOUND_STEP_ORDER[Math.min(idx + 1, INBOUND_STEP_ORDER.length - 1)];
+      const order = inboundStepOrder;
+      const idx = order.indexOf(s);
+      if (idx < 0) return order[0] ?? "basics";
+      return order[Math.min(idx + 1, order.length - 1)];
     });
-  }, []);
+  }, [inboundStepOrder]);
   const goPrevStep = useCallback(() => {
     setStep((s) => {
-      const idx = INBOUND_STEP_ORDER.indexOf(s);
-      return INBOUND_STEP_ORDER[Math.max(idx - 1, 0)];
+      const order = inboundStepOrder;
+      const idx = order.indexOf(s);
+      if (idx < 0) return order[0] ?? "basics";
+      return order[Math.max(idx - 1, 0)];
     });
-  }, []);
+  }, [inboundStepOrder]);
 
   const stepperItems = useMemo(
     () =>
-      INBOUND_STEPS.map((s) => ({
-        id: s.id,
-        label: t(s.labelKey, { defaultValue: s.labelDefault }),
-        description: t(s.descriptionKey, { defaultValue: s.descriptionDefault }),
-        icon: s.icon,
-      })),
-    [t],
+      inboundStepOrder.map((id) => {
+        const s = INBOUND_STEPS.find((x) => x.id === id);
+        if (!s) {
+          return {
+            id,
+            label: id,
+            description: "",
+            icon: SlidersHorizontal,
+          };
+        }
+        return {
+          id: s.id,
+          label: t(s.labelKey, { defaultValue: s.labelDefault }),
+          description: t(s.descriptionKey, { defaultValue: s.descriptionDefault }),
+          icon: s.icon,
+        };
+      }),
+    [t, inboundStepOrder],
   );
 
   const tabItems = useMemo(
     () =>
-      INBOUND_STEPS.map((s) => {
+      inboundStepOrder.map((id) => {
+        const s = INBOUND_STEPS.find((x) => x.id === id);
+        if (!s) {
+          return { id, label: id, title: id, icon: SlidersHorizontal };
+        }
         const label = t(s.labelKey, { defaultValue: s.labelDefault });
         const desc = t(s.descriptionKey, { defaultValue: s.descriptionDefault });
         return {
@@ -919,7 +1004,7 @@ export function InboundsPage() {
           icon: s.icon,
         };
       }),
-    [t],
+    [t, inboundStepOrder],
   );
 
   const modalHeaderIconTone = PROTOCOL_TONE[form.protocol] ?? "accent";
@@ -1093,7 +1178,6 @@ export function InboundsPage() {
     <PageScaffold compact>
       <PageHeader
         title={t("menu.inbounds")}
-        description={t("pages.inbounds.addInboundPageDescription")}
         icon={User}
         iconTone="accent"
         actions={
@@ -1362,9 +1446,6 @@ export function InboundsPage() {
             </table>
           </div>
         )}
-        <p className="border-t border-[var(--border)] px-4 py-3 text-xs text-[var(--fg-muted)]">
-          {t("pages.inbounds.addInboundListFooter")}
-        </p>
       </Surface>
       </Reveal>
 
@@ -1377,27 +1458,23 @@ export function InboundsPage() {
             setFetchingInbound(false);
           }
         }}
-        title={
-          isEdit
-            ? t("pages.inbounds.editInbound", { defaultValue: "Edit inbound" })
-            : t("pages.inbounds.addInbound")
-        }
+        title={isEdit ? t("pages.inbounds.editInbound") : t("pages.inbounds.addInbound")}
         width={isEdit ? 960 : 880}
         dialogClassName="md:max-h-[calc(100dvh-2rem)]"
         footer={
           <div
-            className={`flex flex-wrap items-center gap-2 ${
-              isEdit ? "justify-between" : "justify-end"
-            }`}
+            className={
+              isEdit
+                ? "flex w-full min-w-0 flex-col gap-3 sm:flex-row sm:items-center sm:justify-between"
+                : "flex w-full min-w-0 flex-row items-center justify-end"
+            }
           >
             {isEdit ? (
-              <span className="text-xs text-[var(--fg-subtle)]">
-                {t("pages.inbounds.editInboundHint", {
-                  defaultValue: "Protocol cannot be changed for an existing inbound.",
-                })}
+              <span className="min-w-0 text-xs leading-snug text-[var(--fg-subtle)] sm:max-w-[min(100%,24rem)] sm:flex-1 sm:pr-2">
+                {t("pages.inbounds.editInboundHint")}
               </span>
             ) : null}
-            <div className="flex flex-wrap gap-2">
+            <div className="inline-flex w-full min-w-0 flex-none flex-wrap items-center justify-end gap-2 sm:w-auto">
               <Button
                 variant="secondary"
                 type="button"
@@ -1674,6 +1751,13 @@ export function InboundsPage() {
                     }
                   />
                 </div>
+              ) : streamTransportMode === "wireguard" ? (
+                <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.wireguardTransportHint", {
+                    defaultValue:
+                      "WireGuard uses UDP on the inbound port. There is no TCP/WebSocket `streamSettings` — leave the generated empty `{}` and configure `secretKey`, `address`, and `peers` on the next step (same shape as the Xray WireGuard example).",
+                  })}
+                </p>
               ) : streamTransportMode === "shadowsocks" ? (
                 <>
                   <p className="mb-3 text-xs text-[var(--fg-subtle)]">
@@ -2280,56 +2364,6 @@ export function InboundsPage() {
                         }
                         label={t("pages.inbounds.realityShow", { defaultValue: "Show" })}
                       />
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="text-xs"
-                          onClick={() => void generateRealityX25519()}
-                        >
-                          {t("pages.inbounds.genRealityX25519", {
-                            defaultValue: "Generate X25519 keys",
-                          })}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="text-xs"
-                          onClick={() =>
-                            setForm((f) => ({
-                              ...f,
-                              streamForm: {
-                                ...f.streamForm,
-                                realityShortIds: randomRealityShortIds(),
-                              },
-                            }))
-                          }
-                        >
-                          {t("pages.inbounds.genRealityShortIds", {
-                            defaultValue: "Generate short IDs",
-                          })}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="text-xs"
-                          onClick={() => void generateRealityMldsa65()}
-                        >
-                          {t("pages.inbounds.genRealityMldsa65", {
-                            defaultValue: "Generate ML-DSA-65",
-                          })}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          className="text-xs"
-                          onClick={fillRealitySniFromTarget}
-                        >
-                          {t("pages.inbounds.genRealitySniFromTarget", {
-                            defaultValue: "SNI from target",
-                          })}
-                        </Button>
-                      </div>
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                         <div>
                           <label
@@ -2395,19 +2429,19 @@ export function InboundsPage() {
                           placeholder="www.example.com:443"
                         />
                       </div>
-                      <div>
+                      <div className="rounded-lg border border-[var(--border)]/80 p-3">
                         <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                          className="mb-2 block text-xs font-medium text-[var(--fg-muted)]"
                           htmlFor="in-rsni"
                         >
                           {t("pages.inbounds.realityServerNames", {
                             defaultValue: "SNI / server names (comma-separated)",
                           })}
                         </label>
-                        <div className="flex gap-2">
+                        <div className="flex flex-wrap gap-2 sm:flex-nowrap">
                           <Input
                             id="in-rsni"
-                            className="min-w-0 flex-1"
+                            className="min-w-0 flex-1 font-mono text-xs"
                             value={form.streamForm.realityServerNames}
                             onChange={(e) =>
                               setStreamFormField("realityServerNames", e.target.value)
@@ -2420,7 +2454,7 @@ export function InboundsPage() {
                             onClick={fillRealitySniFromTarget}
                           >
                             {t("pages.inbounds.genRealitySniFromTarget", {
-                              defaultValue: "From target",
+                              defaultValue: "SNI from target",
                             })}
                           </Button>
                         </div>
@@ -2504,43 +2538,45 @@ export function InboundsPage() {
                         </div>
                       </div>
                       <div>
-                        <div className="mb-1.5 flex flex-wrap items-center justify-between gap-2">
-                          <label
-                            className="text-xs font-medium text-[var(--fg-muted)]"
-                            htmlFor="in-rsid"
-                          >
-                            {t("pages.inbounds.realityShortIds", {
-                              defaultValue: "Short IDs (comma-separated)",
-                            })}
-                          </label>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="text-xs"
-                            onClick={() =>
-                              setForm((f) => ({
-                                ...f,
-                                streamForm: {
-                                  ...f.streamForm,
-                                  realityShortIds: randomRealityShortIds(),
-                                },
-                              }))
+                        <div className="rounded-lg border border-[var(--border)]/80 p-3">
+                          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                            <label
+                              className="text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-rsid"
+                            >
+                              {t("pages.inbounds.realityShortIds", {
+                                defaultValue: "Short IDs (comma-separated)",
+                              })}
+                            </label>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="shrink-0 text-xs"
+                              onClick={() =>
+                                setForm((f) => ({
+                                  ...f,
+                                  streamForm: {
+                                    ...f.streamForm,
+                                    realityShortIds: randomRealityShortIds(),
+                                  },
+                                }))
+                              }
+                            >
+                              {t("pages.inbounds.genRealityShortIds", {
+                                defaultValue: "Generate",
+                              })}
+                            </Button>
+                          </div>
+                          <TextArea
+                            id="in-rsid"
+                            className="min-h-[72px]"
+                            value={form.streamForm.realityShortIds}
+                            onChange={(e) =>
+                              setStreamFormField("realityShortIds", e.target.value)
                             }
-                          >
-                            {t("pages.inbounds.genRealityShortIds", {
-                              defaultValue: "Generate",
-                            })}
-                          </Button>
+                            placeholder=""
+                          />
                         </div>
-                        <TextArea
-                          id="in-rsid"
-                          className="min-h-[72px]"
-                          value={form.streamForm.realityShortIds}
-                          onChange={(e) =>
-                            setStreamFormField("realityShortIds", e.target.value)
-                          }
-                          placeholder=""
-                        />
                       </div>
                       <div>
                         <label
@@ -2559,73 +2595,115 @@ export function InboundsPage() {
                           }
                         />
                       </div>
-                      <div>
-                        <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                          htmlFor="in-rpbk"
-                        >
-                          {t("pages.inbounds.publicKey", { defaultValue: "Public key" })}
-                        </label>
-                        <TextArea
-                          id="in-rpbk"
-                          className="min-h-[72px] font-mono text-xs"
-                          value={form.streamForm.realityPublicKey}
-                          onChange={(e) =>
-                            setStreamFormField("realityPublicKey", e.target.value)
-                          }
-                        />
+                      <div className="rounded-lg border border-[var(--border)]/80 p-3">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-[var(--fg-muted)]">
+                            {t("pages.inbounds.realityX25519Section", {
+                              defaultValue: "REALITY (X25519) key pair",
+                            })}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="shrink-0 text-xs"
+                            onClick={() => void generateRealityX25519()}
+                          >
+                            {t("pages.inbounds.genRealityX25519", {
+                              defaultValue: "Generate key pair",
+                            })}
+                          </Button>
+                        </div>
+                        <div className="space-y-2">
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-rpbk"
+                            >
+                              {t("pages.inbounds.publicKey", { defaultValue: "Public key" })}
+                            </label>
+                            <TextArea
+                              id="in-rpbk"
+                              className="min-h-[72px] font-mono text-xs"
+                              value={form.streamForm.realityPublicKey}
+                              onChange={(e) =>
+                                setStreamFormField("realityPublicKey", e.target.value)
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-rpvk"
+                            >
+                              {t("pages.inbounds.privatekey", { defaultValue: "Private key" })}
+                            </label>
+                            <TextArea
+                              id="in-rpvk"
+                              className="min-h-[88px] font-mono text-xs"
+                              value={form.streamForm.realityPrivateKey}
+                              onChange={(e) =>
+                                setStreamFormField("realityPrivateKey", e.target.value)
+                              }
+                            />
+                          </div>
+                        </div>
                       </div>
-                      <div>
-                        <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                          htmlFor="in-rpvk"
-                        >
-                          {t("pages.inbounds.privatekey", { defaultValue: "Private key" })}
-                        </label>
-                        <TextArea
-                          id="in-rpvk"
-                          className="min-h-[88px] font-mono text-xs"
-                          value={form.streamForm.realityPrivateKey}
-                          onChange={(e) =>
-                            setStreamFormField("realityPrivateKey", e.target.value)
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                          htmlFor="in-rmldsa-seed"
-                        >
-                          {t("pages.inbounds.realityMldsa65Seed", {
-                            defaultValue: "mldsa65 seed (optional)",
-                          })}
-                        </label>
-                        <TextArea
-                          id="in-rmldsa-seed"
-                          className="min-h-[64px] font-mono text-xs"
-                          value={form.streamForm.realityMldsa65Seed}
-                          onChange={(e) =>
-                            setStreamFormField("realityMldsa65Seed", e.target.value)
-                          }
-                        />
-                      </div>
-                      <div>
-                        <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                          htmlFor="in-rmldsa-v"
-                        >
-                          {t("pages.inbounds.realityMldsa65Verify", {
-                            defaultValue: "mldsa65 verify (optional)",
-                          })}
-                        </label>
-                        <TextArea
-                          id="in-rmldsa-v"
-                          className="min-h-[64px] font-mono text-xs"
-                          value={form.streamForm.realityMldsa65Verify}
-                          onChange={(e) =>
-                            setStreamFormField("realityMldsa65Verify", e.target.value)
-                          }
-                        />
+                      <div className="rounded-lg border border-[var(--border)]/80 p-3">
+                        <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                          <span className="text-xs font-medium text-[var(--fg-muted)]">
+                            {t("pages.inbounds.realityMldsa65Section", {
+                              defaultValue: "ML-DSA-65 (optional)",
+                            })}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="shrink-0 text-xs"
+                            onClick={() => void generateRealityMldsa65()}
+                          >
+                            {t("pages.inbounds.genRealityMldsa65", {
+                              defaultValue: "Generate",
+                            })}
+                          </Button>
+                        </div>
+                        <div className="space-y-2">
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-rmldsa-seed"
+                            >
+                              {t("pages.inbounds.realityMldsa65Seed", {
+                                defaultValue: "mldsa65 seed (optional)",
+                              })}
+                            </label>
+                            <TextArea
+                              id="in-rmldsa-seed"
+                              className="min-h-[64px] font-mono text-xs"
+                              value={form.streamForm.realityMldsa65Seed}
+                              onChange={(e) =>
+                                setStreamFormField("realityMldsa65Seed", e.target.value)
+                              }
+                            />
+                          </div>
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-rmldsa-v"
+                            >
+                              {t("pages.inbounds.realityMldsa65Verify", {
+                                defaultValue: "mldsa65 verify (optional)",
+                              })}
+                            </label>
+                            <TextArea
+                              id="in-rmldsa-v"
+                              className="min-h-[64px] font-mono text-xs"
+                              value={form.streamForm.realityMldsa65Verify}
+                              onChange={(e) =>
+                                setStreamFormField("realityMldsa65Verify", e.target.value)
+                              }
+                            />
+                          </div>
+                        </div>
                       </div>
                     </div>
                   ) : null}
@@ -2824,11 +2902,373 @@ export function InboundsPage() {
                 </div>
               </>
             ) : null}
+            {form.protocol === "wireguard" ? (
+              <div className="space-y-3">
+                <p className="text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.wireguardSettingsHint", {
+                    defaultValue:
+                      "Server-side WireGuard (UDP): MTU, private key, tunnel addresses, optional peers (client public keys), noKernelTun, optional workers. Settings JSON is built on the server. No panel-managed client rows for this protocol.",
+                  })}
+                </p>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-wg-mtu"
+                  >
+                    {t("pages.inbounds.wireguardMtu", { defaultValue: "MTU" })}
+                  </label>
+                  <Input
+                    id="in-wg-mtu"
+                    type="number"
+                    className="font-mono text-xs"
+                    min={1280}
+                    max={9000}
+                    value={form.wireguardForm.mtu}
+                    onChange={(e) => {
+                      const n = parseInt(e.target.value, 10);
+                      setForm((f) => ({
+                        ...f,
+                        wireguardForm: {
+                          ...f.wireguardForm,
+                          mtu: Number.isFinite(n) && n > 0 ? n : 1420,
+                        },
+                      }));
+                    }}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-wg-sk"
+                  >
+                    {t("pages.inbounds.wireguardSecretKey", {
+                      defaultValue: "Secret key (server private, base64)",
+                    })}
+                  </label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="in-wg-sk"
+                      className="flex-1 font-mono text-xs"
+                      value={form.wireguardForm.secretKey}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          wireguardForm: {
+                            ...f.wireguardForm,
+                            secretKey: e.target.value,
+                          },
+                        }))
+                      }
+                      spellCheck={false}
+                    />
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="shrink-0 text-xs"
+                      onClick={() =>
+                        setForm((f) => ({
+                          ...f,
+                          wireguardForm: {
+                            ...f.wireguardForm,
+                            secretKey: newWireGuardSecretKeyBase64(),
+                          },
+                        }))
+                      }
+                    >
+                      {t("pages.inbounds.wireguardRegenKey", {
+                        defaultValue: "Regenerate key",
+                      })}
+                    </Button>
+                  </div>
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-wg-addr"
+                  >
+                    {t("pages.inbounds.wireguardAddress", {
+                      defaultValue: "Tunnel address (CIDR, one per line)",
+                    })}
+                  </label>
+                  <TextArea
+                    id="in-wg-addr"
+                    className="min-h-[68px] font-mono text-xs"
+                    value={form.wireguardForm.address}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        wireguardForm: {
+                          ...f.wireguardForm,
+                          address: e.target.value,
+                        },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <CheckboxField
+                  checked={form.wireguardForm.noKernelTun}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      wireguardForm: {
+                        ...f.wireguardForm,
+                        noKernelTun: e.target.checked,
+                      },
+                    }))
+                  }
+                  label={t("pages.inbounds.wireguardNoKernelTun", {
+                    defaultValue: "noKernelTun (userspace; recommended on some hosts)",
+                  })}
+                />
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-wg-workers"
+                  >
+                    {t("pages.inbounds.wireguardWorkers", {
+                      defaultValue: "Workers (optional)",
+                    })}
+                  </label>
+                  <Input
+                    id="in-wg-workers"
+                    type="number"
+                    className="font-mono text-xs"
+                    min={1}
+                    placeholder={t("pages.inbounds.wireguardWorkersPlaceholder", {
+                      defaultValue: "Leave empty to omit",
+                    })}
+                    value={form.wireguardForm.workers}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        wireguardForm: {
+                          ...f.wireguardForm,
+                          workers: e.target.value,
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <div>
+                  <div className="mb-1.5 flex items-center justify-between gap-2">
+                    <span className="text-xs font-medium text-[var(--fg-muted)]">
+                      {t("pages.inbounds.wireguardPeers", {
+                        defaultValue: "Peers (client public keys)",
+                      })}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="text-xs"
+                      onClick={() => {
+                        setForm((f) => {
+                          const g = newWireGuardPeerKeypairBase64();
+                          const n = 2 + f.wireguardForm.peers.length;
+                          return {
+                            ...f,
+                            wireguardForm: {
+                              ...f.wireguardForm,
+                              peers: [
+                                ...f.wireguardForm.peers,
+                                {
+                                  publicKey: g.publicKeyB64,
+                                  preSharedKey: "",
+                                  allowedIps: `10.8.0.${n}/32`,
+                                  clientPrivateKey: g.privateKeyB64,
+                                },
+                              ],
+                            },
+                          };
+                        });
+                      }}
+                    >
+                      {t("pages.inbounds.wireguardAddPeer", {
+                        defaultValue: "Add peer",
+                      })}
+                    </Button>
+                  </div>
+                  <div className="space-y-3">
+                    {form.wireguardForm.peers.length === 0 ? (
+                      <p className="text-xs text-[var(--fg-subtle)]">
+                        {t("pages.inbounds.wireguardPeersEmpty", {
+                          defaultValue: "No peers yet. Add a row for each client public key (optional PSK, allowedIPs).",
+                        })}
+                      </p>
+                    ) : null}
+                    {form.wireguardForm.peers.map((row, idx) => (
+                      <div
+                        key={idx}
+                        className="space-y-2 rounded-md border border-[var(--border)] p-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="text-xs text-[var(--fg-muted)]">
+                            {t("pages.inbounds.wireguardPeerN", {
+                              defaultValue: "Peer {{n}}",
+                              n: idx + 1,
+                            })}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="shrink-0 text-xs"
+                            onClick={() =>
+                              setForm((f) => ({
+                                ...f,
+                                wireguardForm: {
+                                  ...f.wireguardForm,
+                                  peers: f.wireguardForm.peers.filter(
+                                    (_p, i) => i !== idx,
+                                  ),
+                                },
+                              }))
+                            }
+                          >
+                            {t("pages.inbounds.wireguardRemovePeer", {
+                              defaultValue: "Remove",
+                            })}
+                          </Button>
+                        </div>
+                        <Input
+                          className="font-mono text-xs"
+                          value={row.publicKey}
+                          placeholder="publicKey (base64) — on server / [Peer] on client"
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setForm((f) => {
+                              const next = f.wireguardForm.peers.slice();
+                              const cur = next[idx]!;
+                              next[idx] = {
+                                ...cur,
+                                publicKey: v,
+                                clientPrivateKey: "",
+                              };
+                              return {
+                                ...f,
+                                wireguardForm: { ...f.wireguardForm, peers: next },
+                              };
+                            });
+                          }}
+                          spellCheck={false}
+                        />
+                        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:gap-2">
+                          <div className="min-w-0 flex-1">
+                            <label className="mb-0.5 block text-[10px] text-[var(--fg-muted)]">
+                              {t("pages.inbounds.wireguardClientPrivate", {
+                                defaultValue: "Client private key (for user [Interface] — not sent to Xray)",
+                              })}
+                            </label>
+                            <Input
+                              className="font-mono text-xs"
+                              value={row.clientPrivateKey ?? ""}
+                              placeholder={t("pages.inbounds.wireguardClientPrivatePlaceholder", {
+                                defaultValue: "Generated with public key, or paste",
+                              })}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setForm((f) => {
+                                  const next = f.wireguardForm.peers.slice();
+                                  const cur = next[idx]!;
+                                  next[idx] = { ...cur, clientPrivateKey: v };
+                                  return {
+                                    ...f,
+                                    wireguardForm: { ...f.wireguardForm, peers: next },
+                                  };
+                                });
+                              }}
+                              spellCheck={false}
+                            />
+                          </div>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="shrink-0 text-xs"
+                            onClick={() => {
+                              const g = newWireGuardPeerKeypairBase64();
+                              setForm((f) => {
+                                const next = f.wireguardForm.peers.slice();
+                                const cur = next[idx]!;
+                                next[idx] = {
+                                  ...cur,
+                                  publicKey: g.publicKeyB64,
+                                  clientPrivateKey: g.privateKeyB64,
+                                };
+                                return {
+                                  ...f,
+                                  wireguardForm: { ...f.wireguardForm, peers: next },
+                                };
+                              });
+                            }}
+                          >
+                            {t("pages.inbounds.wireguardRegenPeerKeys", {
+                              defaultValue: "New client keys",
+                            })}
+                          </Button>
+                        </div>
+                        <Input
+                          className="font-mono text-xs"
+                          value={row.preSharedKey}
+                          placeholder="preSharedKey (optional)"
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setForm((f) => {
+                              const next = f.wireguardForm.peers.slice();
+                              next[idx] = { ...next[idx]!, preSharedKey: v };
+                              return {
+                                ...f,
+                                wireguardForm: { ...f.wireguardForm, peers: next },
+                              };
+                            });
+                          }}
+                          spellCheck={false}
+                        />
+                        <TextArea
+                          className="min-h-[52px] font-mono text-xs"
+                          value={row.allowedIps}
+                          placeholder="allowedIPs (CIDR, comma or newline)"
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setForm((f) => {
+                              const next = f.wireguardForm.peers.slice();
+                              next[idx] = { ...next[idx]!, allowedIps: v };
+                              return {
+                                ...f,
+                                wireguardForm: { ...f.wireguardForm, peers: next },
+                              };
+                            });
+                          }}
+                          spellCheck={false}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="text-xs"
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        wireguardForm: defaultWireguardForm(),
+                      }))
+                    }
+                  >
+                    {t("pages.inbounds.wireguardResetDefaults", {
+                      defaultValue: "Reset to defaults (new private key)",
+                    })}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
             {form.protocol !== "vless" &&
             form.protocol !== "trojan" &&
             !isHysteriaFamily &&
             form.protocol !== "shadowsocks" &&
-            form.protocol !== "mixed" ? (
+            form.protocol !== "mixed" &&
+            form.protocol !== "wireguard" ? (
               <p className="text-xs text-[var(--fg-subtle)]">
                 {t("pages.inbounds.sectionAuthNone", {
                   defaultValue:

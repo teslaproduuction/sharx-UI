@@ -34,7 +34,7 @@ const inboundObject = (d: TLike) => ({
     tag: { type: "string", description: d("pages.xray.jsonSchema.inboundTag", { defaultValue: "Listener tag" }) },
     port: { oneOf: [{ type: "integer" }, { type: "string" }] },
     listen: { type: "string", description: d("pages.xray.jsonSchema.inboundListen", { defaultValue: "Bind address" }) },
-    protocol: { type: "string", description: d("pages.xray.jsonSchema.inboundProtocol", { defaultValue: "e.g. vmess, vless, http, trojan" }) },
+    protocol: { type: "string", description: d("pages.xray.jsonSchema.inboundProtocol", { defaultValue: "e.g. vmess, vless, http, trojan, wireguard" }) },
     settings: { type: "object" },
     streamSettings: buildXrayStreamSettingsSchema(d),
     sniffing: { type: "object" },

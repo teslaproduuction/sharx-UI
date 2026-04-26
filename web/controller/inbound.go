@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
@@ -15,6 +16,36 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// inboundBindBody is model.Inbound with optional `wireguard` form payload; settings JSON for wireguard is built server-side.
+type inboundBindBody struct {
+	model.Inbound
+	Wireguard *service.WireGuardInboundRequest `json:"wireguard" form:"-"`
+}
+
+// applyWireGuardPanelForm sets Inbound.Settings from `wireguard` or defaults when the protocol is wireguard.
+func applyWireGuardPanelForm(in *model.Inbound, wg *service.WireGuardInboundRequest) error {
+	if model.NormalizeProtocol(in.Protocol) != model.WireGuard {
+		return nil
+	}
+	if wg == nil {
+		s := strings.TrimSpace(in.Settings)
+		if s == "" || s == "{}" {
+			built, err := service.BuildWireGuardInboundSettingsJSON(nil)
+			if err != nil {
+				return err
+			}
+			in.Settings = built
+		}
+		return nil
+	}
+	built, err := service.BuildWireGuardInboundSettingsJSON(wg)
+	if err != nil {
+		return err
+	}
+	in.Settings = built
+	return nil
+}
 
 // InboundController handles HTTP requests related to Xray inbounds management.
 type InboundController struct {
@@ -124,7 +155,7 @@ func (a *InboundController) addInbound(c *gin.Context) {
 	var nodeIdsFromJSON []int
 	var nodeIdFromJSON *int
 	var hasNodeIdsInJSON, hasNodeIdInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract nodeIds
 		bodyBytes, err := c.GetRawData()
@@ -165,15 +196,21 @@ func (a *InboundController) addInbound(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
-	inbound := &model.Inbound{}
-	err := c.ShouldBind(inbound)
+
+	var bindBody inboundBindBody
+	err := c.ShouldBind(&bindBody)
 	if err != nil {
 		logger.Errorf("Failed to bind inbound data: %v", err)
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundCreateSuccess"), err)
 		return
 	}
-	
+	inbound := &bindBody.Inbound
+	if err = applyWireGuardPanelForm(inbound, bindBody.Wireguard); err != nil {
+		logger.Errorf("wireguard settings: %v", err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+
 	user := session.GetLoginUser(c)
 	inbound.UserId = user.Id
 	// Tag will be generated in AddInbound service based on multi-node mode
@@ -205,22 +242,22 @@ func (a *InboundController) addInbound(c *gin.Context) {
 
 	// Handle node assignment in multi-node mode
 	nodeService := service.NodeService{}
-	
+
 	// Get nodeIds from form (for form-encoded requests)
 	nodeIdsStr := c.PostFormArray("nodeIds")
 	logger.Debugf("Received nodeIds from form: %v", nodeIdsStr)
-	
+
 	// Check if nodeIds array was provided (even if empty)
 	nodeIdStr := c.PostForm("nodeId")
-	
+
 	// Determine which source to use: JSON takes precedence over form data
 	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON
 	useForm := (len(nodeIdsStr) > 0 || nodeIdStr != "") && !useJSON
-	
+
 	if useJSON || useForm {
 		var nodeIds []int
 		var nodeId *int
-		
+
 		if useJSON {
 			// Use data from JSON
 			nodeIds = nodeIdsFromJSON
@@ -241,7 +278,7 @@ func (a *InboundController) addInbound(c *gin.Context) {
 				}
 			}
 		}
-		
+
 		if len(nodeIds) > 0 {
 			// Assign to multiple nodes
 			if err := nodeService.AssignInboundToNodes(inbound.Id, nodeIds); err != nil {
@@ -313,12 +350,12 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 	// #region agent log
 	logger.Infof("[DEBUG-AGENT] updateInbound controller: parsed ID=%d", id)
 	// #endregion
-	
+
 	// Try to get nodeIds from JSON body first (if Content-Type is application/json)
 	var nodeIdsFromJSON []int
 	var nodeIdFromJSON *int
 	var hasNodeIdsInJSON, hasNodeIdInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract nodeIds
 		bodyBytes, err := c.GetRawData()
@@ -359,29 +396,35 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	// Get nodeIds from form (for form-encoded requests)
 	nodeIdsStr := c.PostFormArray("nodeIds")
 	logger.Debugf("Received nodeIds from form: %v (count: %d)", nodeIdsStr, len(nodeIdsStr))
-	
+
 	// Check if nodeIds array was provided
 	nodeIdStr := c.PostForm("nodeId")
 	logger.Debugf("Received nodeId from form: %s", nodeIdStr)
-	
+
 	// Check if nodeIds or nodeId was explicitly provided in the form
 	_, hasNodeIds := c.GetPostForm("nodeIds")
 	_, hasNodeId := c.GetPostForm("nodeId")
 	logger.Debugf("Form has nodeIds: %v, has nodeId: %v", hasNodeIds, hasNodeId)
 	logger.Debugf("JSON has nodeIds: %v (values: %v), has nodeId: %v (value: %v)", hasNodeIdsInJSON, nodeIdsFromJSON, hasNodeIdInJSON, nodeIdFromJSON)
-	
-	inbound := &model.Inbound{
-		Id: id,
-	}
+
+	var bindBody inboundBindBody
+	bindBody.Id = id
 	// Bind inbound data (nodeIds will be ignored since we handle it separately)
-	err = c.ShouldBind(inbound)
+	err = c.ShouldBind(&bindBody)
 	if err != nil {
 		logger.Errorf("Failed to bind inbound data: %v", err)
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.inboundUpdateSuccess"), err)
+		return
+	}
+	inbound := &bindBody.Inbound
+	inbound.Id = id
+	if err = applyWireGuardPanelForm(inbound, bindBody.Wireguard); err != nil {
+		logger.Errorf("wireguard settings: %v", err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
 	inbound, needRestart, err := a.inboundService.UpdateInbound(inbound)
@@ -395,16 +438,16 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 
 	// Handle node assignment in multi-node mode
 	nodeService := service.NodeService{}
-	
+
 	// Determine which source to use: JSON takes precedence over form data
 	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON
 	useForm := (hasNodeIds || hasNodeId) && !useJSON
-	
+
 	if useJSON || useForm {
 		var nodeIds []int
 		var nodeId *int
 		var hasNodeIdsFlag bool
-		
+
 		if useJSON {
 			// Use data from JSON
 			nodeIds = nodeIdsFromJSON
@@ -430,9 +473,9 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 				}
 			}
 		}
-		
+
 		logger.Debugf("Parsed nodeIds: %v, nodeId: %v", nodeIds, nodeId)
-		
+
 		if len(nodeIds) > 0 {
 			// Assign to multiple nodes
 			if err := nodeService.AssignInboundToNodes(inbound.Id, nodeIds); err != nil {

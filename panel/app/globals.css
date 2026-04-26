@@ -6,6 +6,8 @@
   --font-sans: var(--font-mont), "Montserrat", system-ui, sans-serif;
   --font-mono: var(--font-fira), "Fira Mono", ui-monospace, monospace;
   --font-heading: var(--font-unbounded), "Unbounded", system-ui, sans-serif;
+  /* Sacramento (OFL) — login welcome; falls back to --font-sans for scripts without Latin glyphs */
+  --font-script: var(--font-sacramento), var(--font-sans), cursive, serif;
 }
 
 @property --accent {
@@ -168,7 +170,8 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Login page — slow moving mesh (uses --accent / --accent-ambient)
+   Login page — vortex / funnel backdrop (uses --accent / --accent-ambient);
+   form sits in the center “throat”
 --------------------------------------------------------------------------- */
 
 .login-backdrop {
@@ -177,78 +180,116 @@
   z-index: 0;
   pointer-events: none;
   overflow: hidden;
-  background: var(--bg);
+  /* Center glow + edge falloff; inner halos so the ray hub reads brighter */
+  background:
+    radial-gradient(
+      ellipse 14% 13% at 50% 50%,
+      color-mix(in oklab, var(--accent) 22%, transparent) 0%,
+      color-mix(in oklab, var(--accent) 4%, transparent) 52%,
+      transparent 78%
+    ),
+    radial-gradient(
+      ellipse 36% 33% at 50% 50%,
+      color-mix(in oklab, var(--accent-ambient) 11%, transparent) 0%,
+      transparent 58%
+    ),
+    radial-gradient(
+      ellipse 130% 120% at 50% 50%,
+      transparent 0%,
+      var(--bg) 75%
+    ),
+    var(--bg);
 }
 
 .login-backdrop::before,
 .login-backdrop::after {
   content: "";
   position: absolute;
-  inset: -20%;
-  opacity: 0.55;
+  left: 50%;
+  top: 50%;
+  width: 200vmax;
+  height: 200vmax;
+  margin: -100vmax 0 0 -100vmax;
   will-change: transform;
 }
 
+/* Spiral arm layer A — slow clockwise drift + soft hub bloom on the rays */
 .login-backdrop::before {
-  background: radial-gradient(
-    closest-side at 35% 35%,
-    color-mix(in oklab, var(--accent) 34%, transparent) 0%,
-    transparent 72%
-  );
-  animation: login-orbit-a 22s ease-in-out infinite;
+  opacity: 0.42;
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      color-mix(in oklab, var(--accent) 18%, transparent) 0%,
+      color-mix(in oklab, var(--accent) 4%, transparent) 14%,
+      transparent 48%
+    ),
+    repeating-conic-gradient(
+      from 0deg at 50% 50%,
+      transparent 0deg 2.2deg,
+      color-mix(in oklab, var(--accent) 16%, transparent) 2.2deg 2.9deg
+    );
+  animation: login-vortex-cw 100s linear infinite;
 }
 
+/* Spiral arm layer B — counter-rotate; secondary tint near the center */
 .login-backdrop::after {
-  background: radial-gradient(
-    closest-side at 70% 65%,
-    color-mix(in oklab, var(--accent-ambient) 26%, transparent) 0%,
-    transparent 70%
-  );
-  animation: login-orbit-b 28s ease-in-out infinite;
+  opacity: 0.32;
+  background:
+    radial-gradient(
+      circle at 50% 50%,
+      color-mix(in oklab, var(--accent-ambient) 14%, transparent) 0%,
+      color-mix(in oklab, var(--accent-ambient) 3%, transparent) 18%,
+      transparent 42%
+    ),
+    repeating-conic-gradient(
+      from 32deg at 50% 50%,
+      transparent 0deg 2.6deg,
+      color-mix(in oklab, var(--accent-ambient) 12%, transparent) 2.6deg 3.4deg
+    );
+  animation: login-vortex-ccw 140s linear infinite;
 }
 
 @media (min-width: 64em) {
-  .login-backdrop::before,
+  .login-backdrop::before {
+    opacity: 0.36;
+  }
   .login-backdrop::after {
-    opacity: 0.48;
+    opacity: 0.28;
   }
 }
 
-@keyframes login-orbit-a {
-  0%,
-  100% {
-    transform: translate(0, 0) scale(1) rotate(0deg);
-  }
-  33% {
-    transform: translate(6%, 8%) scale(1.08) rotate(2deg);
-  }
-  66% {
-    transform: translate(-4%, 4%) scale(0.95) rotate(-1.5deg);
+@keyframes login-vortex-cw {
+  to {
+    transform: rotate(360deg);
   }
 }
 
-@keyframes login-orbit-b {
-  0%,
-  100% {
-    transform: translate(0, 0) scale(1.05) rotate(0deg);
-  }
-  40% {
-    transform: translate(-8%, -6%) scale(1) rotate(-2.5deg);
-  }
-  70% {
-    transform: translate(5%, 5%) scale(1.1) rotate(1deg);
+@keyframes login-vortex-ccw {
+  to {
+    transform: rotate(-360deg);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .login-backdrop {
-    background: var(--bg);
+    background:
+      radial-gradient(
+        ellipse 16% 15% at 50% 50%,
+        color-mix(in oklab, var(--accent) 10%, transparent) 0%,
+        transparent 65%
+      ),
+      radial-gradient(
+        ellipse 45% 42% at 50% 50%,
+        color-mix(in oklab, var(--accent-ambient) 5%, transparent) 0%,
+        transparent 50%
+      ),
+      var(--bg);
   }
   .login-backdrop::before,
   .login-backdrop::after {
     animation: none;
-    transform: none;
-    opacity: 0.2;
+    transform: rotate(12deg);
+    opacity: 0.12;
   }
 }
 
@@ -679,6 +720,12 @@ h6 {
 h1.font-heading,
 .font-heading {
   font-family: var(--font-heading);
+}
+
+.font-login-welcome {
+  font-family: var(--font-script);
+  font-weight: 400;
+  font-synthesis: none;
 }
 
 .panel-doc-sidebar {

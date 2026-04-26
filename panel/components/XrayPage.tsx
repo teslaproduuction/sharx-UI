@@ -122,6 +122,8 @@ export function XrayPage() {
     }
   }, [t, toast]);
 
+  const standalone = !multi;
+
   const loadXrayHint = useCallback(async () => {
     const r = await getJson<string>(panel("xray/getXrayResult"));
     if (r.success && r.obj) {
@@ -351,18 +353,33 @@ export function XrayPage() {
 
   const sectionLabel = useCallback((k: string) => sectionButtonLabel(t, k), [t]);
 
+  const pageDescription = useMemo(() => {
+    if (view === "template") {
+      return standalone
+        ? t("pages.xray.TemplateDescStandalone", {
+            defaultValue:
+              "Edit the JSON and save to apply the config to the local Xray core. In stand-alone mode there is no separate profile to publish — saving updates the server template used by the core.",
+          })
+        : t("pages.xray.TemplateDesc");
+    }
+    return standalone
+      ? t("pages.xray.runtimeViewStandalone", {
+          defaultValue:
+            "Read-only: effective configuration JSON currently loaded by the core on this machine.",
+        })
+      : t("pages.xray.runtimeView");
+  }, [view, standalone, t]);
+
   return (
     <PageScaffold compact>
       <PageHeader
         title={t("pages.xray.title")}
-        description={
-          view === "template" ? t("pages.xray.TemplateDesc") : t("pages.xray.runtimeView")
-        }
+        description={pageDescription}
         icon={Wrench}
         iconTone="accent"
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <div className="mr-auto flex min-w-0 flex-wrap items-center gap-1 sm:mr-2">
+          <div className="flex w-full min-w-0 flex-wrap items-center justify-end gap-2">
+            <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
               <Button
                 type="button"
                 variant={view === "template" ? "primary" : "secondary"}
@@ -370,7 +387,9 @@ export function XrayPage() {
                 className="!gap-2"
               >
                 <FileCode2 size={16} />
-                {t("pages.xray.Template")}
+                {standalone
+                  ? t("pages.xray.configEditorTab", { defaultValue: "Core configuration" })
+                  : t("pages.xray.Template")}
               </Button>
               <Button
                 type="button"
@@ -379,25 +398,33 @@ export function XrayPage() {
                 className="!gap-2"
               >
                 <Radio size={16} />
-                {t("pages.xray.runtimeView")}
+                {t("pages.xray.runtimeViewTab", { defaultValue: "Effective config" })}
               </Button>
             </div>
-            {view === "template" && (
+            {view === "template" ? (
               <>
-                <Button variant="secondary" onClick={revert} disabled={!dirty} className="!gap-2">
-                  <RotateCcw size={16} />
-                  {t("reset")}
-                </Button>
-                <Button variant="secondary" onClick={() => setResetOpen(true)} className="!gap-2">
-                  <Wand2 size={16} />
-                  {t("pages.xrayCoreConfigProfiles.resetToDefaultTemplate")}
-                </Button>
-                <Button variant="primary" onClick={() => void save()} loading={saving} disabled={!dirty} className="!gap-2">
-                  <Save size={16} />
-                  {t("pages.xray.save")}
-                </Button>
+                <span
+                  className="hidden h-7 w-px shrink-0 self-center bg-[var(--border)] sm:block"
+                  aria-hidden
+                />
+                <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
+                  <Button variant="secondary" onClick={revert} disabled={!dirty} className="!gap-2">
+                    <RotateCcw size={16} />
+                    {t("reset")}
+                  </Button>
+                  <Button variant="secondary" onClick={() => setResetOpen(true)} className="!gap-2">
+                    <Wand2 size={16} />
+                    {t("pages.xrayCoreConfigProfiles.resetToDefaultTemplate")}
+                  </Button>
+                  <Button variant="primary" onClick={() => void save()} loading={saving} disabled={!dirty} className="!gap-2">
+                    <Save size={16} />
+                    {standalone
+                      ? t("pages.xray.saveApply", { defaultValue: "Save & apply" })
+                      : t("pages.xray.save")}
+                  </Button>
+                </div>
               </>
-            )}
+            ) : null}
           </div>
         }
       />
@@ -463,7 +490,14 @@ export function XrayPage() {
 
           {view === "template" && !loading && templateOk && navId !== "general" ? (
             <div className="space-y-2">
-              <p className="text-xs text-[var(--fg-muted)]">{t("pages.xray.sliceEditorHint")}</p>
+              <p className="text-xs text-[var(--fg-muted)]">
+                {standalone
+                  ? t("pages.xray.sliceEditorHintStandalone", {
+                      defaultValue:
+                        "Edit this section as JSON or use the steps above. Saving applies changes to the core on this server.",
+                    })
+                  : t("pages.xray.sliceEditorHint")}
+              </p>
               {navId === "routing" ? (
                 <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
                   {t("pages.xray.RoutingsDesc")} {t("pages.xray.balancer.balancerDesc")}
