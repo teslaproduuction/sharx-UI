@@ -1215,6 +1215,8 @@ type ClientFormState = {
   comment: string;
   reset: string;
   tgId: string;
+  /** Subscription id (пустой на сервере = сгенерировать при создании) */
+  subId: string;
   announce: string;
   hwidEnabled: boolean;
   maxHwid: string;
@@ -1229,6 +1231,7 @@ const FORM_DEFAULT: ClientFormState = {
   comment: "",
   reset: "0",
   tgId: "",
+  subId: "",
   announce: "",
   hwidEnabled: false,
   maxHwid: "0",
@@ -1654,6 +1657,35 @@ function ClientUnifiedCard({
                     autoComplete="off"
                   />
                 </div>
+
+                {variant === "create" ? (
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor={id("subid-new")}
+                    >
+                      {t("pages.clients.subId", { defaultValue: "Subscription ID" })}
+                    </label>
+                    <Input
+                      id={id("subid-new")}
+                      className="font-mono text-xs"
+                      value={form.subId}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, subId: e.target.value }))
+                      }
+                      placeholder={t("pages.clients.subIdPlaceholder", {
+                        defaultValue: "Auto if empty (on create)",
+                      })}
+                      maxLength={64}
+                      autoComplete="off"
+                    />
+                    <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                      {t("pages.clients.subIdHint", {
+                        defaultValue: "Optional. If empty, a random ID is generated.",
+                      })}
+                    </p>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -1664,27 +1696,40 @@ function ClientUnifiedCard({
                   {t("pages.clients.cardMetaTitle", { defaultValue: "Account details" })}
                 </SectionLabel>
                 <ul className="space-y-2.5 text-xs">
-                  {r.subId ? (
-                    <li className="flex flex-wrap items-center justify-between gap-2 border-b border-dashed border-[var(--border)] pb-2">
-                      <span className="text-[var(--fg-muted)]">
-                        {t("pages.clients.subIdReadonly", { defaultValue: "Subscription ID" })}
-                      </span>
-                      <span className="flex min-w-0 items-center gap-1 font-mono text-[var(--fg)]">
-                        <span className="truncate" title={r.subId}>
-                          {r.subId}
-                        </span>
+                  <li className="space-y-1.5 border-b border-dashed border-[var(--border)] pb-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <label
+                        className="text-[var(--fg-muted)]"
+                        htmlFor={id("subid")}
+                      >
+                        {t("pages.clients.subId", { defaultValue: "Subscription ID" })}
+                      </label>
+                      {form.subId.trim() ? (
                         <IconButton
                           type="button"
                           label={t("pages.clients.copySubId", {
                             defaultValue: "Copy subscription ID to clipboard",
                           })}
-                          onClick={() => copyText(r.subId!)}
+                          onClick={() => copyText(form.subId.trim())}
                         >
                           <Copy size={12} />
                         </IconButton>
-                      </span>
-                    </li>
-                  ) : null}
+                      ) : null}
+                    </div>
+                    <Input
+                      id={id("subid")}
+                      className="font-mono text-xs"
+                      value={form.subId}
+                      onChange={(e) =>
+                        setForm((f) => ({ ...f, subId: e.target.value }))
+                      }
+                      placeholder={t("pages.clients.subIdPlaceholder", {
+                        defaultValue: "Auto if empty (on create)",
+                      })}
+                      maxLength={64}
+                      autoComplete="off"
+                    />
+                  </li>
                   <li className="flex flex-wrap justify-between gap-2">
                     <span className="text-[var(--fg-muted)]">
                       {t("pages.clients.cardCreatedAt", { defaultValue: "Created" })}
@@ -2904,6 +2949,7 @@ export function ClientsPage() {
         comment: c.comment ?? "",
         reset: String(c.reset ?? 0),
         tgId: c.tgId != null && c.tgId > 0 ? String(c.tgId) : "",
+        subId: c.subId ?? "",
         announce: c.announce ?? "",
         hwidEnabled: !!c.hwidEnabled,
         maxHwid: String(c.maxHwid ?? 0),
@@ -2998,6 +3044,7 @@ export function ClientsPage() {
     try {
       const isEdit = editingId != null;
 
+      const subIdTrim = form.subId.trim();
       const body: Record<string, unknown> = {
         email,
         enable: form.enable,
@@ -3007,6 +3054,7 @@ export function ClientsPage() {
         maxHwid,
         reset: resetVal,
         tgId,
+        subId: subIdTrim,
         comment,
         announce,
       };
@@ -3029,7 +3077,7 @@ export function ClientsPage() {
       const r = await postJson<unknown>(url, body, true);
       if (r.success) {
         const msg = (r as { msg?: string }).msg;
-        const obj = (r as { obj?: { uuid?: string } }).obj;
+        const obj = (r as { obj?: { id?: number; uuid?: string; subId?: string } }).obj;
         if (!isEdit && obj?.uuid) {
           try {
             await copyTextToClipboard(obj.uuid);
@@ -3047,8 +3095,14 @@ export function ClientsPage() {
         } else {
           toast.success(msg || (isEdit ? t("pages.clients.editSuccess", { defaultValue: "Client updated." }) : t("pages.clients.addSuccess")));
         }
-        closeSheet();
-        void load();
+        if (!isEdit && obj?.id) {
+          setSheetClientId(obj.id);
+          setSheetMode("edit");
+          await load();
+          await loadClientIntoForm(obj.id);
+        } else {
+          void load();
+        }
       } else {
         toast.error(
           (r as { msg?: string }).msg || t("pages.clients.addError"),
@@ -3706,7 +3760,11 @@ export function ClientsPage() {
               disabled={fetchingClient}
               onClick={() => void submitClient()}
             >
-              {isEdit ? t("update") : t("create")}
+              {modalSubmitting
+                ? null
+                : isEdit
+                  ? t("update")
+                  : t("create")}
             </Button>
           </div>
         }

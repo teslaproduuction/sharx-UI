@@ -6,7 +6,7 @@ services:
     build:
       context: ..
       dockerfile: node/Dockerfile
-    # image: sharx/sharxnode:latest
+    # image: registry.konstpic.ru/sharx/sharxnode:latest
     container_name: sharx-node
     restart: unless-stopped
     # Required for drop-connections (conntrack) API:
