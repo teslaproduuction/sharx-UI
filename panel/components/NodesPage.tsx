@@ -66,8 +66,8 @@ type NodeRow = {
   enable?: boolean;
 };
 
-/** Default image for the copy-paste compose snippet; replace with your registry path if needed. */
-const NODE_DOCKER_IMAGE = "sharx/sharxnode:latest";
+/** Harbor-style path (same as published images); self-hosters may replace host/project. */
+const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
 
 function xrayStateLabel(state: string | undefined, t: TFunction): string {
   const s = (state || "unknown").toLowerCase();
