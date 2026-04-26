@@ -155,7 +155,7 @@ export function NodesPage() {
     name: "",
     host: "",
     port: DEFAULT_NODE_PORT,
-    useTls: true,
+    useTls: false,
     certPath: "",
     keyPath: "",
     insecureTls: false,
@@ -245,7 +245,7 @@ export function NodesPage() {
       name: "",
       host: "",
       port: DEFAULT_NODE_PORT,
-      useTls: true,
+      useTls: false,
       certPath: "",
       keyPath: "",
       insecureTls: false,
@@ -317,7 +317,6 @@ export function NodesPage() {
     const name = joinNameFlag(form.nameFlag, form.name.trim());
     if (!isValidNodePortString(form.port)) return null;
     const address = buildAddressFromHostPort(form.host, form.port, {
-      legacyAuth: false,
       useTls: form.useTls,
     });
     if (!name || !address) return null;
@@ -329,7 +328,6 @@ export function NodesPage() {
     const body: Record<string, unknown> = {
       name,
       address,
-      legacyAuth: false,
       useTls: form.useTls,
       certPath: form.certPath.trim(),
       keyPath: form.keyPath.trim(),
@@ -534,12 +532,10 @@ export function NodesPage() {
   const publicUrlHint = useMemo(() => {
     if (!isValidNodePortString(form.port)) return "";
     const combined = buildAddressFromHostPort(form.host, form.port, {
-      legacyAuth: false,
       useTls: form.useTls,
     });
     if (!combined) return "";
     return addressForHostComposeHint(combined, {
-      legacyAuth: false,
       useTls: form.useTls,
     });
   }, [form.host, form.port, form.useTls]);
@@ -730,7 +726,6 @@ export function NodesPage() {
       editForm.host,
       editForm.port,
       {
-        legacyAuth: false,
         useTls: editForm.useTls,
       },
     );

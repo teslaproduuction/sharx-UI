@@ -95,20 +95,49 @@ func (s *NodeService) UpdateNodeGeography(id int, lat, lng float64, source strin
 	}).Error
 }
 
-// nodeRequestBaseURL is the base URL the panel uses for requests to a node. Pairing uses mTLS; http:// is upgraded to https://.
+// nodeRequestBaseURL is the base URL the panel uses for requests to a node.
+// Pairing workers only accept HTTPS (mTLS). Legacy nodes honor use_tls: plain http when UseTLS is false.
 func nodeRequestBaseURL(n *model.Node) string {
 	if n == nil {
 		return ""
 	}
-	u, err := url.Parse(n.Address)
+	raw := strings.TrimSpace(n.Address)
+	if raw == "" {
+		return ""
+	}
+	u, err := url.Parse(raw)
 	if err != nil {
-		return n.Address
+		return raw
 	}
-	if u.Scheme == "http" {
-		u.Scheme = "https"
-		return u.String()
+	trim := func(s string) string { return strings.TrimRight(s, "/") }
+
+	if n.IsPairingMode() {
+		if u.Scheme == "" || u.Scheme == "http" {
+			if u.Scheme == "" {
+				u, _ = url.Parse("https://" + raw)
+			} else {
+				u.Scheme = "https"
+			}
+		}
+		return trim(u.String())
 	}
-	return n.Address
+	if n.UseTLS {
+		if u.Scheme == "" || u.Scheme == "http" {
+			if u.Scheme == "" {
+				u, _ = url.Parse("https://" + raw)
+			} else {
+				u.Scheme = "https"
+			}
+		}
+		return trim(u.String())
+	}
+	if u.Scheme == "https" {
+		u.Scheme = "http"
+	}
+	if u.Scheme == "" {
+		u, _ = url.Parse("http://" + raw)
+	}
+	return trim(u.String())
 }
 
 // AddNode creates a new node (pairing-only; use PrepareNodePairing before insert).
@@ -225,13 +254,9 @@ func (s *NodeService) DeleteNode(id int) error {
 }
 
 // SetNodeEnabled sets the node's enabled flag in the database.
-// Column `enable` is INTEGER (see migration 0028); pass 0/1 — pgx cannot encode bool into int4.
+// Column `enable` is BOOLEAN (migration 0033); use bool — pgx cannot encode int into bool.
 func (s *NodeService) SetNodeEnabled(id int, enable bool) error {
-	v := 0
-	if enable {
-		v = 1
-	}
-	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("enable", v).Error
+	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("enable", enable).Error
 }
 
 // SetNodeXrayState persists worker Xray state (running | stopped | error | unknown).
@@ -394,8 +419,12 @@ func (s *NodeService) notifyNodeStatusChange(node *model.Node, oldStatus, newSta
 	tgbotService.SendMsgToTgbotAdmins(msg)
 }
 
-// createHTTPClient returns an mTLS client for the panel to call pairing-only nodes.
-func (s *NodeService) createHTTPClient(_ *model.Node, timeout time.Duration) (*http.Client, error) {
+// createHTTPClient returns an HTTP client for panel→node calls.
+// Pairing (and legacy with UseTLS) use mTLS; legacy with UseTLS false uses plain HTTP.
+func (s *NodeService) createHTTPClient(node *model.Node, timeout time.Duration) (*http.Client, error) {
+	if node != nil && !node.IsPairingMode() && !node.UseTLS {
+		return &http.Client{Timeout: timeout}, nil
+	}
 	pairing := &PanelPairingService{}
 	cfg, err := pairing.GetClientTLSConfig()
 	if err != nil {
