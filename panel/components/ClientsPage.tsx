@@ -469,6 +469,159 @@ function rowTsForSort(
 type FilterConn = "" | "online" | "offline";
 type FilterAcct = "" | "disabled" | "active" | "expired_traffic" | "expired_time";
 
+const CLIENTS_TABLE_PREFS_KEY = "sharx.panel.clients.tablePrefs";
+/** v1: only `columnVisibility`. v2: full table UI prefs. */
+const CLIENTS_TABLE_PREFS_V = 2 as const;
+
+type ClientsTablePrefsState = {
+  columnVisibility: Record<DataColumnId, boolean>;
+  columnFilters: Record<ColumnFilterId, string>;
+  filtersVisible: boolean;
+  filterConn: FilterConn;
+  filterAcct: FilterAcct;
+  filterInboundId: string;
+  filterGroupId: string;
+  trafficCompareOp: CompareOp;
+  expiryCompareOp: CompareOp;
+  sortKey: ClientSortKey;
+  sortDir: SortDir;
+};
+
+function defaultClientsTablePrefs(): ClientsTablePrefsState {
+  return {
+    columnVisibility: { ...DEFAULT_COLUMN_VISIBILITY },
+    columnFilters: { ...DEFAULT_COLUMN_FILTERS },
+    filtersVisible: false,
+    filterConn: "",
+    filterAcct: "",
+    filterInboundId: "",
+    filterGroupId: "",
+    trafficCompareOp: "",
+    expiryCompareOp: "",
+    sortKey: "traffic",
+    sortDir: "desc",
+  };
+}
+
+function mergeStoredColumnVisibility(cv: unknown): Record<DataColumnId, boolean> {
+  const next = { ...DEFAULT_COLUMN_VISIBILITY };
+  if (!cv || typeof cv !== "object" || Array.isArray(cv)) return next;
+  const o = cv as Record<string, unknown>;
+  for (const col of DATA_COLUMN_ORDER) {
+    if (col in o && typeof o[col] === "boolean") next[col] = o[col];
+  }
+  return next;
+}
+
+function mergeStoredColumnFilters(cf: unknown): Record<ColumnFilterId, string> {
+  const out = { ...DEFAULT_COLUMN_FILTERS };
+  if (!cf || typeof cf !== "object" || Array.isArray(cf)) return out;
+  const o = cf as Record<string, unknown>;
+  for (const k of Object.keys(DEFAULT_COLUMN_FILTERS) as ColumnFilterId[]) {
+    if (k in o && typeof o[k] === "string") out[k] = o[k];
+  }
+  return out;
+}
+
+function isFilterConn(s: string): s is FilterConn {
+  return s === "" || s === "online" || s === "offline";
+}
+
+function isFilterAcct(s: string): s is FilterAcct {
+  return (
+    s === "" ||
+    s === "disabled" ||
+    s === "active" ||
+    s === "expired_traffic" ||
+    s === "expired_time"
+  );
+}
+
+function isCompareOpStored(s: string): s is CompareOp {
+  return s === "" || s === "gt" || s === "lt" || s === "eq";
+}
+
+function isClientSortKey(s: string): s is ClientSortKey {
+  return (DATA_COLUMN_ORDER as readonly string[]).includes(s);
+}
+
+function isSortDirStored(s: string): s is SortDir {
+  return s === "asc" || s === "desc";
+}
+
+function loadClientsTablePrefsFromStorage(): ClientsTablePrefsState {
+  if (typeof window === "undefined") return defaultClientsTablePrefs();
+  try {
+    const raw = localStorage.getItem(CLIENTS_TABLE_PREFS_KEY);
+    if (!raw) return defaultClientsTablePrefs();
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object") return defaultClientsTablePrefs();
+    const p = parsed as Record<string, unknown>;
+    const columnVisibility = mergeStoredColumnVisibility(p.columnVisibility);
+    const base = defaultClientsTablePrefs();
+    const v = p.v;
+
+    if (v === 1) {
+      return { ...base, columnVisibility };
+    }
+    if (v !== CLIENTS_TABLE_PREFS_V) {
+      if (p.columnVisibility != null) {
+        return { ...base, columnVisibility };
+      }
+      return defaultClientsTablePrefs();
+    }
+
+    return {
+      columnVisibility,
+      columnFilters: mergeStoredColumnFilters(p.columnFilters),
+      filtersVisible:
+        typeof p.filtersVisible === "boolean" ? p.filtersVisible : base.filtersVisible,
+      filterConn:
+        typeof p.filterConn === "string" && isFilterConn(p.filterConn)
+          ? p.filterConn
+          : base.filterConn,
+      filterAcct:
+        typeof p.filterAcct === "string" && isFilterAcct(p.filterAcct)
+          ? p.filterAcct
+          : base.filterAcct,
+      filterInboundId:
+        typeof p.filterInboundId === "string" ? p.filterInboundId : base.filterInboundId,
+      filterGroupId:
+        typeof p.filterGroupId === "string" ? p.filterGroupId : base.filterGroupId,
+      trafficCompareOp:
+        typeof p.trafficCompareOp === "string" && isCompareOpStored(p.trafficCompareOp)
+          ? p.trafficCompareOp
+          : base.trafficCompareOp,
+      expiryCompareOp:
+        typeof p.expiryCompareOp === "string" && isCompareOpStored(p.expiryCompareOp)
+          ? p.expiryCompareOp
+          : base.expiryCompareOp,
+      sortKey:
+        typeof p.sortKey === "string" && isClientSortKey(p.sortKey)
+          ? p.sortKey
+          : base.sortKey,
+      sortDir:
+        typeof p.sortDir === "string" && isSortDirStored(p.sortDir)
+          ? p.sortDir
+          : base.sortDir,
+    };
+  } catch {
+    return defaultClientsTablePrefs();
+  }
+}
+
+function saveClientsTablePrefsToStorage(prefs: ClientsTablePrefsState) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(
+      CLIENTS_TABLE_PREFS_KEY,
+      JSON.stringify({ v: CLIENTS_TABLE_PREFS_V, ...prefs }),
+    );
+  } catch {
+    /* quota / private mode */
+  }
+}
+
 function parseTrafficFilterBytes(input: string): number | null {
   const s = input.trim().toLowerCase().replace(",", ".");
   if (!s) return null;
@@ -1845,6 +1998,7 @@ export function ClientsPage() {
   const { t } = useTranslation();
   const toast = useToast();
   const ws = usePanelWebSocket();
+  const initialTablePrefs = useMemo(() => loadClientsTablePrefsFromStorage(), []);
   const resyncAfterDisconnect = useRef(false);
   /** key: client id — debounce offline after traffic drops the email from the online set. */
   const offlineStatusTimersRef = useRef<
@@ -1881,27 +2035,35 @@ export function ClientsPage() {
   const [sheetInlineBusy, setSheetInlineBusy] = useState<"reset" | "clearHwid" | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
-  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [filtersVisible, setFiltersVisible] = useState(initialTablePrefs.filtersVisible);
   const [columnFilters, setColumnFilters] = useState<Record<ColumnFilterId, string>>(
-    () => ({ ...DEFAULT_COLUMN_FILTERS }),
+    initialTablePrefs.columnFilters,
   );
-  const [filterConn, setFilterConn] = useState<FilterConn>("");
-  const [filterAcct, setFilterAcct] = useState<FilterAcct>("");
-  const [filterInboundId, setFilterInboundId] = useState<string>("");
-  const [filterGroupId, setFilterGroupId] = useState<string>("");
+  const [filterConn, setFilterConn] = useState<FilterConn>(initialTablePrefs.filterConn);
+  const [filterAcct, setFilterAcct] = useState<FilterAcct>(initialTablePrefs.filterAcct);
+  const [filterInboundId, setFilterInboundId] = useState<string>(
+    initialTablePrefs.filterInboundId,
+  );
+  const [filterGroupId, setFilterGroupId] = useState<string>(
+    initialTablePrefs.filterGroupId,
+  );
   const [groupOptions, setGroupOptions] = useState<GroupOption[]>([]);
   const [inboundFilterOptions, setInboundFilterOptions] = useState<InboundOption[]>(
     [],
   );
   const [columnVisibility, setColumnVisibility] = useState<
     Record<DataColumnId, boolean>
-  >(() => ({ ...DEFAULT_COLUMN_VISIBILITY }));
+  >(initialTablePrefs.columnVisibility);
   const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
   const columnsMenuRef = useRef<HTMLDivElement>(null);
-  const [trafficCompareOp, setTrafficCompareOp] = useState<CompareOp>("");
-  const [expiryCompareOp, setExpiryCompareOp] = useState<CompareOp>("");
-  const [sortKey, setSortKey] = useState<ClientSortKey>("traffic");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [trafficCompareOp, setTrafficCompareOp] = useState<CompareOp>(
+    initialTablePrefs.trafficCompareOp,
+  );
+  const [expiryCompareOp, setExpiryCompareOp] = useState<CompareOp>(
+    initialTablePrefs.expiryCompareOp,
+  );
+  const [sortKey, setSortKey] = useState<ClientSortKey>(initialTablePrefs.sortKey);
+  const [sortDir, setSortDir] = useState<SortDir>(initialTablePrefs.sortDir);
   const headerSelectRef = useRef<HTMLInputElement>(null);
   const [subscriptionQrUrl, setSubscriptionQrUrl] = useState<string | null>(null);
   const [clientsConfirmAction, setClientsConfirmAction] = useState<ClientsConfirmAction>(null);
@@ -1941,6 +2103,34 @@ export function ClientsPage() {
       setRows([]);
     }
   }, []);
+
+  useEffect(() => {
+    saveClientsTablePrefsToStorage({
+      columnVisibility,
+      columnFilters,
+      filtersVisible,
+      filterConn,
+      filterAcct,
+      filterInboundId,
+      filterGroupId,
+      trafficCompareOp,
+      expiryCompareOp,
+      sortKey,
+      sortDir,
+    });
+  }, [
+    columnVisibility,
+    columnFilters,
+    filtersVisible,
+    filterConn,
+    filterAcct,
+    filterInboundId,
+    filterGroupId,
+    trafficCompareOp,
+    expiryCompareOp,
+    sortKey,
+    sortDir,
+  ]);
 
   useEffect(() => {
     if (!ws) return;
