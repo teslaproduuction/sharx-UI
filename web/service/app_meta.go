@@ -17,7 +17,7 @@ import (
 
 const (
 	githubReleasesLatestAPI = "https://api.github.com/repos/konstpic/sharx-code/releases/latest"
-	appMetaCacheTTL         = 45 * time.Minute
+	appMetaCacheTTL         = 15 * time.Minute
 )
 
 // AppMeta is returned by the public appMeta endpoint (version + optional update hint).
