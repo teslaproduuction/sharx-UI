@@ -96,6 +96,7 @@
 "outbounds" = "Đầu ra"
 "settings" = "Cài đặt bảng điều khiển"
 "xray" = "Cài đặt Xray"
+"xrayTemplate" = "Mẫu cấu hình"
 "apiDocs" = "Tài liệu API"
 "apiDocsDesc" = "Tài liệu tham khảo HTTP API dạng Markdown (không phải OpenAPI) đi kèm bản build này."
 "apiDocsTocTitle" = "Trên trang này"

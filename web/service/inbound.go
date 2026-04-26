@@ -312,6 +312,14 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		settings = make(map[string]any)
 	}
 	
+	// WireGuard: panel clients are not mapped into `settings` (Xray uses `peers`, keys, etc.).
+	if proto == model.WireGuard {
+		if inbound.Settings != "" {
+			return inbound.Settings, nil
+		}
+		return "{}", nil
+	}
+
 	// Mixed inbound (HTTP + SOCKS on one port): Xray uses `accounts`, not `clients`.
 	if proto == model.Mixed {
 		var accounts []map[string]any

@@ -51,7 +51,7 @@ export function PageHeader({
   );
 
   return (
-    <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
       {HeaderIcon ? (
         <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:gap-4">
           <IconTile icon={HeaderIcon} tone={iconTone} size="lg" className="max-sm:mx-auto" />
@@ -61,7 +61,9 @@ export function PageHeader({
         textBlock
       )}
       {actions ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2">{actions}</div>
+        <div className="flex w-full min-w-0 max-w-full flex-row flex-wrap items-center justify-end gap-x-2 gap-y-2 sm:max-w-[min(100%,56rem)] sm:shrink-0">
+          {actions}
+        </div>
       ) : null}
     </div>
   );

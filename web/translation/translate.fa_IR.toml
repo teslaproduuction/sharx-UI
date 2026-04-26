@@ -96,6 +96,7 @@
 "outbounds" = "خروجی‌ها"
 "settings" = "تنظیمات پنل"
 "xray" = "پیکربندی ایکس‌ری"
+"xrayTemplate" = "قالب"
 "apiDocs" = "مستندات API"
 "apiDocsDesc" = "مرجع HTTP API به‌صورت Markdown (نه OpenAPI) همراه این نسخه."
 "apiDocsTocTitle" = "در این صفحه"

@@ -96,6 +96,7 @@
 "outbounds" = "アウトバウンド一覧"
 "settings" = "パネル設定"
 "xray" = "Xray設定"
+"xrayTemplate" = "テンプレート"
 "apiDocs" = "API ドキュメント"
 "apiDocsDesc" = "このビルドに同梱の HTTP API リファレンス（Markdown・OpenAPI ではありません）。"
 "apiDocsTocTitle" = "このページ"

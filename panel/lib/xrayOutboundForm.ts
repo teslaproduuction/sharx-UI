@@ -28,6 +28,26 @@ export const OUTBOUND_PROTOCOL_OPTIONS = [
 
 export type OutboundProtocolOption = (typeof OUTBOUND_PROTOCOL_OPTIONS)[number];
 
+/** VLESS `settings.vnext[0].users[0].flow` — Xray common values. */
+export const OUTBOUND_VLESS_FLOW_OPTIONS = ["", "xtls-rprx-vision", "xtls-rprx-vision-udp443"] as const;
+
+/** Xray `streamSettings.network` (outbound). */
+export const OUTBOUND_STREAM_NETWORK_OPTIONS = [
+  "tcp",
+  "ws",
+  "grpc",
+  "quic",
+  "http",
+  "h2",
+  "kcp",
+  "xhttp",
+  "httpupgrade",
+  "splithttp",
+] as const;
+
+/** Xray `streamSettings.security` (outbound). */
+export const OUTBOUND_STREAM_SECURITY_OPTIONS = ["none", "tls", "reality"] as const;
+
 export type OutboundFormRow = {
   id: string;
   tag: string;

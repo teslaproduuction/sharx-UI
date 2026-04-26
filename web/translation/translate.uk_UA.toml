@@ -96,6 +96,7 @@
 "outbounds" = "Вихідні"
 "settings" = "Параметри панелі"
 "xray" = "Конфігурації Xray"
+"xrayTemplate" = "Шаблон"
 "apiDocs" = "Документація API"
 "apiDocsDesc" = "Довідник HTTP API у Markdown (не OpenAPI) для цієї збірки."
 "apiDocsTocTitle" = "На цій сторінці"

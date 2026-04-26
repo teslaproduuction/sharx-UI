@@ -89,6 +89,9 @@ func BuildInboundXrayConfig(inbound *model.Inbound, defaultCertFile, defaultKeyF
 		return nil
 	}
 	ib := *inbound
+	if model.NormalizeProtocol(ib.Protocol) == model.WireGuard && ib.Settings != "" {
+		ib.Settings = applyWireGuardSettingsAddressForXray(ib.Settings)
+	}
 	if model.IsHysteria(ib.Protocol) && len(ib.StreamSettings) > 0 {
 		var stream map[string]any
 		if err := json.Unmarshal([]byte(ib.StreamSettings), &stream); err == nil {

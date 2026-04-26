@@ -94,7 +94,7 @@ sudo ./install.sh
 - Renew SSL certificates
 - View logs and status
 
-**Panel updates / Обновление панели:** **Watchtower** in the same stack + `XUI_DOCKER_UPDATER_*` (in-UI update), or `docker compose pull` + `up -d`, or the SharX script **Update Panel** (pulls `sharx` + `watchtower`). / **Watchtower** в стеке и UI, либо `docker compose pull`, либо **2)** в `install_*.sh`. Set `WATCHTOWER_HTTP_API_TOKEN` in production. / `WATCHTOWER_HTTP_API_TOKEN` в `.env` для production.
+**Panel updates / Обновление панели:** **Watchtower** in the same stack + `XUI_DOCKER_UPDATER_*` (in-UI update), or `docker compose pull` + `up -d`, or the SharX script **Update Panel** (pulls `sharx` + `watchtower`). / **Watchtower** в стеке и UI, либо `docker compose pull`, либо **2)** в `install_*.sh`. Set `WATCHTOWER_HTTP_API_TOKEN` in production. / `WATCHTOWER_HTTP_API_TOKEN` в `.env` для production. If you used `build:` in compose, the image name (e.g. `sharx-code-sharx`) is not pullable; use a Harbor `image:` and `docker login` — see README_RU/EN.
 
 **Remote nodes / Удалённые узлы:** add and manage in the web UI (Nodes / Geography / Ноды). The install script only deploys the panel stack. / Добавляйте и ведите узлы в веб-интерфейсе. Скрипт ставит только панель. For a separate node worker, see [node/README.md](node/README.md). / Для отдельного worker см. [node/README.md](node/README.md).
 

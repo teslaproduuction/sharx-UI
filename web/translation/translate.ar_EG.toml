@@ -96,6 +96,7 @@
 "outbounds" = "المخرجات"
 "settings" = "إعدادات البانل"
 "xray" = "إعدادات Xray"
+"xrayTemplate" = "قالب"
 "apiDocs" = "وثائق API"
 "apiDocsDesc" = "مرجع HTTP API بصيغة Markdown (وليس OpenAPI) المرفق بهذا الإصدار."
 "apiDocsTocTitle" = "في هذه الصفحة"

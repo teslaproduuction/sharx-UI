@@ -96,6 +96,7 @@
 "outbounds" = "Salidas"
 "settings" = "Configuraciones"
 "xray" = "Ajustes Xray"
+"xrayTemplate" = "Plantilla"
 "apiDocs" = "Documentación API"
 "apiDocsDesc" = "Referencia HTTP API en Markdown (no OpenAPI) incluida en esta compilación."
 "apiDocsTocTitle" = "En esta página"

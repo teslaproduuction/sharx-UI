@@ -96,6 +96,7 @@
 "outbounds" = "Keluar"
 "settings" = "Pengaturan Panel"
 "xray" = "Konfigurasi Xray"
+"xrayTemplate" = "Templat"
 "apiDocs" = "Dokumentasi API"
 "apiDocsDesc" = "Referensi HTTP API dalam Markdown (bukan OpenAPI) untuk build ini."
 "apiDocsTocTitle" = "Di halaman ini"

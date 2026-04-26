@@ -96,6 +96,7 @@
 "outbounds" = "Gidenler"
 "settings" = "Panel Ayarları"
 "xray" = "Xray Yapılandırmaları"
+"xrayTemplate" = "Şablon"
 "apiDocs" = "API Dokümantasyonu"
 "apiDocsDesc" = "Bu sürümle birlikte gelen Markdown HTTP API referansı (OpenAPI değil)."
 "apiDocsTocTitle" = "Bu sayfada"
