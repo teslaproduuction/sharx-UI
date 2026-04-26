@@ -4,17 +4,15 @@ function stripTrailingUrlSlashes(s: string) {
   return s.replace(/\/+$/, "");
 }
 
-function normalizeNodeAddress(
-  raw: string,
-  opts: { legacyAuth: boolean; useTls: boolean },
-) {
+function normalizeNodeAddress(raw: string, opts: { useTls: boolean }) {
   const t = raw.trim();
   if (!t) return "";
   const low = t.toLowerCase();
   if (low.startsWith("http://") || low.startsWith("https://")) {
     return stripTrailingUrlSlashes(t);
   }
-  const scheme = opts.legacyAuth && !opts.useTls ? "http" : "https";
+  // Bare host:port — default http; https only when TLS for API is enabled in the form.
+  const scheme = opts.useTls ? "https" : "http";
   return stripTrailingUrlSlashes(`${scheme}://${t}`);
 }
 
@@ -88,7 +86,7 @@ export function isValidNodePortString(port: string): boolean {
 export function buildAddressFromHostPort(
   host: string,
   port: string,
-  opts: { legacyAuth: boolean; useTls: boolean },
+  opts: { useTls: boolean },
 ): string {
   const p = (port || "").trim() || DEFAULT_NODE_PORT;
   if (!isValidNodePortString(p)) return "";
@@ -113,13 +111,13 @@ export function buildAddressFromHostPort(
  */
 export function addressForHostComposeHint(
   addressInput: string,
-  opts: { legacyAuth: boolean; useTls: boolean },
+  opts: { useTls: boolean },
 ): string {
   const normalized = normalizeNodeAddress(addressInput.trim(), opts);
   if (!normalized) return "";
   try {
     const u = new URL(
-      normalized.startsWith("http") ? normalized : `https://${normalized}`,
+      normalized.startsWith("http") ? normalized : `http://${normalized}`,
     );
     u.port = "";
     return u.toString().replace(/\/$/, "");

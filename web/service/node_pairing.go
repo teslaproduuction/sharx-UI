@@ -24,8 +24,26 @@ func (s *NodeService) PrepareNodePairing(node *model.Node) (secretKey string, er
 		return "", fmt.Errorf("invalid node address URL")
 	}
 	if u.Scheme == "" {
-		u, _ = url.Parse("https://" + addr)
+		scheme := "https"
+		if !node.UseTLS {
+			scheme = "http"
+		}
+		var errParse error
+		u, errParse = url.Parse(scheme + "://" + addr)
+		if errParse != nil {
+			return "", fmt.Errorf("invalid node address URL")
+		}
 		node.Address = u.String()
+	} else if u.Scheme == "http" {
+		// Pairing workers listen with TLS; store https so panel and map match real transport.
+		u.Scheme = "https"
+		node.Address = u.String()
+	}
+
+	// Bare host may have been resolved to http:// above when useTls was false; pairing is always https.
+	if u2, err2 := url.Parse(node.Address); err2 == nil && u2.Scheme == "http" {
+		u2.Scheme = "https"
+		node.Address = u2.String()
 	}
 
 	pairing := &PanelPairingService{}
@@ -35,6 +53,7 @@ func (s *NodeService) PrepareNodePairing(node *model.Node) (secretKey string, er
 	}
 
 	node.AuthMode = "pairing"
+	// Panel→worker is always TLS+mTLS for pairing (worker does not serve plain HTTP with SECRET_KEY).
 	node.UseTLS = true
 	node.InsecureTLS = false
 	node.CertPath = ""

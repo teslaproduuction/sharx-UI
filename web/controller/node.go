@@ -173,7 +173,12 @@ func (a *NodeController) addNode(c *gin.Context) {
 		return
 	}
 
-	go a.nodeService.CheckNodeHealth(node)
+	if err := a.nodeService.CheckNodeHealth(node); err != nil {
+		_ = a.nodeService.DeleteNode(node.Id)
+		jsonMsg(c, "Node health check failed ("+err.Error()+"). The node was not kept in the database.", err)
+		return
+	}
+
 	a.broadcastNodesUpdate()
 
 	settingService := service.SettingService{}
@@ -627,9 +632,11 @@ func (a *NodeController) checkNodeConnection(c *gin.Context) {
 		return
 	}
 
-	// Create a temporary node object for health check
+	// Temporary node for probe: assume SECRET_KEY pairing (mTLS + HTTPS), same as registration.
 	tempNode := &model.Node{
-		Address: req.Address,
+		Address:  req.Address,
+		AuthMode: "pairing",
+		UseTLS:   true,
 	}
 
 	// Check node health (this only uses /health endpoint, no API key required)
