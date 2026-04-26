@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	loginUserKey = "LOGIN_USER"
-	defaultPath  = "/"
+	loginUserKey              = "LOGIN_USER"
+	pendingTwoFactorSecretKey = "PENDING_TWO_FACTOR_SECRET"
+	defaultPath               = "/"
+	// requestAPILoginUserKey: Bearer JWT user for this request (takes precedence over session).
+	requestAPILoginUserKey = "sharx_request_api_user"
 )
 
 func init() {
@@ -43,9 +46,23 @@ func SetMaxAge(c *gin.Context, maxAge int) {
 	})
 }
 
-// GetLoginUser retrieves the authenticated user from the session.
+// SetRequestLoginUser sets the authenticated user for this request (Authorization Bearer API token).
+// It is ignored by the session store and is cleared with the request.
+func SetRequestLoginUser(c *gin.Context, u *model.User) {
+	if u == nil {
+		return
+	}
+	c.Set(requestAPILoginUserKey, u)
+}
+
+// GetLoginUser retrieves the user from a Bearer API token (if set for this request), else the session.
 // Returns nil if no user is logged in or if the session data is invalid.
 func GetLoginUser(c *gin.Context) *model.User {
+	if v, ok := c.Get(requestAPILoginUserKey); ok {
+		if u, ok := v.(*model.User); ok {
+			return u
+		}
+	}
 	s := sessions.Default(c)
 	obj := s.Get(loginUserKey)
 	if obj == nil {
@@ -77,4 +94,31 @@ func ClearSession(c *gin.Context) {
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 	})
+}
+
+// SetPendingTwoFactorSecret stores a TOTP secret during the authenticator setup wizard (not yet committed to settings).
+func SetPendingTwoFactorSecret(c *gin.Context, secret string) {
+	s := sessions.Default(c)
+	if secret == "" {
+		s.Delete(pendingTwoFactorSecretKey)
+		return
+	}
+	s.Set(pendingTwoFactorSecretKey, secret)
+}
+
+// GetPendingTwoFactorSecret returns the in-progress TOTP secret from the setup wizard session, if any.
+func GetPendingTwoFactorSecret(c *gin.Context) string {
+	s := sessions.Default(c)
+	v := s.Get(pendingTwoFactorSecretKey)
+	if v == nil {
+		return ""
+	}
+	str, _ := v.(string)
+	return str
+}
+
+// ClearPendingTwoFactorSecret removes the pending TOTP secret from the session.
+func ClearPendingTwoFactorSecret(c *gin.Context) {
+	s := sessions.Default(c)
+	s.Delete(pendingTwoFactorSecretKey)
 }

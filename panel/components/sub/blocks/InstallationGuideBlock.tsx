@@ -1,14 +1,6 @@
 "use client";
 
-import {
-  Apple,
-  Download,
-  Monitor,
-  Smartphone,
-  Tv,
-  Zap,
-  type LucideIcon,
-} from "lucide-react";
+import { Download, Smartphone, Zap } from "lucide-react";
 import { useState } from "react";
 import {
   APP_CATALOG,
@@ -20,21 +12,17 @@ import {
   type SubscriptionApp,
   type SupportedPlatform,
 } from "@/lib/sharxSubpageConfig";
+import { PlatformBrandIcon } from "../PlatformBrandIcon";
 import shell from "../subscription-shell.module.css";
 import type { BlockRenderContext } from "./index";
 
-type PlatformMeta = {
-  label: string;
-  icon: LucideIcon;
-};
-
-const PLATFORM_META: Record<SupportedPlatform, PlatformMeta> = {
-  ios: { label: "iOS", icon: Apple },
-  android: { label: "Android", icon: Smartphone },
-  windows: { label: "Windows", icon: Monitor },
-  macos: { label: "macOS", icon: Apple },
-  linux: { label: "Linux", icon: Monitor },
-  androidtv: { label: "Android TV", icon: Tv },
+const PLATFORM_META: Record<SupportedPlatform, { label: string }> = {
+  ios: { label: "iOS" },
+  android: { label: "Android" },
+  windows: { label: "Windows" },
+  macos: { label: "macOS" },
+  linux: { label: "Linux" },
+  androidtv: { label: "Android TV" },
 };
 
 function base64Url(input: string): string {
@@ -81,7 +69,8 @@ function getAppMeta(entry: InstallationAppEntry) {
   const catalog = APP_CATALOG[entry.app];
   const label = entry.label?.trim() || catalog?.label || entry.app;
   const deepLinkTemplate = catalog?.deepLinkTemplate || "";
-  return { label, deepLinkTemplate };
+  const iconUrl = catalog?.iconUrl?.trim() || "";
+  return { label, deepLinkTemplate, iconUrl };
 }
 
 /** Card for one app inside a platform group. */
@@ -98,7 +87,7 @@ function AppCard({
   interactive: boolean;
   t: BlockRenderContext["t"];
 }) {
-  const { label, deepLinkTemplate } = getAppMeta(entry);
+  const { label, deepLinkTemplate, iconUrl } = getAppMeta(entry);
   const addHref = expandTemplate(deepLinkTemplate, subscriptionUrl);
   const hasDownload = !!entry.downloadUrl?.trim();
   const steps =
@@ -110,8 +99,18 @@ function AppCard({
     <article className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
       <header className="flex items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-8 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/5 text-[#22d3ee]">
-            <Smartphone className="size-4" />
+          <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-white/10 bg-white/5 text-[#22d3ee]">
+            {iconUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={iconUrl}
+                alt=""
+                className="size-full object-contain"
+                loading="lazy"
+              />
+            ) : (
+              <Smartphone className="size-4" />
+            )}
           </span>
           <span className="truncate text-sm font-semibold text-[#c9d1d9]">{label}</span>
         </div>
@@ -189,7 +188,6 @@ function StepperGuide({
       <div className="mb-3 flex flex-wrap gap-1.5">
         {enabled.map((g) => {
           const meta = PLATFORM_META[g.platform];
-          const Icon = meta?.icon ?? Smartphone;
           const isActive = g.platform === current.platform;
           return (
             <button
@@ -202,7 +200,7 @@ function StepperGuide({
                   : "border-white/10 bg-white/5 text-[#c9d1d9] hover:border-white/20"
               }`}
             >
-              <Icon className="size-3.5" />
+              <PlatformBrandIcon platform={g.platform} className="size-3.5" />
               {meta?.label ?? g.platform}
             </button>
           );
@@ -243,13 +241,12 @@ function MinimalGuide({
       <ul className="flex flex-wrap gap-2 text-[12px] text-[#8b949e]">
         {enabled.map((g) => {
           const meta = PLATFORM_META[g.platform];
-          const Icon = meta?.icon ?? Smartphone;
           return (
             <li
               key={g.platform}
               className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[#c9d1d9]"
             >
-              <Icon className="size-3.5" />
+              <PlatformBrandIcon platform={g.platform} className="size-3.5" />
               {meta?.label ?? g.platform}
               <span className="ml-1 text-[10px] text-[#6e7681]">
                 {g.apps.length ? `· ${g.apps.length}` : ""}
@@ -290,7 +287,6 @@ function GroupedGuide({
         <div className="flex flex-col gap-2">
           {enabled.map((g, gi) => {
             const meta = PLATFORM_META[g.platform];
-            const Icon = meta?.icon ?? Smartphone;
             return (
               <details
                 key={g.platform}
@@ -299,7 +295,7 @@ function GroupedGuide({
               >
                 <summary className="flex cursor-pointer list-none items-center justify-between text-sm text-[#c9d1d9] [&::-webkit-details-marker]:hidden">
                   <span className="inline-flex items-center gap-2">
-                    <Icon className="size-4 text-[#22d3ee]" />
+                    <PlatformBrandIcon platform={g.platform} className="size-4" />
                     {meta?.label ?? g.platform}
                   </span>
                   <span className="text-xs text-[#6e7681]">{g.apps.length}</span>
@@ -331,11 +327,10 @@ function GroupedGuide({
         <ol className="flex flex-col gap-6 border-l border-white/10 pl-4">
           {enabled.map((g) => {
             const meta = PLATFORM_META[g.platform];
-            const Icon = meta?.icon ?? Smartphone;
             return (
               <li key={g.platform} className="relative">
                 <span className="absolute -left-[22px] top-0 flex size-4 items-center justify-center rounded-full border border-[#22d3ee]/60 bg-[#161b22]">
-                  <Icon className="size-2.5 text-[#22d3ee]" />
+                  <PlatformBrandIcon platform={g.platform} className="size-2.5" />
                 </span>
                 <div className="mb-3 text-sm font-semibold text-[#c9d1d9]">
                   {meta?.label ?? g.platform}
@@ -367,11 +362,10 @@ function GroupedGuide({
       <div className="flex flex-col gap-5">
         {enabled.map((g) => {
           const meta = PLATFORM_META[g.platform];
-          const Icon = meta?.icon ?? Smartphone;
           return (
             <section key={g.platform}>
               <div className="mb-2 inline-flex items-center gap-2 text-[#c9d1d9]">
-                <Icon className="size-4 text-[#22d3ee]" />
+                <PlatformBrandIcon platform={g.platform} className="size-4" />
                 <span className="text-sm font-semibold">{meta?.label ?? g.platform}</span>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2">

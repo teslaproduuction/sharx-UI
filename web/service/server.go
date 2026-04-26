@@ -22,6 +22,7 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/database"
+	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
 	"github.com/konstpic/sharx-code/v2/util/sys"
@@ -35,6 +36,9 @@ import (
 	"github.com/shirou/gopsutil/v4/mem"
 	"github.com/shirou/gopsutil/v4/net"
 )
+
+// processStartTime is set when the service package loads (panel process has started).
+var processStartTime = time.Now()
 
 // ProcessState represents the current state of a system process.
 type ProcessState string
@@ -71,11 +75,15 @@ type Status struct {
 		ErrorMsg string       `json:"errorMsg"`
 		Version  string       `json:"version"`
 	} `json:"xray"`
-	Uptime   uint64    `json:"uptime"`
-	Loads    []float64 `json:"loads"`
-	TcpCount int       `json:"tcpCount"`
-	UdpCount int       `json:"udpCount"`
-	NetIO    struct {
+	// PanelVersion is the SharX panel release (embedded at build from config/version).
+	PanelVersion string `json:"panelVersion"`
+	// PanelUptime is seconds since the panel process started (not local Xray).
+	PanelUptime uint64    `json:"panelUptime"`
+	Uptime      uint64    `json:"uptime"`
+	Loads       []float64 `json:"loads"`
+	TcpCount    int       `json:"tcpCount"`
+	UdpCount    int       `json:"udpCount"`
+	NetIO       struct {
 		Up   uint64 `json:"up"`
 		Down uint64 `json:"down"`
 	} `json:"netIO"`
@@ -96,14 +104,24 @@ type Status struct {
 		Online int `json:"online"`
 		Total  int `json:"total"`
 	} `json:"nodes"`
+	// NodesXray counts xray_state on worker nodes (enable=true only); meaningful when multiNodeMode.
+	NodesXray struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Stopped int `json:"stopped"`
+		Error   int `json:"error"`
+		Unknown int `json:"unknown"`
+	} `json:"nodesXray"`
+	// UsersOnline is the number of distinct client emails currently considered online (local Xray or worker nodes).
+	UsersOnline int `json:"usersOnline"`
 	Database struct {
-		Size          uint64 `json:"size"`          // Database size in bytes
-		Tables        int    `json:"tables"`        // Number of tables
-		TotalRows     uint64 `json:"totalRows"`     // Total number of rows across all tables
-		OpenConns     int    `json:"openConns"`     // Current open connections
-		IdleConns     int    `json:"idleConns"`     // Current idle connections
-		MaxOpenConns  int    `json:"maxOpenConns"`  // Maximum open connections
-		MaxIdleConns  int    `json:"maxIdleConns"`  // Maximum idle connections
+		Size         uint64 `json:"size"`         // Database size in bytes
+		Tables       int    `json:"tables"`       // Number of tables
+		TotalRows    uint64 `json:"totalRows"`    // Total number of rows across all tables
+		OpenConns    int    `json:"openConns"`    // Current open connections
+		IdleConns    int    `json:"idleConns"`    // Current idle connections
+		MaxOpenConns int    `json:"maxOpenConns"` // Maximum open connections
+		MaxIdleConns int    `json:"maxIdleConns"` // Maximum idle connections
 	} `json:"database"`
 }
 
@@ -471,6 +489,22 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 				}
 			}
 			status.Nodes.Online = onlineCount
+			for _, node := range nodes {
+				if !node.Enable {
+					continue
+				}
+				status.NodesXray.Total++
+				switch node.XrayState {
+				case model.NodeXrayRunning:
+					status.NodesXray.Running++
+				case model.NodeXrayStopped:
+					status.NodesXray.Stopped++
+				case model.NodeXrayError:
+					status.NodesXray.Error++
+				default:
+					status.NodesXray.Unknown++
+				}
+			}
 		} else {
 			// If error getting nodes, set to 0
 			status.Nodes.Total = 0
@@ -481,6 +515,12 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		status.Nodes.Total = 0
 		status.Nodes.Online = 0
 	}
+
+	inboundSvc := InboundService{}
+	status.UsersOnline = len(inboundSvc.GetOnlineClients())
+
+	status.PanelUptime = uint64(time.Since(processStartTime).Seconds())
+	status.PanelVersion = config.GetVersion()
 
 	// Database statistics
 	dbStats := s.getDatabaseStats()
@@ -847,6 +887,9 @@ func (s *ServerService) GetLogs(count string, level string, syslog string) []str
 		lines = logger.GetLogs(c, level)
 	}
 
+	if lines == nil {
+		return []string{}
+	}
 	return lines
 }
 
@@ -936,17 +979,20 @@ func (s *ServerService) GetXrayLogs(
 			}
 		}
 		// If no nodeId provided or node not found, return empty
+		if entries == nil {
+			return []LogEntry{}
+		}
 		return entries
 	}
 
 	pathToAccessLog, err := xray.GetAccessLogPath()
 	if err != nil {
-		return nil
+		return []LogEntry{}
 	}
 
 	file, err := os.Open(pathToAccessLog)
 	if err != nil {
-		return nil
+		return []LogEntry{}
 	}
 	defer file.Close()
 
@@ -1015,6 +1061,9 @@ func (s *ServerService) GetXrayLogs(
 		entries = entries[len(entries)-countInt:]
 	}
 
+	if entries == nil {
+		return []LogEntry{}
+	}
 	return entries
 }
 
@@ -1053,13 +1102,13 @@ func (s *ServerService) GetDb() ([]byte, error) {
 	user := config.GetDBUser()
 	password := config.GetDBPassword()
 	dbname := config.GetDBName()
-	
+
 	// Set PGPASSWORD environment variable for pg_dump
 	env := os.Environ()
 	env = append(env, fmt.Sprintf("PGPASSWORD=%s", password))
-	
+
 	// Build pg_dump command with --clean and --if-exists for proper restore
-	cmd := exec.Command("pg_dump", 
+	cmd := exec.Command("pg_dump",
 		"-h", host,
 		"-p", strconv.Itoa(port),
 		"-U", user,
@@ -1071,17 +1120,17 @@ func (s *ServerService) GetDb() ([]byte, error) {
 		"--if-exists",
 	)
 	cmd.Env = env
-	
+
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	
+
 	err := cmd.Run()
 	if err == nil {
 		// pg_dump succeeded, return the output
 		return stdout.Bytes(), nil
 	}
-	
+
 	// pg_dump failed (likely not installed), fall back to GORM-based export
 	logger.Warningf("pg_dump not available, falling back to GORM-based export: %v", err)
 	return s.exportDbViaGORM()
@@ -1093,9 +1142,9 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 	if db == nil {
 		return nil, fmt.Errorf("database connection is not available")
 	}
-	
+
 	var dump strings.Builder
-	
+
 	// Write header
 	dump.WriteString("-- PostgreSQL database dump\n")
 	dump.WriteString(fmt.Sprintf("-- Dumped at %s\n", time.Now().Format("2006-01-02 15:04:05")))
@@ -1110,7 +1159,7 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 	dump.WriteString("SET xmloption = content;\n")
 	dump.WriteString("SET client_min_messages = warning;\n")
 	dump.WriteString("SET row_security = off;\n\n")
-	
+
 	// Get list of all tables
 	var tables []struct {
 		TableName string `gorm:"column:tablename"`
@@ -1124,21 +1173,21 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("failed to get table list: %v", err)
 	}
-	
+
 	// Export each table
 	for _, table := range tables {
 		tableName := table.TableName
-		
+
 		// Get table structure using pg_get_tabledef or manual construction
 		// First, try to get the table definition using a simpler approach
 		var columns []struct {
-			ColumnName     string  `gorm:"column:column_name"`
-			DataType       string  `gorm:"column:data_type"`
-			CharMaxLength  *int    `gorm:"column:character_maximum_length"`
-			NumericPrec    *int    `gorm:"column:numeric_precision"`
-			NumericScale   *int    `gorm:"column:numeric_scale"`
-			IsNullable     string  `gorm:"column:is_nullable"`
-			ColumnDefault  *string `gorm:"column:column_default"`
+			ColumnName    string  `gorm:"column:column_name"`
+			DataType      string  `gorm:"column:data_type"`
+			CharMaxLength *int    `gorm:"column:character_maximum_length"`
+			NumericPrec   *int    `gorm:"column:numeric_precision"`
+			NumericScale  *int    `gorm:"column:numeric_scale"`
+			IsNullable    string  `gorm:"column:is_nullable"`
+			ColumnDefault *string `gorm:"column:column_default"`
 		}
 		err := db.Raw(`
 			SELECT 
@@ -1153,17 +1202,17 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 			WHERE table_schema = 'public' AND table_name = ?
 			ORDER BY ordinal_position
 		`, tableName).Scan(&columns).Error
-		
+
 		if err == nil && len(columns) > 0 {
 			dump.WriteString("\n--\n")
 			dump.WriteString(fmt.Sprintf("-- Name: %s; Type: TABLE; Schema: public; Owner: -\n", tableName))
 			dump.WriteString("--\n\n")
 			dump.WriteString(fmt.Sprintf("CREATE TABLE %s (\n", tableName))
-			
+
 			colDefs := make([]string, len(columns))
 			for i, col := range columns {
 				colDef := fmt.Sprintf("    %s ", col.ColumnName)
-				
+
 				// Build data type
 				switch col.DataType {
 				case "character varying":
@@ -1189,27 +1238,27 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 				default:
 					colDef += col.DataType
 				}
-				
+
 				// Add NOT NULL constraint
 				if col.IsNullable == "NO" {
 					colDef += " NOT NULL"
 				}
-				
+
 				// Add default value
 				if col.ColumnDefault != nil {
 					colDef += " DEFAULT " + *col.ColumnDefault
 				}
-				
+
 				colDefs[i] = colDef
 			}
 			dump.WriteString(strings.Join(colDefs, ",\n"))
 			dump.WriteString("\n);\n\n")
 		}
-		
+
 		// Get table data
 		var rowCount int64
 		db.Table(tableName).Count(&rowCount)
-		
+
 		if rowCount > 0 {
 			// Get column info for data export (reuse if available from structure query, otherwise query again)
 			var colInfo []struct {
@@ -1238,7 +1287,7 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 					colInfo[i].DataType = col.DataType
 				}
 			}
-			
+
 			if len(colInfo) > 0 {
 				colNames := make([]string, len(colInfo))
 				colTypes := make([]string, len(colInfo))
@@ -1246,32 +1295,32 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 					colNames[i] = col.ColumnName
 					colTypes[i] = col.DataType
 				}
-				
+
 				// Build SELECT query with proper column quoting
 				quotedCols := make([]string, len(colNames))
 				for i, colName := range colNames {
 					quotedCols[i] = fmt.Sprintf(`"%s"`, colName)
 				}
 				selectQuery := fmt.Sprintf(`SELECT %s FROM "%s"`, strings.Join(quotedCols, ", "), tableName)
-				
+
 				// Export data in batches using raw SQL
 				batchSize := 1000
 				offset := 0
-				
+
 				for {
 					// Use raw SQL to get data
 					rows, err := db.Raw(fmt.Sprintf("%s LIMIT %d OFFSET %d", selectQuery, batchSize, offset)).Rows()
 					if err != nil {
 						break
 					}
-					
+
 					// Get column names from rows
 					colNamesFromRows, err := rows.Columns()
 					if err != nil {
 						rows.Close()
 						break
 					}
-					
+
 					batchRowCount := 0
 					for rows.Next() {
 						// Create slice to hold values
@@ -1280,17 +1329,17 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 						for i := range values {
 							valuePtrs[i] = &values[i]
 						}
-						
+
 						if err := rows.Scan(valuePtrs...); err != nil {
 							rows.Close()
 							return nil, fmt.Errorf("failed to scan row: %v", err)
 						}
-						
+
 						// Generate INSERT statement
 						dump.WriteString(fmt.Sprintf("INSERT INTO %s (", tableName))
 						dump.WriteString(strings.Join(colNames, ", "))
 						dump.WriteString(") VALUES (")
-						
+
 						valueStrs := make([]string, len(values))
 						for i, val := range values {
 							if val == nil {
@@ -1299,7 +1348,7 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 								// Format value based on data type
 								var valStr string
 								dataType := colTypes[i]
-								
+
 								switch dataType {
 								case "integer", "bigint", "smallint", "numeric", "real", "double precision":
 									// Numeric types - no quotes needed
@@ -1338,7 +1387,7 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 						batchRowCount++
 					}
 					rows.Close()
-					
+
 					if batchRowCount == 0 || batchRowCount < batchSize {
 						break
 					}
@@ -1348,7 +1397,7 @@ func (s *ServerService) exportDbViaGORM() ([]byte, error) {
 			}
 		}
 	}
-	
+
 	return []byte(dump.String()), nil
 }
 
@@ -1408,7 +1457,7 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 	db := database.GetDB()
 	if db != nil {
 		logger.Info("Clearing existing database objects before import...")
-		
+
 		// Use a single transaction to drop all objects in correct order
 		// This matches how pg_dump with --clean works
 		clearQuery := `
@@ -1455,7 +1504,7 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 				EXECUTE 'DROP FUNCTION IF EXISTS public.' || quote_ident(r.proname) || '(' || r.argtypes || ') CASCADE';
 			END LOOP;
 		END $$;`
-		
+
 		if err := db.Exec(clearQuery).Error; err != nil {
 			logger.Warningf("Failed to clear database objects: %v", err)
 		} else {
@@ -1494,10 +1543,10 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 	cmd.Stdout = &stderr // Capture both stdout and stderr
 
 	err = cmd.Run()
-	
+
 	// Parse stderr to check for critical errors
 	stderrStr := stderr.String()
-	
+
 	// Filter out non-critical errors that are expected when restoring
 	// Errors like "already exists" are expected when dump has --clean --if-exists
 	// and we've already cleared the database, so some DROP commands may fail
@@ -1509,7 +1558,7 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 		"database.*does not exist",
 		"role.*does not exist",
 	}
-	
+
 	hasCriticalError := false
 	lowerStderr := strings.ToLower(stderrStr)
 	for _, criticalErr := range criticalErrors {
@@ -1519,19 +1568,19 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 			break
 		}
 	}
-	
+
 	// Check for expected non-critical errors
 	// These are errors that are acceptable when restoring a dump with --clean --if-exists
 	expectedErrors := []string{
 		"already exists",
-		"does not exist",        // For DROP IF EXISTS when object doesn't exist
-		"json_extract",          // SQLite-specific functions in old dumps
-		"JSON_EXTRACT",          // SQLite-specific functions
-		"JSON_EACH",             // SQLite-specific functions
-		"transaction_timeout",   // Non-standard PostgreSQL parameter (may be in old dumps)
+		"does not exist",                       // For DROP IF EXISTS when object doesn't exist
+		"json_extract",                         // SQLite-specific functions in old dumps
+		"JSON_EXTRACT",                         // SQLite-specific functions
+		"JSON_EACH",                            // SQLite-specific functions
+		"transaction_timeout",                  // Non-standard PostgreSQL parameter (may be in old dumps)
 		"unrecognized configuration parameter", // Non-standard parameters in old dumps
 	}
-	
+
 	hasOnlyExpectedErrors := true
 	if stderrStr != "" {
 		// Check if there are any non-expected errors
@@ -1554,11 +1603,11 @@ func (s *ServerService) ImportDB(file multipart.File) error {
 	} else {
 		hasOnlyExpectedErrors = true // No errors at all
 	}
-	
+
 	if err != nil && hasCriticalError {
 		return common.NewErrorf("psql import failed with critical error: %v, stderr: %s", err, stderrStr)
 	}
-	
+
 	// Log warnings but don't fail if only expected/non-critical errors
 	if stderrStr != "" && !hasCriticalError {
 		if hasOnlyExpectedErrors {

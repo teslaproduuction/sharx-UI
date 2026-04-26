@@ -15,15 +15,21 @@ import {
   isSharxV1Config,
   type SharxBranding,
 } from "@/lib/sharxSubpageConfig";
+import { SUB_PAGE_COLOR_PRESET_DEFAULT } from "@/lib/subPageColorPreset";
 import { panel } from "@/lib/paths";
 
 function extractShellProps(data: PublicSubPayload | null): {
   branding?: SharxBranding;
   theme?: string;
+  colorPreset?: string;
 } {
   if (!data) return {};
   if (isSharxV2Config(data.config)) {
-    return { branding: data.config.branding, theme: data.config.theme };
+    return {
+      branding: data.config.branding,
+      theme: data.config.theme,
+      colorPreset: data.config.colorPreset,
+    };
   }
   if (isSharxV1Config(data.config)) {
     return {
@@ -34,6 +40,7 @@ function extractShellProps(data: PublicSubPayload | null): {
         supportUrl: data.config.branding.supportUrl,
       },
       theme: data.config.theme,
+      colorPreset: SUB_PAGE_COLOR_PRESET_DEFAULT,
     };
   }
   return {};
@@ -122,9 +129,9 @@ function PublicSubPageInner() {
     );
   }
 
-  const { branding, theme } = extractShellProps(data);
+  const { branding, theme, colorPreset } = extractShellProps(data);
   return (
-    <SubPageShell branding={branding} theme={theme}>
+    <SubPageShell branding={branding} theme={theme} colorPreset={colorPreset}>
       <SubPageRenderer data={data} interactive />
     </SubPageShell>
   );

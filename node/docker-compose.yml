@@ -1,17 +1,33 @@
-# SharX node worker — host network; API default port 8080 (see node/defaults/defaults.go)
+# SharX node worker. Auth: SECRET_KEY → TLS + mTLS + JWT (no NODE_API_KEY).
+# Set PANEL_URL and SECRET_KEY below (same values as in the panel “copy compose” flow). No .env required.
+# Named volumes persist data; first start copies image content into empty volumes (e.g. /app/bin).
 services:
   node:
     build:
       context: ..
       dockerfile: node/Dockerfile
+    # image: sharx/sharxnode:latest
     container_name: sharx-node
     restart: unless-stopped
+    # Required for drop-connections (conntrack) API:
+    cap_add: [NET_ADMIN]
     network_mode: host
+    # ports:
+    #   - "8080:8080"
+    #   - "45000:45000"
     volumes:
-      - ./bin:/app/bin
-      - ./logs:/app/logs
-      - ./cert:/app/cert
-      - ./data:/app/data
+      # - sharx-node-bin:/app/bin
+      - sharx-node-logs:/app/logs
+      - sharx-node-cert:/app/cert
+      - sharx-node-data:/app/data
     environment:
-      PANEL_URL: "http://192.168.0.47:2053"
+      PANEL_URL: ""
       SECRET_KEY: ""
+
+volumes:
+  sharx-node-bin:
+  sharx-node-logs:
+  sharx-node-cert:
+  sharx-node-data:
+
+

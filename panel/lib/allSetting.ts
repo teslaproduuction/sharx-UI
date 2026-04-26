@@ -26,6 +26,7 @@ export type AllSetting = {
   timeLocation: string;
   twoFactorEnable: boolean;
   twoFactorToken: string;
+  twoFactorTelegram: boolean;
   subEnable: boolean;
   subJsonEnable: boolean;
   subTitle: string;
@@ -132,6 +133,7 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     timeLocation: toStr(raw.timeLocation, "Local"),
     twoFactorEnable: toBool(raw.twoFactorEnable),
     twoFactorToken: toStr(raw.twoFactorToken),
+    twoFactorTelegram: toBool(raw.twoFactorTelegram),
     subEnable: toBool(raw.subEnable),
     subJsonEnable: toBool(raw.subJsonEnable),
     subTitle: toStr(raw.subTitle),

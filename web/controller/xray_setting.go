@@ -58,6 +58,12 @@ func (a *XraySettingController) getXraySetting(c *gin.Context) {
 func (a *XraySettingController) updateSetting(c *gin.Context) {
 	xraySetting := c.PostForm("xraySetting")
 	err := a.XraySettingService.SaveXraySetting(xraySetting)
+	if err == nil {
+		tg := service.Tgbot{}
+		if tg.IsRunning() {
+			tg.NotifyPanelAction("Xray config JSON saved (panel)", "", getRemoteIp(c))
+		}
+	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 }
 
@@ -65,6 +71,12 @@ func (a *XraySettingController) updateSetting(c *gin.Context) {
 // It overwrites the current xrayTemplateConfig value in the settings table.
 func (a *XraySettingController) resetToDefault(c *gin.Context) {
 	err := a.SettingService.ResetXrayTemplateConfigToDefault()
+	if err == nil {
+		tg := service.Tgbot{}
+		if tg.IsRunning() {
+			tg.NotifyPanelAction("Xray template reset to default (panel)", "", getRemoteIp(c))
+		}
+	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 }
 

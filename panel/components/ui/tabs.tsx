@@ -8,6 +8,8 @@ import { tabContentVariants } from "@/lib/motion";
 export type TabItem<T extends string = string> = {
   id: T;
   label: ReactNode;
+  /** Shown on hover when the tab label is truncated. */
+  title?: string;
   icon?: LucideIcon;
   badge?: ReactNode;
   disabled?: boolean;
@@ -21,6 +23,8 @@ type TabsProps<T extends string = string> = {
   className?: string;
   size?: "sm" | "md";
   variant?: "pill" | "underline";
+  /** Only icons; use `title` on each tab (or it falls back to string label) for the tooltip. */
+  iconOnly?: boolean;
 };
 
 export function Tabs<T extends string = string>({
@@ -31,9 +35,15 @@ export function Tabs<T extends string = string>({
   className = "",
   size = "md",
   variant = "pill",
+  iconOnly = false,
 }: TabsProps<T>) {
   const reduce = useReducedMotion();
   const heightCls = size === "sm" ? "h-8 text-[13px]" : "h-10 text-sm";
+  const tabTitle = (label: ReactNode, tTitle: string | undefined) => {
+    if (tTitle) return tTitle;
+    if (typeof label === "string" || typeof label === "number") return String(label);
+    return undefined;
+  };
 
   return (
     <div
@@ -43,6 +53,7 @@ export function Tabs<T extends string = string>({
       {tabs.map((t) => {
         const isActive = t.id === active;
         const Icon = t.icon;
+        const tip = tabTitle(t.label, t.title);
         return (
           <button
             key={t.id}
@@ -50,8 +61,12 @@ export function Tabs<T extends string = string>({
             type="button"
             aria-selected={isActive}
             disabled={t.disabled}
+            title={iconOnly ? tip : t.title}
+            aria-label={iconOnly && tip ? tip : undefined}
             onClick={() => !t.disabled && onChange(t.id)}
-            className={`relative inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-lg px-3 font-medium transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 ${heightCls} ${
+            className={`relative inline-flex min-w-0 shrink-0 items-center gap-1.5 rounded-lg font-medium transition-colors focus-visible:outline focus-visible:ring-2 focus-visible:ring-[var(--accent)] disabled:cursor-not-allowed disabled:opacity-40 ${heightCls} ${
+              iconOnly ? "size-8 justify-center p-0 px-0" : "px-3"
+            } ${
               isActive
                 ? "text-[var(--fg)]"
                 : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
@@ -73,9 +88,9 @@ export function Tabs<T extends string = string>({
                 aria-hidden
               />
             ) : null}
-            <span className="relative z-[1] inline-flex items-center gap-1.5">
+            <span className="relative z-[1] inline-flex items-center justify-center gap-1.5">
               {Icon ? <Icon className="size-[15px] shrink-0 opacity-85" /> : null}
-              <span className="truncate">{t.label}</span>
+              {iconOnly ? null : <span className="truncate">{t.label}</span>}
               {t.badge != null ? (
                 <span className="ml-0.5 inline-flex items-center rounded-full border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 py-[1px] text-[10px] font-semibold text-[var(--fg-muted)]">
                   {t.badge}

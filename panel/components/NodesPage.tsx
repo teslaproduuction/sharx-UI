@@ -1,12 +1,25 @@
 "use client";
 
-import { Copy, Network, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, Network, Plus, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
 import { copyTextToClipboard } from "@/lib/copyToClipboard";
-import { joinNameFlag, NAME_FLAG_SELECT_OPTIONS } from "@/lib/nameFlag";
+import {
+  addressForHostComposeHint,
+  buildAddressFromHostPort,
+  DEFAULT_NODE_PORT,
+  isValidNodePortString,
+  parseNodeAddressToHostPort,
+} from "@/lib/nodeAddress";
+import {
+  joinNameFlag,
+  NAME_FLAG_SELECT_OPTIONS,
+  splitNameFlag,
+} from "@/lib/nameFlag";
 import { NodeRegisterStep } from "@/components/NodeRegisterStep";
+import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
@@ -18,11 +31,17 @@ import {
   Reveal,
   SelectNative,
   Spinner,
+  Switch,
   useToast,
 } from "@/components/ui";
 
+/** Pre-`pairing` auth_mode from older DB / API rows. */
+const LEGACY_NODE_AUTH_PAIRING = "remna";
+
 type InboundRef = { id?: number; remark?: string };
 type ProfileRef = { id?: number; name?: string };
+
+type XrayProfileRow = { id: number; name: string; isDefault?: boolean };
 
 type NodeRow = {
   id: number;
@@ -41,57 +60,35 @@ type NodeRow = {
   inbounds?: InboundRef[];
   profiles?: ProfileRef[];
   xrayVersion?: string;
+  /** Worker Xray: running | stopped | error | unknown */
+  xrayState?: string;
+  /** When false, panel skips health, stats, and config to this node */
+  enable?: boolean;
 };
 
-const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
+/** Default image for the copy-paste compose snippet; replace with your registry path if needed. */
+const NODE_DOCKER_IMAGE = "sharx/sharxnode:latest";
+
+function xrayStateLabel(state: string | undefined, t: TFunction): string {
+  const s = (state || "unknown").toLowerCase();
+  if (s === "running") {
+    return t("pages.nodes.xrayStateRunning", { defaultValue: "Running" });
+  }
+  if (s === "stopped") {
+    return t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" });
+  }
+  if (s === "error") {
+    return t("pages.nodes.xrayStateError", { defaultValue: "Error" });
+  }
+  return t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" });
+}
 
 type PendingRegistration = {
   nodeId: number;
   secretKey?: string;
-  apiKey?: string;
 };
 
-function stripTrailingUrlSlashes(s: string) {
-  return s.replace(/\/+$/, "");
-}
-
-/** Accepts host:port or https://…; server expects a full base URL. */
-function normalizeNodeAddress(
-  raw: string,
-  opts: { legacyAuth: boolean; useTls: boolean },
-) {
-  const t = raw.trim();
-  if (!t) return "";
-  const low = t.toLowerCase();
-  if (low.startsWith("http://") || low.startsWith("https://")) {
-    return stripTrailingUrlSlashes(t);
-  }
-  const scheme = opts.legacyAuth && !opts.useTls ? "http" : "https";
-  return stripTrailingUrlSlashes(`${scheme}://${t}`);
-}
-
-/**
- * In host network mode, public URL in docs usually omits the published port
- * (service listens on host :8080; reverse proxy or DNS points here without :port in URL).
- */
-function addressForHostComposeHint(
-  addressInput: string,
-  opts: { legacyAuth: boolean; useTls: boolean },
-): string {
-  const normalized = normalizeNodeAddress(addressInput.trim(), opts);
-  if (!normalized) return "";
-  try {
-    const u = new URL(
-      normalized.startsWith("http") ? normalized : `https://${normalized}`,
-    );
-    u.port = "";
-    return u.toString().replace(/\/$/, "");
-  } catch {
-    return normalized;
-  }
-}
-
-/** Host-network worker: API on port 8080 in the process (default); no port publishing. */
+/** Host-network worker: API on port 8080 in the process (default); no port publishing. Self-contained (no .env). */
 function buildNodeDockerComposeYaml(secretKey: string, panelUrl: string) {
   const p = panelUrl || "https://your-panel.example";
   return `services:
@@ -99,21 +96,28 @@ function buildNodeDockerComposeYaml(secretKey: string, panelUrl: string) {
     image: ${NODE_DOCKER_IMAGE}
     container_name: sharx-node
     restart: unless-stopped
+    cap_add: [NET_ADMIN]
     network_mode: host
     volumes:
-      - ./bin:/app/bin
-      - ./logs:/app/logs
-      - ./cert:/app/cert
-      - ./data:/app/data
+      - sharx-node-logs:/app/logs
+      - sharx-node-cert:/app/cert
+      - sharx-node-data:/app/data
     environment:
       PANEL_URL: ${JSON.stringify(p)}
       SECRET_KEY: ${JSON.stringify(secretKey)}
+
+volumes:
+  sharx-node-logs:
+  sharx-node-cert:
+  sharx-node-data:
 `;
 }
 
 export function NodesPage() {
   const { t } = useTranslation();
   const toast = useToast();
+  const ws = usePanelWebSocket();
+  const resyncAfterDisconnect = useRef(false);
   const [rows, setRows] = useState<NodeRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -130,12 +134,18 @@ export function NodesPage() {
   const [pendingReg, setPendingReg] = useState<PendingRegistration | null>(
     null,
   );
-  const [createdApiKey, setCreatedApiKey] = useState<string | null>(null);
   const [createdSecretKey, setCreatedSecretKey] = useState<string | null>(null);
   // Panel-wide pairing secret: same for every node, fetched once on modal open.
   const [panelSecretKey, setPanelSecretKey] = useState<string | null>(null);
   const [panelSecretLoading, setPanelSecretLoading] = useState(false);
   const [panelOrigin, setPanelOrigin] = useState("");
+
+  const [multiNode, setMultiNode] = useState<boolean | null>(null);
+  const [profileList, setProfileList] = useState<XrayProfileRow[]>([]);
+  const [profileListLoading, setProfileListLoading] = useState(false);
+  const [profileAssignNodeId, setProfileAssignNodeId] = useState<number | null>(null);
+  const [selectedProfileId, setSelectedProfileId] = useState<number | null>(null);
+  const [profileAssignSubmitting, setProfileAssignSubmitting] = useState(false);
 
   const [deleteTarget, setDeleteTarget] = useState<NodeRow | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
@@ -143,28 +153,30 @@ export function NodesPage() {
   const [form, setForm] = useState({
     nameFlag: "",
     name: "",
-    address: "",
-    useTls: false,
+    host: "",
+    port: DEFAULT_NODE_PORT,
+    useTls: true,
     certPath: "",
     keyPath: "",
     insecureTls: false,
     trafficLimitGB: "0",
-    legacyAuth: false,
   });
 
   const [editOpen, setEditOpen] = useState(false);
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
+  const [togglingEnableId, setTogglingEnableId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({
     name: "",
     nameFlag: "",
-    address: "",
+    host: "",
+    port: DEFAULT_NODE_PORT,
     trafficLimitGB: "0",
+    enable: true,
     useTls: false,
     certPath: "",
     keyPath: "",
     insecureTls: false,
-    legacyAuth: false,
   });
 
   const load = useCallback(async () => {
@@ -185,7 +197,43 @@ export function NodesPage() {
     void load();
   }, [load]);
 
-  const resetAddModal = () => {
+  const loadMultiNode = useCallback(async () => {
+    const s = await postJson<Record<string, unknown>>(panel("setting/all"));
+    if (s.success && s.obj) {
+      setMultiNode(Boolean((s.obj as { multiNodeMode?: boolean }).multiNodeMode));
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadMultiNode();
+  }, [loadMultiNode]);
+
+  useEffect(() => {
+    if (!ws) return;
+    const onNodes = (p: unknown) => {
+      if (!Array.isArray(p)) return;
+      setRows(p as NodeRow[]);
+    };
+    const onDisc = () => {
+      resyncAfterDisconnect.current = true;
+    };
+    const onConn = () => {
+      if (resyncAfterDisconnect.current) {
+        resyncAfterDisconnect.current = false;
+        void load();
+      }
+    };
+    ws.on("nodes", onNodes);
+    ws.on("disconnected", onDisc);
+    ws.on("connected", onConn);
+    return () => {
+      ws.off("nodes", onNodes);
+      ws.off("disconnected", onDisc);
+      ws.off("connected", onConn);
+    };
+  }, [ws, load]);
+
+  const resetAddModal = useCallback(() => {
     setAddWizardStep(1);
     setIsRegistering(false);
     setRegisterPhase("create");
@@ -195,17 +243,36 @@ export function NodesPage() {
     setForm({
       nameFlag: "",
       name: "",
-      address: "",
-      useTls: false,
+      host: "",
+      port: DEFAULT_NODE_PORT,
+      useTls: true,
       certPath: "",
       keyPath: "",
       insecureTls: false,
       trafficLimitGB: "0",
-      legacyAuth: false,
     });
-    setCreatedApiKey(null);
     setCreatedSecretKey(null);
-  };
+    setProfileList([]);
+    setProfileListLoading(false);
+    setProfileAssignNodeId(null);
+    setSelectedProfileId(null);
+    setProfileAssignSubmitting(false);
+  }, []);
+
+  const loadProfilesForAssign = useCallback(async () => {
+    setProfileListLoading(true);
+    const r = await getJson<XrayProfileRow[]>(panel("xray-core-config-profile/list"));
+    setProfileListLoading(false);
+    if (r.success && Array.isArray(r.obj)) {
+      const list = r.obj;
+      setProfileList(list);
+      const def = list.find((p) => p.isDefault) ?? list[0];
+      setSelectedProfileId(def ? def.id : null);
+    } else {
+      setProfileList([]);
+      setSelectedProfileId(null);
+    }
+  }, []);
 
   const loadPanelSecret = useCallback(async () => {
     if (panelSecretKey) return;
@@ -227,10 +294,11 @@ export function NodesPage() {
     }
     setAddOpen(true);
     void loadPanelSecret();
+    void loadMultiNode();
   };
 
   const closeAdd = () => {
-    if (isRegistering) return;
+    if (isRegistering || profileAssignSubmitting) return;
     setAddOpen(false);
     resetAddModal();
   };
@@ -247,8 +315,9 @@ export function NodesPage() {
     | { name: string; address: string; body: Record<string, unknown> }
     | null => {
     const name = joinNameFlag(form.nameFlag, form.name.trim());
-    const address = normalizeNodeAddress(form.address.trim(), {
-      legacyAuth: form.legacyAuth,
+    if (!isValidNodePortString(form.port)) return null;
+    const address = buildAddressFromHostPort(form.host, form.port, {
+      legacyAuth: false,
       useTls: form.useTls,
     });
     if (!name || !address) return null;
@@ -260,7 +329,7 @@ export function NodesPage() {
     const body: Record<string, unknown> = {
       name,
       address,
-      legacyAuth: form.legacyAuth,
+      legacyAuth: false,
       useTls: form.useTls,
       certPath: form.certPath.trim(),
       keyPath: form.keyPath.trim(),
@@ -311,7 +380,6 @@ export function NodesPage() {
           stash = {
             nodeId: obj.id,
             secretKey: obj.secretKey?.trim() || undefined,
-            apiKey: obj.apiKey || undefined,
           };
           setPendingReg(stash);
         } else {
@@ -323,11 +391,8 @@ export function NodesPage() {
 
         {
           const sk0 = stash.secretKey?.trim() ?? "";
-          const ak0 = stash.apiKey?.trim() ?? "";
           if (sk0) {
             setCreatedSecretKey(sk0);
-          } else if (ak0) {
-            setCreatedApiKey(ak0);
           }
         }
         if (typeof window !== "undefined") {
@@ -348,17 +413,29 @@ export function NodesPage() {
           return;
         }
 
-        const sk = stash.secretKey?.trim() ?? "";
-        const ak = stash.apiKey?.trim() ?? "";
-        if (!sk && !ak) {
-          setAddWizardStep(3);
+        if (multiNode === true) {
+          setProfileAssignNodeId(stash.nodeId);
           setPendingReg(null);
+          setAddWizardStep(3);
           void load();
+          toast.success(t("pages.nodes.addSuccess"));
+          void loadProfilesForAssign();
+          return;
+        }
+
+        const sk = stash.secretKey?.trim() ?? "";
+        if (!sk) {
+          setPendingReg(null);
+          setAddOpen(false);
+          resetAddModal();
+          void load();
+          toast.success(t("pages.nodes.addSuccess"));
           return;
         }
         setPendingReg(null);
-        setAddWizardStep(3);
         void load();
+        setAddOpen(false);
+        resetAddModal();
         toast.success(t("pages.nodes.addSuccess"));
       } catch {
         setRegisterError(t("pages.nodes.addError"));
@@ -367,12 +444,29 @@ export function NodesPage() {
         setIsRegistering(false);
       }
     },
-    [getAddBody, pendingReg, t, toast, load],
+    [
+      getAddBody,
+      pendingReg,
+      t,
+      toast,
+      load,
+      resetAddModal,
+      multiNode,
+      loadProfilesForAssign,
+    ],
   );
 
   runRegisterRef.current = runRegisterFlow;
 
   const goToRegister = useCallback(() => {
+    if (!isValidNodePortString(form.port)) {
+      toast.error(t("pages.nodes.validPort"));
+      return;
+    }
+    if (!form.host.trim()) {
+      toast.error(t("pages.nodes.enterNodeAddress"));
+      return;
+    }
     const pack = getAddBody();
     if (!pack) {
       if (!joinNameFlag(form.nameFlag, form.name.trim())) {
@@ -385,7 +479,10 @@ export function NodesPage() {
     if (typeof window !== "undefined") {
       setPanelOrigin(window.location.origin);
     }
-    setForm((f) => ({ ...f, address: pack.address }));
+    setForm((f) => ({
+      ...f,
+      ...parseNodeAddressToHostPort(pack.address),
+    }));
     setAddWizardStep(2);
     setRegisterError(null);
     setRegisterFailKind(null);
@@ -393,7 +490,7 @@ export function NodesPage() {
     setTimeout(() => {
       void runRegisterRef.current(checkOnly);
     }, 0);
-  }, [getAddBody, form.name, form.nameFlag, pendingReg, t, toast]);
+  }, [getAddBody, form.name, form.nameFlag, form.host, form.port, pendingReg, t, toast]);
 
   const backToFormStep = useCallback(() => {
     if (isRegistering) return;
@@ -408,7 +505,6 @@ export function NodesPage() {
   const clearDraftFromFormEdit = useCallback(() => {
     setPendingReg(null);
     setCreatedSecretKey(null);
-    setCreatedApiKey(null);
   }, []);
 
   const deleteDraftNode = useCallback(async () => {
@@ -420,7 +516,6 @@ export function NodesPage() {
         toast.success(t("pages.nodes.deleteSuccess"));
         setPendingReg(null);
         setCreatedSecretKey(null);
-        setCreatedApiKey(null);
         setRegisterError(null);
         setRegisterFailKind(null);
         void load();
@@ -436,34 +531,62 @@ export function NodesPage() {
     }
   }, [pendingReg, t, toast, load]);
 
-  const copyApiKey = async () => {
-    if (!createdApiKey) return;
-    try {
-      await copyTextToClipboard(createdApiKey);
-      toast.success(t("copied"));
-    } catch {
-      toast.error(t("pages.nodes.copyError"));
-    }
-  };
-
-  const publicUrlHint = useMemo(
-    () =>
-      addressForHostComposeHint(form.address, {
-        legacyAuth: form.legacyAuth,
-        useTls: form.useTls,
-      }),
-    [form.address, form.legacyAuth, form.useTls],
-  );
+  const publicUrlHint = useMemo(() => {
+    if (!isValidNodePortString(form.port)) return "";
+    const combined = buildAddressFromHostPort(form.host, form.port, {
+      legacyAuth: false,
+      useTls: form.useTls,
+    });
+    if (!combined) return "";
+    return addressForHostComposeHint(combined, {
+      legacyAuth: false,
+      useTls: form.useTls,
+    });
+  }, [form.host, form.port, form.useTls]);
 
   const addModalTitle = useMemo(() => {
-    if (addWizardStep === 3) {
-      if (createdSecretKey) return t("pages.nodes.secretKeyGenerated");
-      if (createdApiKey) return t("pages.nodes.apiKeyGenerated");
-      return t("pages.nodes.addSuccess");
-    }
     if (addWizardStep === 2) return t("pages.nodes.wizardRegisterTitle");
+    if (addWizardStep === 3) {
+      return t("pages.nodes.wizardProfileTitle", {
+        defaultValue: "Xray profile for this node",
+      });
+    }
     return t("pages.nodes.wizardFormTitle");
-  }, [addWizardStep, createdApiKey, createdSecretKey, t]);
+  }, [addWizardStep, t]);
+
+  const submitProfileAssign = useCallback(async () => {
+    if (selectedProfileId == null || profileAssignNodeId == null) {
+      toast.error(
+        t("pages.nodes.selectProfileError", { defaultValue: "Select a profile" }),
+      );
+      return;
+    }
+    setProfileAssignSubmitting(true);
+    const r = await postJson(
+      panel(`xray-core-config-profile/assign-nodes/${selectedProfileId}`),
+      { nodeIds: [profileAssignNodeId] },
+      true,
+    );
+    setProfileAssignSubmitting(false);
+    if (r.success) {
+      toast.success(r.msg || t("success"));
+      setAddOpen(false);
+      resetAddModal();
+      void load();
+    } else {
+      toast.error((r as { msg?: string }).msg || t("fail"));
+    }
+  }, [selectedProfileId, profileAssignNodeId, t, toast, load, resetAddModal]);
+
+  const skipProfileStep = useCallback(() => {
+    setAddOpen(false);
+    resetAddModal();
+  }, [resetAddModal]);
+
+  const backToRegisterStep = useCallback(() => {
+    if (profileAssignSubmitting) return;
+    setAddWizardStep(2);
+  }, [profileAssignSubmitting]);
 
   const copyDockerCompose = async () => {
     if (!createdSecretKey) return;
@@ -485,12 +608,6 @@ export function NodesPage() {
     } catch {
       toast.error(t("pages.nodes.copyError"));
     }
-  };
-
-  const finishCreated = () => {
-    setAddOpen(false);
-    resetAddModal();
-    void load();
   };
 
   const confirmDeleteNode = async () => {
@@ -518,40 +635,70 @@ export function NodesPage() {
     }
   };
 
+  const patchNodeEnable = useCallback(
+    async (row: NodeRow, next: boolean) => {
+      setTogglingEnableId(row.id);
+      try {
+        const r = await postJson(panel(`node/update/${row.id}`), { enable: next }, true);
+        if (r.success) {
+          setRows((prev) =>
+            prev.map((x) => (x.id === row.id ? { ...x, enable: next } : x)),
+          );
+        } else {
+          toast.error(
+            (r as { msg?: string }).msg || t("pages.nodes.updateError"),
+          );
+        }
+      } catch {
+        toast.error(t("pages.nodes.updateError"));
+      } finally {
+        setTogglingEnableId(null);
+      }
+    },
+    [t, toast],
+  );
+
   const openEdit = async (row: NodeRow) => {
     setEditId(row.id);
+    const fromRow = parseNodeAddressToHostPort(row.address);
+    const fromName = splitNameFlag(row.name);
     setEditForm({
-      name: row.name,
-      nameFlag: "",
-      address: row.address,
+      name: fromName.text,
+      nameFlag: fromName.flag,
+      host: fromRow.host,
+      port: fromRow.port,
       trafficLimitGB: String(
         row.trafficLimitGB != null && row.trafficLimitGB > 0
           ? row.trafficLimitGB
           : 0,
       ),
+      enable: row.enable !== false,
       useTls: Boolean(row.useTls),
       certPath: row.certPath ?? "",
       keyPath: row.keyPath ?? "",
       insecureTls: Boolean(row.insecureTls),
-      legacyAuth: (row.authMode ?? "").toLowerCase() === "legacy",
     });
     const r = await getJson<NodeRow>(panel(`node/get/${row.id}`));
     if (r.success && r.obj && typeof r.obj === "object") {
       const o = r.obj as NodeRow;
+      const parsed = parseNodeAddressToHostPort(o.address);
+      const sp = splitNameFlag(o.name);
       setEditForm((f) => ({
         ...f,
-        name: o.name,
-        address: o.address,
+        name: sp.text,
+        nameFlag: sp.flag,
+        host: parsed.host,
+        port: parsed.port,
         trafficLimitGB: String(
           o.trafficLimitGB != null && o.trafficLimitGB > 0
             ? o.trafficLimitGB
             : 0,
         ),
+        enable: o.enable !== false,
         useTls: Boolean(o.useTls),
         certPath: o.certPath ?? "",
         keyPath: o.keyPath ?? "",
         insecureTls: Boolean(o.insecureTls),
-        legacyAuth: (o.authMode ?? "").toLowerCase() === "legacy",
       }));
     }
     setEditOpen(true);
@@ -571,10 +718,22 @@ export function NodesPage() {
       toast.error(t("pages.nodes.enterNodeName"));
       return;
     }
-    const address = normalizeNodeAddress(editForm.address.trim(), {
-      legacyAuth: editForm.legacyAuth,
-      useTls: editForm.useTls,
-    });
+    if (!isValidNodePortString(editForm.port)) {
+      toast.error(t("pages.nodes.validPort"));
+      return;
+    }
+    if (!editForm.host.trim()) {
+      toast.error(t("pages.nodes.enterNodeAddress"));
+      return;
+    }
+    const address = buildAddressFromHostPort(
+      editForm.host,
+      editForm.port,
+      {
+        legacyAuth: false,
+        useTls: editForm.useTls,
+      },
+    );
     if (!address) {
       toast.error(t("pages.nodes.enterNodeAddress"));
       return;
@@ -590,7 +749,8 @@ export function NodesPage() {
       const body: Record<string, unknown> = {
         name,
         address,
-        useTls: editForm.legacyAuth ? editForm.useTls : true,
+        enable: editForm.enable,
+        useTls: editForm.useTls,
         certPath: editForm.certPath.trim(),
         keyPath: editForm.keyPath.trim(),
         insecureTls: editForm.insecureTls,
@@ -618,7 +778,7 @@ export function NodesPage() {
 
   const authModeLabel = (m?: string) => {
     const k = (m ?? "legacy").toLowerCase();
-    if (k === "pairing" || k === "remna")
+    if (k === "pairing" || k === LEGACY_NODE_AUTH_PAIRING)
       return t("pages.nodes.authPairing");
     return t("pages.nodes.authLegacy");
   };
@@ -631,15 +791,6 @@ export function NodesPage() {
         iconTone="success"
         actions={
           <>
-            <Button
-              variant="primary"
-              onClick={() => void load()}
-              loading={loading}
-              className="!gap-2"
-            >
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button variant="secondary" onClick={openAdd} className="!gap-2">
               <Plus size={16} />
               {t("pages.nodes.addNode")}
@@ -668,25 +819,56 @@ export function NodesPage() {
           </div>
         ) : (
           <div className="panel-data-table overflow-x-auto">
-            <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[960px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                  <th
+                    className="w-14 p-3"
+                    scope="col"
+                    aria-label={t("pages.nodes.nodeEnabled")}
+                  />
                   <th className="p-3">{t("pages.nodes.name")}</th>
                   <th className="p-3">{t("pages.nodes.address")}</th>
                   <th className="p-3">{t("pages.nodes.authMode")}</th>
                   <th className="p-3">{t("pages.nodes.status")}</th>
                   <th className="p-3">{t("pages.nodes.responseTime")}</th>
                   <th className="p-3">{t("pages.nodes.xrayVersion")}</th>
+                  <th className="p-3">{t("pages.nodes.xrayState")}</th>
                   <th className="p-3">{t("pages.nodes.assignedInbounds")}</th>
-                  <th className="p-3 w-28">{t("pages.nodes.operate")}</th>
+                  <th className="p-3 w-20">{t("pages.nodes.operate")}</th>
                 </tr>
               </thead>
               <tbody>
                 {rows.map((r) => (
                   <tr
                     key={r.id}
-                    className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                    role="button"
+                    tabIndex={0}
+                    className={`border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] ${
+                      r.enable === false ? "opacity-[0.7]" : ""
+                    } cursor-pointer`}
+                    onClick={() => void openEdit(r)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        void openEdit(r);
+                      }
+                    }}
                   >
+                    <td
+                      className="p-3 w-14"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Switch
+                        size="sm"
+                        checked={r.enable !== false}
+                        disabled={togglingEnableId === r.id}
+                        ariaLabel={t("pages.nodes.nodeEnabled")}
+                        onChange={(next) => {
+                          void patchNodeEnable(r, next);
+                        }}
+                      />
+                    </td>
                     <td className="p-3 text-[var(--fg)]">{r.name}</td>
                     <td className="p-3 font-mono text-xs">{r.address}</td>
                     <td className="p-3 text-xs">{authModeLabel(r.authMode)}</td>
@@ -699,6 +881,9 @@ export function NodesPage() {
                     <td className="p-3 font-mono text-xs">
                       {r.xrayVersion || "—"}
                     </td>
+                    <td className="p-3 text-xs">
+                      {xrayStateLabel(r.xrayState, t)}
+                    </td>
                     <td className="p-3 max-w-[220px] text-xs">
                       {!r.inbounds?.length
                         ? "—"
@@ -710,18 +895,11 @@ export function NodesPage() {
                             )
                             .join(", ")}
                     </td>
-                    <td className="p-3">
+                    <td
+                      className="p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <div className="flex items-center gap-0.5">
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="!p-1.5"
-                          onClick={() => void openEdit(r)}
-                          title={t("pages.nodes.editNode")}
-                          aria-label={t("pages.nodes.editNode")}
-                        >
-                          <Pencil size={16} />
-                        </Button>
                         <Button
                           type="button"
                           variant="ghost"
@@ -746,53 +924,48 @@ export function NodesPage() {
       <Modal
         open={addOpen}
         onClose={() => {
-          if (isRegistering) return;
+          if (isRegistering || profileAssignSubmitting) return;
           closeAdd();
         }}
-        closable={!isRegistering}
+        closable={!isRegistering && !profileAssignSubmitting}
         title={addModalTitle}
         width={
-          (addWizardStep === 2 && createdSecretKey) ||
-          (addWizardStep === 3 && createdSecretKey)
+          addWizardStep === 2 && createdSecretKey
             ? 640
-            : 580
+            : addWizardStep === 3
+              ? 520
+              : 580
         }
         footer={(() => {
           if (addWizardStep === 3) {
-            if (createdSecretKey || createdApiKey) {
-              return (
-                <div className="flex flex-wrap justify-end gap-2">
-                  {createdSecretKey ? (
-                    <Button
-                      variant="primary"
-                      type="button"
-                      onClick={() => void copyDockerCompose()}
-                      className="!gap-2"
-                    >
-                      <Copy size={16} />
-                      {t("pages.nodes.copyDockerCompose")}
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="secondary"
-                      type="button"
-                      onClick={() => void copyApiKey()}
-                      className="!gap-2"
-                    >
-                      <Copy size={16} />
-                      {t("copy")}
-                    </Button>
-                  )}
-                  <Button variant="secondary" type="button" onClick={finishCreated}>
-                    {t("close")}
-                  </Button>
-                </div>
-              );
-            }
             return (
-              <div className="flex flex-wrap justify-end">
-                <Button type="button" onClick={finishCreated}>
-                  {t("close")}
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={profileAssignSubmitting}
+                  onClick={backToRegisterStep}
+                >
+                  {t("back")}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={profileAssignSubmitting}
+                  onClick={skipProfileStep}
+                >
+                  {t("pages.nodes.skipProfile", { defaultValue: "Skip" })}
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  loading={profileAssignSubmitting}
+                  disabled={profileAssignSubmitting}
+                  onClick={() => void submitProfileAssign()}
+                >
+                  {t("pages.nodes.assignProfileDone", {
+                    defaultValue: "Assign and close",
+                  })}
                 </Button>
               </div>
             );
@@ -819,17 +992,6 @@ export function NodesPage() {
                       {t("pages.nodes.copyDockerCompose")}
                     </Button>
                   ) : null}
-                  {createdApiKey ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="!gap-2"
-                      onClick={() => void copyApiKey()}
-                    >
-                      <Copy size={16} />
-                      {t("copy")}
-                    </Button>
-                  ) : null}
                   <Button
                     type="button"
                     variant="primary"
@@ -852,17 +1014,6 @@ export function NodesPage() {
                     >
                       <Copy size={16} />
                       {t("pages.nodes.copyDockerCompose")}
-                    </Button>
-                  ) : null}
-                  {createdApiKey ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="!gap-2"
-                      onClick={() => void copyApiKey()}
-                    >
-                      <Copy size={16} />
-                      {t("copy")}
                     </Button>
                   ) : null}
                   <span className="text-xs text-[var(--fg-subtle)]">
@@ -905,53 +1056,90 @@ export function NodesPage() {
           );
         })()}
       >
-        {addWizardStep === 3 && createdSecretKey ? (
-          <div className="flex flex-col gap-2 text-sm">
-            <p className="text-[var(--fg-muted)]">
-              {t("pages.nodes.copyComposeOnlyHint")}
-            </p>
-          </div>
-        ) : addWizardStep === 3 && createdApiKey ? (
-          <div className="flex flex-col gap-3 text-sm">
-            <p className="text-[var(--fg-muted)]">
-              {t("pages.nodes.saveApiKeyHint")}
-            </p>
-            <Input
-              readOnly
-              value={createdApiKey}
-              className="font-mono text-xs"
-            />
-          </div>
-        ) : addWizardStep === 3 ? null : addWizardStep === 2 ? (
+        {addWizardStep === 3 ? (
           <div className="flex flex-col gap-4 text-sm">
-            {createdSecretKey || createdApiKey ? (
+            {createdSecretKey ? (
+              <div className="rounded-lg border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] p-3">
+                <p className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.nodes.wizardProfileComposeHint", {
+                    defaultValue: "You can still copy the node compose snippet below.",
+                  })}
+                </p>
+                <div className="mt-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!gap-2"
+                    onClick={() => void copyDockerCompose()}
+                  >
+                    <Copy size={16} />
+                    {t("pages.nodes.copyDockerCompose")}
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+            <p className="text-xs leading-relaxed text-[var(--fg-muted)]">
+              {t("pages.nodes.wizardProfileHint", {
+                defaultValue:
+                  "Choose a core config profile for this node, or skip to use the default profile.",
+              })}
+            </p>
+            {profileListLoading ? (
+              <div className="grid min-h-32 place-items-center">
+                <Spinner size={32} />
+              </div>
+            ) : profileList.length === 0 ? (
+              <p className="text-sm text-[var(--fg-subtle)]">
+                {t("pages.nodes.wizardProfileEmpty", {
+                  defaultValue: "No profiles found. You can add them under Xray — Core config profiles.",
+                })}
+              </p>
+            ) : (
+              <div className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-1" role="radiogroup">
+                {profileList.map((pr) => (
+                  <label
+                    key={pr.id}
+                    className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 text-sm transition-colors ${
+                      selectedProfileId === pr.id
+                        ? "border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_10%,transparent)]"
+                        : "border-[var(--border)] bg-[var(--bg-elevated)] hover:border-[var(--fg-subtle)]"
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="node-xray-profile"
+                      className="shrink-0"
+                      checked={selectedProfileId === pr.id}
+                      onChange={() => setSelectedProfileId(pr.id)}
+                    />
+                    <span className="min-w-0 font-medium text-[var(--fg)]">
+                      {pr.name}
+                      {pr.isDefault
+                        ? ` ${t("pages.nodes.profileDefaultTag", { defaultValue: "(default)" })}`
+                        : ""}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : addWizardStep === 2 ? (
+          <div className="flex flex-col gap-4 text-sm">
+            {createdSecretKey ? (
               <div className="rounded-lg border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] p-3">
                 <p className="text-xs text-[var(--fg-muted)]">
                   {t("pages.nodes.registerStepDeployHint")}
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {createdSecretKey ? (
-                    <Button
-                      type="button"
-                      variant="primary"
-                      className="!gap-2"
-                      onClick={() => void copyDockerCompose()}
-                    >
-                      <Copy size={16} />
-                      {t("pages.nodes.copyDockerCompose")}
-                    </Button>
-                  ) : null}
-                  {createdApiKey ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="!gap-2"
-                      onClick={() => void copyApiKey()}
-                    >
-                      <Copy size={16} />
-                      {t("pages.nodes.copyNodeApiKey")}
-                    </Button>
-                  ) : null}
+                  <Button
+                    type="button"
+                    variant="primary"
+                    className="!gap-2"
+                    onClick={() => void copyDockerCompose()}
+                  >
+                    <Copy size={16} />
+                    {t("pages.nodes.copyDockerCompose")}
+                  </Button>
                 </div>
               </div>
             ) : null}
@@ -1008,28 +1196,26 @@ export function NodesPage() {
                 </div>
               </div>
             ) : null}
-            {!form.legacyAuth ? (
-              <div className="rounded-md border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] p-3">
-                <p className="mb-1 text-xs font-medium text-[var(--fg-muted)]">
-                  {t("pages.nodes.composeFirstStepTitle")}
-                </p>
-                <p className="mb-2 text-[11px] text-[var(--fg-subtle)]">
-                  {t("pages.nodes.composeFirstStepDesc")}
-                </p>
-                <Button
-                  type="button"
-                  variant="primary"
-                  className="!gap-2"
-                  disabled={!panelSecretKey}
-                  loading={panelSecretLoading && !panelSecretKey}
-                  onClick={() => void copyPanelCompose()}
-                >
-                  <Copy size={16} />
-                  {t("pages.nodes.copyDockerCompose")}
-                </Button>
-              </div>
-            ) : null}
-            {!form.legacyAuth && publicUrlHint ? (
+            <div className="rounded-md border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] p-3">
+              <p className="mb-1 text-xs font-medium text-[var(--fg-muted)]">
+                {t("pages.nodes.composeFirstStepTitle")}
+              </p>
+              <p className="mb-2 text-[11px] text-[var(--fg-subtle)]">
+                {t("pages.nodes.composeFirstStepDesc")}
+              </p>
+              <Button
+                type="button"
+                variant="primary"
+                className="!gap-2"
+                disabled={!panelSecretKey}
+                loading={panelSecretLoading && !panelSecretKey}
+                onClick={() => void copyPanelCompose()}
+              >
+                <Copy size={16} />
+                {t("pages.nodes.copyDockerCompose")}
+              </Button>
+            </div>
+            {publicUrlHint ? (
               <p className="text-[11px] text-[var(--fg-subtle)]">
                 {t("pages.nodes.hostUrlNoPortHint", { url: publicUrlHint })}
               </p>
@@ -1040,7 +1226,7 @@ export function NodesPage() {
                   className="mb-1.5 block text-xs text-[var(--fg-muted)]"
                   htmlFor="node-name-flag"
                 >
-                  {t("pages.nodes.nameFlag")}
+                  {t("pages.nodes.country")}
                 </label>
                 <SelectNative
                   id="node-name-flag"
@@ -1070,32 +1256,38 @@ export function NodesPage() {
                 />
               </label>
             </div>
-            <label className="grid gap-1">
-              <span className="text-xs text-[var(--fg-muted)]">
-                {t("pages.nodes.nodeAddress")}
-              </span>
-              <Input
-                value={form.address}
-                onChange={(e) => {
-                  clearDraftFromFormEdit();
-                  setForm((f) => ({ ...f, address: e.target.value }));
-                }}
-                placeholder="node.example.com:8080"
-              />
-            </label>
-            <CheckboxField
-              label={t("pages.nodes.legacyAuth")}
-              checked={form.legacyAuth}
-              onChange={(e) => {
-                clearDraftFromFormEdit();
-                setForm((f) => ({ ...f, legacyAuth: e.target.checked }));
-              }}
-            />
-            {!form.legacyAuth ? (
-              <p className="text-[11px] text-[var(--fg-subtle)]">
-                {t("pages.nodes.authPairingDescription")}
-              </p>
-            ) : null}
+            <div className="grid gap-1 sm:grid-cols-[1fr,6.5rem] sm:items-end sm:gap-3">
+              <label className="grid min-w-0 gap-1">
+                <span className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.nodes.nodeHost")}
+                </span>
+                <Input
+                  value={form.host}
+                  onChange={(e) => {
+                    clearDraftFromFormEdit();
+                    setForm((f) => ({ ...f, host: e.target.value }));
+                  }}
+                  placeholder="node.example.com"
+                />
+              </label>
+              <label className="grid gap-1">
+                <span className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.nodes.nodePort")}
+                </span>
+                <Input
+                  value={form.port}
+                  onChange={(e) => {
+                    clearDraftFromFormEdit();
+                    setForm((f) => ({ ...f, port: e.target.value }));
+                  }}
+                  inputMode="numeric"
+                  placeholder={DEFAULT_NODE_PORT}
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-[var(--fg-subtle)]">
+              {t("pages.nodes.authPairingDescription")}
+            </p>
             <label className="grid gap-1">
               <span className="text-xs text-[var(--fg-muted)]">
                 {t("pages.nodes.trafficLimitGB")}
@@ -1114,61 +1306,32 @@ export function NodesPage() {
                 {t("pages.nodes.trafficLimitGBHint")}
               </span>
             </label>
-            {form.legacyAuth ? (
-              <div className="border-t border-[var(--border)] pt-3">
-                <p className="mb-2 text-xs font-medium text-[var(--fg-muted)]">
-                  {t("pages.nodes.tlsSettings")}
-                </p>
-                <div className="flex flex-col gap-2">
-                  <CheckboxField
-                    label={t("pages.nodes.useTls")}
-                    checked={form.useTls}
-                    onChange={(e) => {
-                      clearDraftFromFormEdit();
-                      setForm((f) => ({ ...f, useTls: e.target.checked }));
-                    }}
-                  />
-                  <CheckboxField
-                    label={t("pages.nodes.insecureTls")}
-                    checked={form.insecureTls}
-                    onChange={(e) => {
-                      clearDraftFromFormEdit();
-                      setForm((f) => ({
-                        ...f,
-                        insecureTls: e.target.checked,
-                      }));
-                    }}
-                  />
-                  <label className="grid gap-1">
-                    <span className="text-[11px] text-[var(--fg-subtle)]">
-                      {t("pages.nodes.certPath")}
-                    </span>
-                    <Input
-                      value={form.certPath}
-                      onChange={(e) => {
-                        clearDraftFromFormEdit();
-                        setForm((f) => ({
-                          ...f,
-                          certPath: e.target.value,
-                        }));
-                      }}
-                    />
-                  </label>
-                  <label className="grid gap-1">
-                    <span className="text-[11px] text-[var(--fg-subtle)]">
-                      {t("pages.nodes.keyPath")}
-                    </span>
-                    <Input
-                      value={form.keyPath}
-                      onChange={(e) => {
-                        clearDraftFromFormEdit();
-                        setForm((f) => ({ ...f, keyPath: e.target.value }));
-                      }}
-                    />
-                  </label>
-                </div>
+            <div className="border-t border-[var(--border)] pt-3">
+              <p className="mb-2 text-xs font-medium text-[var(--fg-muted)]">
+                {t("pages.nodes.tlsSettings")}
+              </p>
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+                <CheckboxField
+                  label={t("pages.nodes.useTls")}
+                  checked={form.useTls}
+                  onChange={(e) => {
+                    clearDraftFromFormEdit();
+                    setForm((f) => ({ ...f, useTls: e.target.checked }));
+                  }}
+                />
+                <CheckboxField
+                  label={t("pages.nodes.insecureTls")}
+                  checked={form.insecureTls}
+                  onChange={(e) => {
+                    clearDraftFromFormEdit();
+                    setForm((f) => ({
+                      ...f,
+                      insecureTls: e.target.checked,
+                    }));
+                  }}
+                />
               </div>
-            ) : null}
+            </div>
           </div>
         )}
       </Modal>
@@ -1177,7 +1340,7 @@ export function NodesPage() {
         open={editOpen}
         onClose={closeEdit}
         title={t("pages.nodes.editNode")}
-        width={560}
+        width={640}
         footer={
           <div className="flex flex-wrap justify-end gap-2">
             <Button
@@ -1200,13 +1363,25 @@ export function NodesPage() {
         }
       >
         <div className="flex flex-col gap-3 text-sm">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] px-3 py-2.5">
+            <span className="text-sm font-medium text-[var(--fg)]">
+              {t("pages.nodes.nodeEnabled")}
+            </span>
+            <Switch
+              checked={editForm.enable}
+              onChange={(next) =>
+                setEditForm((f) => ({ ...f, enable: next }))
+              }
+              ariaLabel={t("pages.nodes.nodeEnabled")}
+            />
+          </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
             <div className="w-full shrink-0 sm:max-w-[7.5rem]">
               <label
                 className="mb-1.5 block text-xs text-[var(--fg-muted)]"
                 htmlFor="edit-node-name-flag"
               >
-                {t("pages.nodes.nameFlag")}
+                {t("pages.nodes.country")}
               </label>
               <SelectNative
                 id="edit-node-name-flag"
@@ -1234,17 +1409,32 @@ export function NodesPage() {
               />
             </label>
           </div>
-          <label className="grid gap-1">
-            <span className="text-xs text-[var(--fg-muted)]">
-              {t("pages.nodes.nodeAddress")}
-            </span>
-            <Input
-              value={editForm.address}
-              onChange={(e) =>
-                setEditForm((f) => ({ ...f, address: e.target.value }))
-              }
-            />
-          </label>
+          <div className="grid gap-1 sm:grid-cols-[1fr,6.5rem] sm:items-end sm:gap-3">
+            <label className="grid min-w-0 gap-1">
+              <span className="text-xs text-[var(--fg-muted)]">
+                {t("pages.nodes.nodeHost")}
+              </span>
+              <Input
+                value={editForm.host}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, host: e.target.value }))
+                }
+              />
+            </label>
+            <label className="grid gap-1">
+              <span className="text-xs text-[var(--fg-muted)]">
+                {t("pages.nodes.nodePort")}
+              </span>
+              <Input
+                value={editForm.port}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, port: e.target.value }))
+                }
+                inputMode="numeric"
+                placeholder={DEFAULT_NODE_PORT}
+              />
+            </label>
+          </div>
           <label className="grid gap-1">
             <span className="text-xs text-[var(--fg-muted)]">
               {t("pages.nodes.trafficLimitGB")}
@@ -1262,58 +1452,33 @@ export function NodesPage() {
               }
             />
           </label>
-          {editForm.legacyAuth ? (
-            <div className="border-t border-[var(--border)] pt-3">
-              <p className="mb-2 text-xs font-medium text-[var(--fg-muted)]">
-                {t("pages.nodes.tlsSettings")}
-              </p>
-              <div className="flex flex-col gap-2">
-                <CheckboxField
-                  label={t("pages.nodes.useTls")}
-                  checked={editForm.useTls}
-                  onChange={(e) =>
-                    setEditForm((f) => ({ ...f, useTls: e.target.checked }))
-                  }
-                />
-                <CheckboxField
-                  label={t("pages.nodes.insecureTls")}
-                  checked={editForm.insecureTls}
-                  onChange={(e) =>
-                    setEditForm((f) => ({
-                      ...f,
-                      insecureTls: e.target.checked,
-                    }))
-                  }
-                />
-                <label className="grid gap-1">
-                  <span className="text-[11px] text-[var(--fg-subtle)]">
-                    {t("pages.nodes.certPath")}
-                  </span>
-                  <Input
-                    value={editForm.certPath}
-                    onChange={(e) =>
-                      setEditForm((f) => ({ ...f, certPath: e.target.value }))
-                    }
-                  />
-                </label>
-                <label className="grid gap-1">
-                  <span className="text-[11px] text-[var(--fg-subtle)]">
-                    {t("pages.nodes.keyPath")}
-                  </span>
-                  <Input
-                    value={editForm.keyPath}
-                    onChange={(e) =>
-                      setEditForm((f) => ({ ...f, keyPath: e.target.value }))
-                    }
-                  />
-                </label>
-              </div>
-            </div>
-          ) : (
-            <p className="text-[11px] text-[var(--fg-subtle)]">
-              {t("pages.nodes.editPairingNote")}
+          <p className="text-[11px] text-[var(--fg-subtle)]">
+            {t("pages.nodes.editPairingNote")}
+          </p>
+          <div className="border-t border-[var(--border)] pt-3">
+            <p className="mb-2 text-xs font-medium text-[var(--fg-muted)]">
+              {t("pages.nodes.tlsSettings")}
             </p>
-          )}
+            <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap">
+              <CheckboxField
+                label={t("pages.nodes.useTls")}
+                checked={editForm.useTls}
+                onChange={(e) =>
+                  setEditForm((f) => ({ ...f, useTls: e.target.checked }))
+                }
+              />
+              <CheckboxField
+                label={t("pages.nodes.insecureTls")}
+                checked={editForm.insecureTls}
+                onChange={(e) =>
+                  setEditForm((f) => ({
+                    ...f,
+                    insecureTls: e.target.checked,
+                  }))
+                }
+              />
+            </div>
+          </div>
         </div>
       </Modal>
 

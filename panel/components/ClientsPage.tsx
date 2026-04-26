@@ -4,40 +4,49 @@ import type { TFunction } from "i18next";
 import type { LucideIcon } from "lucide-react";
 import {
   Activity,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   Calendar,
+  Filter,
   Clock,
+  Columns3,
   Copy,
   ExternalLink,
   KeyRound,
   Layers,
+  ListChecks,
   Loader2,
   Mail,
   Megaphone,
-  MoreHorizontal,
   Plus,
   Power,
   PowerOff,
   QrCode,
-  RefreshCw,
   RotateCcw,
   Send,
   Shield,
   Smartphone,
   Trash2,
+  Unplug,
   User,
   Users,
 } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import type { Dispatch, ReactNode, SetStateAction, TextareaHTMLAttributes } from "react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
-import { sizeFormat } from "@/lib/format";
+import { usePanelWebSocket } from "@/lib/panelWebSocket";
+import { copyTextToClipboard } from "@/lib/copyToClipboard";
+import { panelTimestampToMs, sizeFormat } from "@/lib/format";
 import { panel } from "@/lib/paths";
-import { PageScaffold, PageHeader, StatusPill, Surface } from "@/components/panel";
+import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
+import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
+  ConfirmDialog,
   IconButton,
   IconTile,
   Input,
@@ -84,6 +93,36 @@ function SectionLabel({ icon: Icon, children }: { icon: LucideIcon; children: Re
   );
 }
 
+function InboundCapsuleToggle({
+  selected,
+  onToggle,
+  label,
+  sublabel,
+}: {
+  selected: boolean;
+  onToggle: () => void;
+  label: string;
+  sublabel: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      className={cx(
+        "inline-flex min-w-0 max-w-full flex-col rounded-full border px-3 py-1.5 text-left text-xs transition-colors",
+        selected
+          ? "border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] text-[var(--fg)]"
+          : "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-muted)] hover:border-[var(--fg-subtle)]",
+      )}
+    >
+      <span className="truncate font-medium">{label}</span>
+      <span className="truncate text-[10px] text-[var(--fg-subtle)]">
+        {sublabel}
+      </span>
+    </button>
+  );
+}
+
 function formatClientCardExpiry(ms: number | undefined, noExpiry: string, expired: string): string {
   if (ms == null || ms === 0) return noExpiry;
   if (ms <= Date.now()) return expired;
@@ -108,11 +147,15 @@ type ClientCard = {
   subId?: string;
   up: number;
   down: number;
+  /** Cumulative traffic (bytes), when returned by API. */
+  allTime?: number;
   totalGB?: number;
   expiryTime?: number;
   inboundIds?: number[];
   inbounds: InboundBrief[];
   subscriptionUrl?: string;
+  /** First-party /panel/sub/ page when different from subscriptionUrl (feed). */
+  subscriptionPageUrl?: string;
   subscriptionJsonUrl?: string;
   activeHwidCount: number;
   hwidEnabled?: boolean;
@@ -128,7 +171,827 @@ type ClientCard = {
   lastOnline?: number;
   upSpeed?: number;
   downSpeed?: number;
+  /** Present from API: Xray session online (same as admin "online" list). */
+  isOnline?: boolean;
 };
+
+type ClientsConfirmAction =
+  | null
+  | { kind: "deleteOne"; client: ClientCard }
+  | { kind: "bulkReset"; clients: ClientCard[] }
+  | { kind: "bulkClearHwid"; clients: ClientCard[] }
+  | { kind: "bulkDelete"; clients: ClientCard[] };
+
+/** How long a client can disappear from the online batch before the UI flips to offline (avoids flicker on sparse WS ticks). */
+const OFFLINE_STATUS_DELAY_MS = 5_000;
+
+function normEmail(s: string) {
+  return s.trim().toLowerCase();
+}
+
+function countActiveHwidsFromPayload(hw: unknown): number {
+  if (!Array.isArray(hw)) return 0;
+  return hw.filter(
+    (h) =>
+      h &&
+      typeof h === "object" &&
+      (h as { isActive?: boolean }).isActive !== false,
+  ).length;
+}
+
+type WsClientEntity = Record<string, unknown>;
+
+function entityPayloadId(e: WsClientEntity): number | undefined {
+  const raw = (e as { id?: unknown; Id?: unknown }).id ?? (e as { Id?: unknown }).Id;
+  if (typeof raw === "number" && !Number.isNaN(raw)) return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    const n = Number(raw);
+    if (!Number.isNaN(n)) return n;
+  }
+  return undefined;
+}
+
+function mergeClientWithEntity(row: ClientCard, e: WsClientEntity): ClientCard {
+  const next: ClientCard = { ...row };
+  if (typeof e.up === "number") next.up = e.up;
+  if (typeof e.down === "number") next.down = e.down;
+  if (typeof e.status === "string") next.status = e.status;
+  if (typeof e.lastOnline === "number") next.lastOnline = e.lastOnline;
+  if (typeof e.upSpeed === "number") next.upSpeed = e.upSpeed;
+  if (typeof e.downSpeed === "number") next.downSpeed = e.downSpeed;
+  if (typeof e.enable === "boolean") next.enable = e.enable;
+  if (typeof e.totalGB === "number") next.totalGB = e.totalGB;
+  if (typeof e.expiryTime === "number") next.expiryTime = e.expiryTime;
+  if (Array.isArray(e.inboundIds)) {
+    const ids = (e.inboundIds as unknown[]).filter((x): x is number => typeof x === "number");
+    if (ids.length) next.inboundIds = ids;
+  }
+  if (Array.isArray(e.hwids)) {
+    next.activeHwidCount = countActiveHwidsFromPayload(e.hwids);
+  }
+  return next;
+}
+
+function findLastOnlineForEmail(
+  email: string,
+  lastOnlineMap: Record<string, unknown>
+): number | undefined {
+  const k = normEmail(email);
+  for (const [key, v] of Object.entries(lastOnlineMap)) {
+    if (typeof v !== "number") continue;
+    if (normEmail(String(key)) === k) return v;
+  }
+  return undefined;
+}
+
+type PillTone = "green" | "blue" | "neutral" | "amber" | "rose";
+
+/** Read-only “radio” style for connection state (online / offline). */
+function ReadonlyRadioRow({
+  legend,
+  value,
+  options,
+  groupName,
+}: {
+  legend: string;
+  value: string;
+  options: { id: string; label: string }[];
+  groupName: string;
+}) {
+  return (
+    <div className="min-w-0 space-y-1.5">
+      <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+        {legend}
+      </div>
+      <div
+        className="flex flex-wrap gap-2"
+        role="radiogroup"
+        aria-label={groupName}
+      >
+        {options.map((o) => {
+          const selected = o.id === value;
+          return (
+            <span
+              key={o.id}
+              role="radio"
+              aria-checked={selected}
+              className={cx(
+                "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium",
+                selected
+                  ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-subtle)] opacity-75",
+              )}
+              title={o.label}
+            >
+              <span
+                className={cx(
+                  "h-2.5 w-2.5 shrink-0 rounded-full border-2",
+                  selected
+                    ? "border-[var(--accent)] bg-[var(--accent)]"
+                    : "border-[var(--border)] bg-[var(--surface)]",
+                )}
+                aria-hidden
+              />
+              {o.label}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/** Account state: disabled | active | expired_traffic | expired_time (not connection). */
+function clientAccountStateMeta(
+  enable: boolean,
+  status: string | undefined,
+  t: TFunction,
+): { tone: PillTone; label: string } {
+  if (!enable) {
+    return {
+      tone: "neutral",
+      label: t("pages.clients.stateDisabled", { defaultValue: "Disabled" }),
+    };
+  }
+  const s = (status || "active").toLowerCase();
+  if (s === "expired_traffic") {
+    return { tone: "amber", label: t("depleted") };
+  }
+  if (s === "expired_time") {
+    return {
+      tone: "rose",
+      label: t("pages.clients.cardExpired", { defaultValue: "Expired" }),
+    };
+  }
+  return {
+    tone: "green",
+    label: t("pages.clients.stateActive", { defaultValue: "Active" }),
+  };
+}
+
+function ClientConnectionStatus({
+  isOnline,
+  t,
+}: {
+  isOnline?: boolean;
+  t: TFunction;
+}) {
+  return (
+    <span
+      className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium"
+      title={isOnline ? t("online") : t("offline")}
+    >
+      <span
+        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+          isOnline
+            ? "bg-emerald-400 shadow-[0_0_0_2px] shadow-emerald-500/30"
+            : "bg-zinc-500/40 dark:bg-zinc-500/30"
+        }`}
+        aria-hidden
+      />
+      <span
+        className={
+          isOnline
+            ? "text-emerald-600 dark:text-emerald-300"
+            : "text-[var(--fg-subtle)]"
+        }
+      >
+        {isOnline ? t("online") : t("offline")}
+      </span>
+    </span>
+  );
+}
+
+type SortDir = "asc" | "desc";
+
+/** Table column order (source of truth for header / body / filter row). */
+const DATA_COLUMN_ORDER = [
+  "id",
+  "email",
+  "comment",
+  "connection",
+  "state",
+  "traffic",
+  "up",
+  "down",
+  "allTime",
+  "totalGb",
+  "expiry",
+  "lastOnline",
+  "createdAt",
+  "updatedAt",
+  "speed",
+  "inbounds",
+  "group",
+  "uuid",
+  "subId",
+  "tgId",
+  "reset",
+  "hwid",
+] as const;
+
+type DataColumnId = (typeof DATA_COLUMN_ORDER)[number];
+type ClientSortKey = DataColumnId;
+
+type ColumnFilterId = "email" | "comment" | "traffic" | "expiry" | "hwid";
+
+const DEFAULT_COLUMN_FILTERS: Record<ColumnFilterId, string> = {
+  email: "",
+  comment: "",
+  traffic: "",
+  expiry: "",
+  hwid: "",
+};
+
+const DEFAULT_COLUMN_VISIBILITY: Record<DataColumnId, boolean> = {
+  id: false,
+  email: true,
+  comment: false,
+  connection: true,
+  state: true,
+  traffic: true,
+  up: false,
+  down: false,
+  allTime: false,
+  totalGb: false,
+  expiry: true,
+  lastOnline: false,
+  createdAt: false,
+  updatedAt: false,
+  speed: false,
+  inbounds: true,
+  group: true,
+  uuid: false,
+  subId: false,
+  tgId: false,
+  reset: false,
+  hwid: true,
+};
+
+function getDataColumnLabel(col: DataColumnId, t: TFunction): string {
+  const d: Record<DataColumnId, { key: string; defaultValue: string }> = {
+    id: { key: "pages.clients.colId", defaultValue: "ID" },
+    email: { key: "pages.clients.email", defaultValue: "Email" },
+    comment: { key: "pages.clients.colComment", defaultValue: "Name" },
+    connection: { key: "pages.clients.connectionStatus", defaultValue: "Status" },
+    state: { key: "pages.clients.stateColumn", defaultValue: "State" },
+    traffic: { key: "pages.clients.traffic", defaultValue: "Traffic" },
+    up: { key: "pages.clients.colUp", defaultValue: "Up" },
+    down: { key: "pages.clients.colDown", defaultValue: "Down" },
+    allTime: { key: "pages.clients.colAllTime", defaultValue: "All-time" },
+    totalGb: { key: "pages.clients.colLimitGb", defaultValue: "Limit (GB)" },
+    expiry: { key: "pages.clients.expiryTime", defaultValue: "Expiry" },
+    lastOnline: { key: "pages.clients.cardLastOnline", defaultValue: "Last online" },
+    createdAt: { key: "pages.clients.colCreated", defaultValue: "Created" },
+    updatedAt: { key: "pages.clients.colUpdated", defaultValue: "Updated" },
+    speed: { key: "pages.clients.colSpeed", defaultValue: "Speed (b/s)" },
+    inbounds: { key: "pages.clients.inbounds", defaultValue: "Inbounds" },
+    group: { key: "pages.clients.group", defaultValue: "Group" },
+    uuid: { key: "pages.clients.colUuid", defaultValue: "UUID" },
+    subId: { key: "pages.clients.colSubId", defaultValue: "Sub ID" },
+    tgId: { key: "pages.clients.addModalTgId", defaultValue: "Telegram" },
+    reset: { key: "pages.clients.colReset", defaultValue: "Reset (d)" },
+    hwid: { key: "pages.clients.colHwid", defaultValue: "HWID" },
+  };
+  const x = d[col];
+  return t(x.key, { defaultValue: x.defaultValue });
+}
+
+function rowTsForSort(
+  r: ClientCard,
+  key: "createdAt" | "updatedAt" | "lastOnline",
+): number {
+  const v = r[key];
+  if (v == null || v === 0) return 0;
+  return panelTimestampToMs(v) ?? (typeof v === "number" ? v : 0);
+}
+
+type FilterConn = "" | "online" | "offline";
+type FilterAcct = "" | "disabled" | "active" | "expired_traffic" | "expired_time";
+
+function parseTrafficFilterBytes(input: string): number | null {
+  const s = input.trim().toLowerCase().replace(",", ".");
+  if (!s) return null;
+  const m = s.match(/^([\d.]+)\s*(b|kb|mb|gb|tb)?$/i);
+  if (!m) return null;
+  const n = parseFloat(m[1]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const u = (m[2] || "gb").toLowerCase();
+  const mult: Record<string, number> = {
+    b: 1,
+    kb: 1024,
+    mb: 1024 ** 2,
+    gb: 1024 ** 3,
+    tb: 1024 ** 4,
+  };
+  return n * (mult[u] ?? mult.gb);
+}
+
+function parseExpiryFilterDayBounds(input: string): {
+  start: number;
+  end: number;
+} | null {
+  const s = input.trim();
+  if (!s) return null;
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (iso) {
+    const y = Number(iso[1]);
+    const mo = Number(iso[2]);
+    const d = Number(iso[3]);
+    if (!Number.isFinite(y) || mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+    const start = new Date(y, mo - 1, d).getTime();
+    const end = start + 86400000 - 1;
+    return { start, end };
+  }
+  const t = Date.parse(s);
+  if (Number.isNaN(t)) return null;
+  const dt = new Date(t);
+  const start = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate()).getTime();
+  const end = start + 86400000 - 1;
+  return { start, end };
+}
+
+function rowExpiryMsForFilter(r: ClientCard): number | null {
+  const ms = panelTimestampToMs(r.expiryTime);
+  if (ms == null || ms <= 0) return null;
+  return ms;
+}
+
+function rowMatchesAccountFilter(r: ClientCard, f: FilterAcct): boolean {
+  if (f === "") return true;
+  if (f === "disabled") return !r.enable;
+  if (!r.enable) return false;
+  const s = (r.status || "active").toLowerCase();
+  if (f === "active") return s !== "expired_traffic" && s !== "expired_time";
+  if (f === "expired_traffic") return s === "expired_traffic";
+  if (f === "expired_time") return s === "expired_time";
+  return true;
+}
+
+function buildClientTextFilterHaystacks(
+  r: ClientCard,
+  t: TFunction,
+  noExpiry: string,
+  expired: string,
+): Record<ColumnFilterId, string> {
+  const up = r.up || 0;
+  const down = r.down || 0;
+  const used = up + down;
+  const limGb = r.totalGB ?? 0;
+  const limitBytes = limGb > 0 ? limGb * 1024 * 1024 * 1024 : 0;
+  const pct = limitBytes > 0 ? Math.min(100, (used / limitBytes) * 100) : 0;
+  const traffic = [
+    sizeFormat(up),
+    sizeFormat(down),
+    sizeFormat(used),
+    limGb > 0 ? `${Math.round(pct)}` : "",
+    limGb > 0 ? sizeFormat(limitBytes) : "∞",
+    String(limGb),
+    String(r.allTime ?? 0),
+  ]
+    .join(" ")
+    .toLowerCase();
+
+  const expiryLabel = formatClientCardExpiry(
+    r.expiryTime,
+    noExpiry,
+    expired,
+  ).toLowerCase();
+
+  const hwidStr = r.hwidEnabled
+    ? `${r.activeHwidCount} ${r.maxHwid != null && r.maxHwid > 0 ? r.maxHwid : ""}`
+    : "—";
+
+  return {
+    email: r.email.toLowerCase(),
+    comment: (r.comment || "").toLowerCase(),
+    traffic,
+    expiry: expiryLabel,
+    hwid: hwidStr.toLowerCase(),
+  };
+}
+
+function stateSortRank(r: ClientCard): number {
+  if (!r.enable) return 0;
+  const s = (r.status || "active").toLowerCase();
+  if (s === "expired_time") return 1;
+  if (s === "expired_traffic") return 2;
+  return 3;
+}
+
+function expirySortMs(r: ClientCard): number {
+  const ms = panelTimestampToMs(r.expiryTime);
+  if (ms == null || ms === 0) return Number.POSITIVE_INFINITY;
+  return ms;
+}
+
+function compareClients(
+  a: ClientCard,
+  b: ClientCard,
+  key: ClientSortKey,
+  dir: SortDir,
+  groupOptions: GroupOption[],
+): number {
+  const m = dir === "asc" ? 1 : -1;
+  let c = 0;
+  switch (key) {
+    case "id":
+      c = a.id - b.id;
+      break;
+    case "email":
+      c = a.email.localeCompare(b.email, undefined, { sensitivity: "base" });
+      break;
+    case "comment":
+      c = (a.comment || "").localeCompare(b.comment || "", undefined, {
+        sensitivity: "base",
+      });
+      break;
+    case "connection":
+      c = (a.isOnline ? 1 : 0) - (b.isOnline ? 1 : 0);
+      break;
+    case "state":
+      c = stateSortRank(a) - stateSortRank(b);
+      break;
+    case "traffic":
+      c = a.up + a.down - (b.up + b.down);
+      break;
+    case "up":
+      c = a.up - b.up;
+      break;
+    case "down":
+      c = a.down - b.down;
+      break;
+    case "allTime":
+      c = (a.allTime ?? 0) - (b.allTime ?? 0);
+      break;
+    case "totalGb":
+      c = (a.totalGB ?? 0) - (b.totalGB ?? 0);
+      break;
+    case "expiry":
+      c = expirySortMs(a) - expirySortMs(b);
+      break;
+    case "lastOnline":
+      c = rowTsForSort(a, "lastOnline") - rowTsForSort(b, "lastOnline");
+      break;
+    case "createdAt":
+      c = rowTsForSort(a, "createdAt") - rowTsForSort(b, "createdAt");
+      break;
+    case "updatedAt":
+      c = rowTsForSort(a, "updatedAt") - rowTsForSort(b, "updatedAt");
+      break;
+    case "speed":
+      c =
+        (a.upSpeed ?? 0) +
+        (a.downSpeed ?? 0) -
+        ((b.upSpeed ?? 0) + (b.downSpeed ?? 0));
+      break;
+    case "inbounds":
+      c = (a.inbounds?.length ?? 0) - (b.inbounds?.length ?? 0);
+      break;
+    case "group":
+      c = groupSortKey(a, groupOptions).localeCompare(
+        groupSortKey(b, groupOptions),
+        undefined,
+        { sensitivity: "base" },
+      );
+      break;
+    case "uuid":
+      c = (a.uuid || "").localeCompare(b.uuid || "", undefined, {
+        sensitivity: "base",
+      });
+      break;
+    case "subId":
+      c = (a.subId || "").localeCompare(b.subId || "", undefined, {
+        sensitivity: "base",
+      });
+      break;
+    case "tgId":
+      c = (a.tgId ?? 0) - (b.tgId ?? 0);
+      break;
+    case "reset":
+      c = (a.reset ?? 0) - (b.reset ?? 0);
+      break;
+    case "hwid":
+      c = (a.activeHwidCount ?? 0) - (b.activeHwidCount ?? 0);
+      break;
+  }
+  return c * m;
+}
+
+function ClientTrafficMiniCell({ r }: { r: ClientCard }) {
+  const up = r.up || 0;
+  const down = r.down || 0;
+  const used = up + down;
+  const limGb = r.totalGB ?? 0;
+  const limitBytes = limGb > 0 ? limGb * 1024 * 1024 * 1024 : 0;
+  const pct =
+    limitBytes > 0 ? Math.min(100, (used / limitBytes) * 100) : null;
+  const over = limitBytes > 0 && used > limitBytes;
+  const title = `${sizeFormat(up)} ↑ / ${sizeFormat(down)} ↓` +
+    (limitBytes > 0 ? ` · ${Math.round(pct ?? 0)}% / ${sizeFormat(limitBytes)}` : " · ∞");
+
+  return (
+    <div className="min-w-[8.5rem] max-w-[13rem]" title={title}>
+      {limitBytes > 0 ? (
+        <div className="mb-1 h-1.5 overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--border)_85%,transparent)]">
+          <div
+            className={cx(
+              "h-full max-w-full rounded-full transition-[width]",
+              over
+                ? "bg-rose-500"
+                : (pct ?? 0) > 90
+                  ? "bg-amber-500"
+                  : "bg-[var(--accent)]",
+            )}
+            style={{ width: `${Math.min(100, pct ?? 0)}%` }}
+          />
+        </div>
+      ) : null}
+      <div className="space-y-0.5 text-[10px] leading-tight tabular-nums text-[var(--fg-muted)]">
+        <div>
+          {sizeFormat(up)} ↑ · {sizeFormat(down)} ↓
+        </div>
+        <div className="text-[var(--fg-subtle)]">
+          {limitBytes > 0 ? (
+            <>
+              {Math.round(pct ?? 0)}% · {sizeFormat(limitBytes)}
+            </>
+          ) : (
+            <span title="∞">∞</span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ClientDataCell({
+  col,
+  r,
+  t,
+  groupOptions,
+  noExpiry,
+  expired,
+}: {
+  col: DataColumnId;
+  r: ClientCard;
+  t: TFunction;
+  groupOptions: { id: number; name: string; description: string }[];
+  noExpiry: string;
+  expired: string;
+}) {
+  switch (col) {
+    case "id":
+      return (
+        <span className="tabular-nums text-[var(--fg)]">{r.id}</span>
+      );
+    case "email":
+      return (
+        <span
+          className="block max-w-full truncate font-medium text-[var(--fg)]"
+          title={r.email}
+        >
+          {r.email}
+        </span>
+      );
+    case "comment":
+      return (
+        <span
+          className="max-w-[12rem] truncate"
+          title={r.comment || undefined}
+        >
+          {r.comment?.trim() ? r.comment : "—"}
+        </span>
+      );
+    case "connection":
+      return <ClientConnectionStatus isOnline={r.isOnline} t={t} />;
+    case "state": {
+      const sm = clientAccountStateMeta(r.enable, r.status, t);
+      return (
+        <PillTag tone={sm.tone} className="inline-flex max-w-full">
+          <span className="truncate">{sm.label}</span>
+        </PillTag>
+      );
+    }
+    case "traffic":
+      return <ClientTrafficMiniCell r={r} />;
+    case "up":
+      return <span className="tabular-nums">{sizeFormat(r.up || 0)}</span>;
+    case "down":
+      return <span className="tabular-nums">{sizeFormat(r.down || 0)}</span>;
+    case "allTime":
+      return <span className="tabular-nums">{sizeFormat(r.allTime ?? 0)}</span>;
+    case "totalGb":
+      return (
+        <span className="tabular-nums">{(r.totalGB ?? 0) > 0 ? String(r.totalGB) : "∞"}</span>
+      );
+    case "expiry":
+      return (
+        <span className="tabular-nums whitespace-nowrap">
+          {formatClientCardExpiry(r.expiryTime, noExpiry, expired)}
+        </span>
+      );
+    case "lastOnline":
+      return (
+        <span className="tabular-nums whitespace-nowrap">
+          {formatCardDateTime(
+            r.lastOnline,
+            t("pages.clients.cardNoDate", { defaultValue: "—" }),
+          )}
+        </span>
+      );
+    case "createdAt":
+      return (
+        <span className="tabular-nums whitespace-nowrap">
+          {formatCardDateTime(
+            r.createdAt,
+            t("pages.clients.cardNoDate", { defaultValue: "—" }),
+          )}
+        </span>
+      );
+    case "updatedAt":
+      return (
+        <span className="tabular-nums whitespace-nowrap">
+          {formatCardDateTime(
+            r.updatedAt,
+            t("pages.clients.cardNoDate", { defaultValue: "—" }),
+          )}
+        </span>
+      );
+    case "speed": {
+      const u = r.upSpeed ?? 0;
+      const d = r.downSpeed ?? 0;
+      if (u <= 0 && d <= 0) {
+        return <span className="text-[var(--fg-muted)]">—</span>;
+      }
+      return (
+        <span className="text-[10px] leading-tight tabular-nums text-[var(--fg-muted)]">
+          {u} ↑ · {d} ↓
+        </span>
+      );
+    }
+    case "inbounds": {
+      const ib = r.inbounds ?? [];
+      const inboundSummary =
+        ib.length === 0
+          ? "—"
+          : ib.length === 1
+            ? `${ib[0]!.remark || ib[0]!.tag} · ${ib[0]!.protocol}`
+            : `${ib[0]!.remark || ib[0]!.tag || ib[0]!.protocol} +${ib.length - 1}`;
+      const inboundTitle = ib.length
+        ? ib
+            .map((x) => `${x.remark || x.tag} · ${x.protocol}:${x.port}`)
+            .join("\n")
+        : undefined;
+      return (
+        <span className="max-w-[12rem] truncate" title={inboundTitle}>
+          {inboundSummary}
+        </span>
+      );
+    }
+    case "group":
+      return (
+        <span
+          className="max-w-[10rem] truncate"
+          title={
+            r.groupId != null
+              ? groupOptions.find((g) => g.id === r.groupId)?.name
+              : undefined
+          }
+        >
+          {r.groupId != null
+            ? groupOptions.find((g) => g.id === r.groupId)?.name ?? `#${r.groupId}`
+            : "—"}
+        </span>
+      );
+    case "uuid":
+      return (
+        <span
+          className="max-w-[9rem] truncate font-mono text-[11px]"
+          title={r.uuid}
+        >
+          {r.uuid || "—"}
+        </span>
+      );
+    case "subId":
+      return (
+        <span
+          className="max-w-[8rem] truncate font-mono text-[11px]"
+          title={r.subId}
+        >
+          {r.subId || "—"}
+        </span>
+      );
+    case "tgId":
+      return (
+        <span className="tabular-nums">
+          {r.tgId != null && r.tgId !== 0 ? String(r.tgId) : "—"}
+        </span>
+      );
+    case "reset":
+      return (
+        <span className="tabular-nums">
+          {r.reset != null && r.reset > 0 ? String(r.reset) : "—"}
+        </span>
+      );
+    case "hwid":
+      return (
+        <span className="tabular-nums whitespace-nowrap">
+          {r.hwidEnabled
+            ? `${r.activeHwidCount}${r.maxHwid != null && r.maxHwid > 0 ? ` / ${r.maxHwid}` : ""}`
+            : "—"}
+        </span>
+      );
+    default: {
+      const _u: never = col;
+      return _u;
+    }
+  }
+}
+
+function SortableTh({
+  label,
+  sortKey,
+  activeKey,
+  dir,
+  onSort,
+  className = "",
+}: {
+  label: string;
+  sortKey: ClientSortKey;
+  activeKey: ClientSortKey;
+  dir: SortDir;
+  onSort: (k: ClientSortKey) => void;
+  className?: string;
+}) {
+  const active = activeKey === sortKey;
+  return (
+    <th className={cx("p-3", className)}>
+      <button
+        type="button"
+        className="inline-flex max-w-full items-center gap-1 text-left font-semibold uppercase tracking-wider text-[var(--fg-subtle)] outline-none hover:text-[var(--fg-muted)] focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+        onClick={(e) => {
+          e.stopPropagation();
+          onSort(sortKey);
+        }}
+      >
+        <span className="truncate">{label}</span>
+        {active ? (
+          dir === "asc" ? (
+            <ArrowUp className="size-3.5 shrink-0 opacity-90" aria-hidden />
+          ) : (
+            <ArrowDown className="size-3.5 shrink-0 opacity-90" aria-hidden />
+          )
+        ) : (
+          <ArrowUpDown className="size-3.5 shrink-0 opacity-35" aria-hidden />
+        )}
+      </button>
+    </th>
+  );
+}
+
+function ClientsColumnFilterInput({
+  value,
+  onChange,
+  placeholder,
+  className = "",
+  prefix,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder: string;
+  className?: string;
+  /** Shown before the field (e.g. &gt;, &lt;, =) when comparing numeric / date filters. */
+  prefix?: string;
+}) {
+  const input = (
+    <Input
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      placeholder={placeholder}
+      className={
+        prefix
+          ? `!h-8 min-w-0 flex-1 !border-0 !bg-transparent !px-2 !py-1 !text-xs ${className}`
+          : `!h-8 w-full min-w-[4.5rem] !px-2 !py-1 !text-xs ${className}`
+      }
+    />
+  );
+  if (!prefix) return input;
+  return (
+    <div
+      className={`flex min-w-0 items-stretch overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] ${className}`}
+    >
+      <span
+        className="flex shrink-0 items-center border-r border-[var(--border)] bg-[color-mix(in_oklab,var(--border)_35%,transparent)] px-1.5 font-mono text-xs font-semibold text-[var(--fg-muted)]"
+        aria-hidden
+      >
+        {prefix}
+      </span>
+      {input}
+    </div>
+  );
+}
 
 type ShareLinkRow = {
   inboundId: number;
@@ -142,6 +1005,7 @@ type HwidRow = {
   hwid: string;
   deviceModel?: string;
   deviceOs?: string;
+  userAgent?: string;
   isActive?: boolean;
 };
 
@@ -149,7 +1013,24 @@ type InboundOption = { id: number; remark: string; protocol: string; port: numbe
 
 type GroupOption = { id: number; name: string; description: string };
 
+function groupSortKey(r: ClientCard, options: GroupOption[]): string {
+  if (r.groupId == null) return "";
+  const g = options.find((x) => x.id === r.groupId);
+  return (g?.name ?? `id:${r.groupId}`).toLowerCase();
+}
+
 type ClientSheetMode = "create" | "edit";
+
+type ClientSessionsResponse = {
+  email: string;
+  results: {
+    nodeId?: number;
+    nodeName: string;
+    sessions: { ip: string; lastSeen: number }[];
+    dropAvailable: boolean;
+    error?: string;
+  }[];
+};
 
 type ClientDetail = {
   id: number;
@@ -202,15 +1083,17 @@ const FORM_DEFAULT: ClientFormState = {
 
 function msToDatetimeLocal(ms: number): string {
   if (!ms) return "";
-  const d = new Date(ms);
+  const n = panelTimestampToMs(ms) ?? ms;
+  const d = new Date(n);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function formatCardDateTime(ms: number | undefined, emptyLabel: string): string {
-  if (ms == null || ms === 0) return emptyLabel;
+  const normalized = ms != null && ms !== 0 ? panelTimestampToMs(ms) : undefined;
+  if (normalized == null || normalized === 0) return emptyLabel;
   try {
-    return new Date(ms).toLocaleString(undefined, {
+    return new Date(normalized).toLocaleString(undefined, {
       year: "numeric",
       month: "short",
       day: "numeric",
@@ -275,6 +1158,7 @@ type ClientUnifiedCardProps = {
   onDelete: () => void;
   onOpenKeys: () => void;
   onOpenHwid: () => void;
+  onOpenSessions: () => void;
   onShowSubscriptionQr: (url: string) => void;
 };
 
@@ -298,6 +1182,7 @@ function ClientUnifiedCard({
   onDelete,
   onOpenKeys,
   onOpenHwid,
+  onOpenSessions,
   onShowSubscriptionQr,
 }: ClientUnifiedCardProps) {
   const id = (s: string) => `${fieldIdPrefix}-${s}`;
@@ -332,7 +1217,13 @@ function ClientUnifiedCard({
         : "";
 
   const showExistingChrome = variant === "existing" && r != null;
-  const subUrl = showExistingChrome ? r.subscriptionUrl : undefined;
+  const subFeedUrl = showExistingChrome ? r.subscriptionUrl : undefined;
+  const subPageOpenUrl =
+    showExistingChrome && r
+      ? (r.subscriptionPageUrl?.trim() || r.subscriptionUrl)
+      : undefined;
+  const accMeta =
+    showExistingChrome && r ? clientAccountStateMeta(r.enable, r.status, t) : null;
 
   return (
     <div
@@ -342,29 +1233,76 @@ function ClientUnifiedCard({
       )}
     >
       <div className="flex flex-col gap-4 p-5">
-        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--border)] pb-3">
-          <div className="flex flex-wrap items-center gap-2">
-            {r?.status ? (
-              <PillTag tone="blue">{r.status}</PillTag>
-            ) : null}
-            {form.hwidEnabled ? (
-              <PillTag tone="green">
-                <Shield size={11} className="mr-1" />
-                HWID
-              </PillTag>
-            ) : null}
-            {!form.enable ? (
-              <PillTag tone="neutral">{t("disabled")}</PillTag>
-            ) : null}
-          </div>
-          <div className="flex items-center gap-0.5">
-            {subUrl ? (
+        <div className="space-y-3 border-b border-[var(--border)] pb-3">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between lg:gap-4">
+            <div className="min-w-0 flex-1 space-y-3">
+              {showExistingChrome && r && accMeta ? (
+                <div className="grid grid-cols-1 items-start gap-3 sm:grid-cols-2 sm:gap-4">
+                  <div className="min-w-0 space-y-1.5">
+                    <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                      {t("pages.clients.stateColumn", {
+                        defaultValue: "State",
+                      })}
+                    </div>
+                    <PillTag tone={accMeta.tone} className="max-w-full sm:inline-flex">
+                      <span className="truncate">{accMeta.label}</span>
+                    </PillTag>
+                  </div>
+                  <ReadonlyRadioRow
+                    legend={t("pages.clients.fieldConnectionState", {
+                      defaultValue: "Connection",
+                    })}
+                    value={r.isOnline ? "online" : "offline"}
+                    options={[
+                      { id: "online", label: t("online") },
+                      { id: "offline", label: t("offline") },
+                    ]}
+                    groupName={t("pages.clients.fieldConnectionState", {
+                      defaultValue: "Connection",
+                    })}
+                  />
+                </div>
+              ) : (
+                <p className="text-xs text-[var(--fg-subtle)]">
+                  {t("pages.clients.cardNewClientHint", {
+                    defaultValue:
+                      "After saving, account status and live connection will appear here.",
+                  })}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                {variant === "create" ? (
+                  <CheckboxField
+                    checked={form.enable}
+                    onChange={(e) => setForm((f) => ({ ...f, enable: e.target.checked }))}
+                    label={
+                      <span className="inline-flex items-center gap-1">
+                        <Power size={14} />
+                        {t("enable")}
+                      </span>
+                    }
+                  />
+                ) : null}
+                {form.hwidEnabled ? (
+                  <PillTag tone="green">
+                    <Shield size={11} className="mr-1" />
+                    HWID
+                  </PillTag>
+                ) : null}
+                {!form.enable ? <PillTag tone="neutral">{t("disabled")}</PillTag> : null}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center justify-end gap-0.5 lg:pt-0.5">
+            {subFeedUrl ? (
               <>
                 <IconButton
                   type="button"
                   label={t("pages.clients.openSub", { defaultValue: "Open subscription" })}
                   className="!text-[var(--accent)]"
-                  onClick={() => window.open(subUrl, "_blank", "noreferrer")}
+                  onClick={() =>
+                    window.open(subPageOpenUrl || subFeedUrl, "_blank", "noreferrer")
+                  }
                 >
                   <ExternalLink size={18} />
                 </IconButton>
@@ -373,7 +1311,7 @@ function ClientUnifiedCard({
                   label={t("pages.clients.showSubscriptionQr", {
                     defaultValue: "Subscription QR code",
                   })}
-                  onClick={() => onShowSubscriptionQr(subUrl)}
+                  onClick={() => onShowSubscriptionQr(subFeedUrl)}
                 >
                   <QrCode size={18} />
                 </IconButton>
@@ -382,10 +1320,23 @@ function ClientUnifiedCard({
             {showExistingChrome ? (
               <IconButton
                 type="button"
-                label={t("pages.clients.viewKeys", { defaultValue: "Keys" })}
+                label={t("pages.clients.viewKeys", {
+                  defaultValue: "View and copy connection keys",
+                })}
                 onClick={() => onOpenKeys()}
               >
                 <KeyRound size={18} />
+              </IconButton>
+            ) : null}
+            {showExistingChrome ? (
+              <IconButton
+                type="button"
+                label={t("pages.clients.sessions.openModal", {
+                  defaultValue: "Active sessions (IPs)",
+                })}
+                onClick={() => onOpenSessions()}
+              >
+                <Unplug size={18} />
               </IconButton>
             ) : null}
             {showExistingChrome ? (
@@ -421,7 +1372,9 @@ function ClientUnifiedCard({
                 </IconButton>
                 <IconButton
                   type="button"
-                  label={t("pages.clients.clearHwid", { defaultValue: "Clear HWIDs" })}
+                  label={t("pages.clients.clearHwid", {
+                    defaultValue: "Clear all registered device (HWID) limits",
+                  })}
                   disabled={sheetActionBusy != null}
                   className="!text-red-600 hover:!text-red-700 dark:!text-red-400 dark:hover:!text-red-300"
                   onClick={() => onClearHwid()}
@@ -434,7 +1387,9 @@ function ClientUnifiedCard({
                 </IconButton>
                 <IconButton
                   type="button"
-                  label={t("delete")}
+                  label={t("pages.clients.deleteClient", {
+                    defaultValue: "Delete this client permanently",
+                  })}
                   disabled={sheetActionBusy != null}
                   className="!text-red-600 hover:!text-red-700 dark:!text-red-400 dark:hover:!text-red-300"
                   onClick={() => onDelete()}
@@ -443,6 +1398,7 @@ function ClientUnifiedCard({
                 </IconButton>
               </>
             ) : null}
+            </div>
           </div>
         </div>
 
@@ -566,7 +1522,9 @@ function ClientUnifiedCard({
                         </span>
                         <IconButton
                           type="button"
-                          label={t("copy")}
+                          label={t("pages.clients.copySubId", {
+                            defaultValue: "Copy subscription ID to clipboard",
+                          })}
                           onClick={() => copyText(r.subId!)}
                         >
                           <Copy size={12} />
@@ -757,20 +1715,31 @@ function ClientUnifiedCard({
               {inbounds.length === 0 ? (
                 <p className="text-xs text-[var(--fg-subtle)]">{t("noData")}</p>
               ) : (
-                <div className="max-h-48 space-y-2 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
-                  {inbounds.map((ib) => (
-                    <CheckboxField
-                      key={ib.id}
-                      checked={!!inboundIds[ib.id]}
-                      onChange={(e) =>
-                        setInboundIds((m) => ({
-                          ...m,
-                          [ib.id]: e.target.checked,
-                        }))
-                      }
-                      label={`${ib.remark} · ${ib.protocol} · ${ib.port}`}
-                    />
-                  ))}
+                <div className="max-h-52 overflow-auto rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
+                  <div
+                    className="flex flex-wrap gap-2"
+                    role="group"
+                    aria-label={t("pages.clients.selectInbounds")}
+                  >
+                    {inbounds.map((ib) => {
+                      const capLabel = ib.remark?.trim() || `Inbound ${ib.id}`;
+                      const capSub = `${ib.protocol} · ${ib.port}`;
+                      return (
+                        <InboundCapsuleToggle
+                          key={ib.id}
+                          selected={!!inboundIds[ib.id]}
+                          onToggle={() =>
+                            setInboundIds((m) => ({
+                              ...m,
+                              [ib.id]: !m[ib.id],
+                            }))
+                          }
+                          label={capLabel}
+                          sublabel={capSub}
+                        />
+                      );
+                    })}
+                  </div>
                 </div>
               )}
               {isEdit ? (
@@ -848,16 +1817,6 @@ function ClientUnifiedCard({
         </div>
 
         <div className="space-y-3 border-t border-[var(--border)] pt-4">
-          <CheckboxField
-            checked={form.enable}
-            onChange={(e) => setForm((f) => ({ ...f, enable: e.target.checked }))}
-            label={
-              <span className="inline-flex items-center gap-1">
-                <Power size={14} />
-                {t("enable")}
-              </span>
-            }
-          />
           <div>
             <label
               className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[var(--fg-muted)]"
@@ -885,6 +1844,12 @@ function ClientUnifiedCard({
 export function ClientsPage() {
   const { t } = useTranslation();
   const toast = useToast();
+  const ws = usePanelWebSocket();
+  const resyncAfterDisconnect = useRef(false);
+  /** key: client id — debounce offline after traffic drops the email from the online set. */
+  const offlineStatusTimersRef = useRef<
+    Map<number, ReturnType<typeof setTimeout>>
+  >(new Map());
   const [rows, setRows] = useState<ClientCard[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -905,10 +1870,42 @@ export function ClientsPage() {
   const [hwidModalClientId, setHwidModalClientId] = useState<number | null>(null);
   const [hwidLoading, setHwidLoading] = useState(false);
   const [hwidRows, setHwidRows] = useState<HwidRow[]>([]);
+  const [hwidDeleteRow, setHwidDeleteRow] = useState<HwidRow | null>(null);
+  const [hwidDeleteBusy, setHwidDeleteBusy] = useState(false);
 
-  const [actionsMenuId, setActionsMenuId] = useState<number | null>(null);
+  const [sessionsModalClientId, setSessionsModalClientId] = useState<number | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
+  const [sessionsData, setSessionsData] = useState<ClientSessionsResponse | null>(null);
+  const [sessionsDropBusy, setSessionsDropBusy] = useState(false);
+
   const [sheetInlineBusy, setSheetInlineBusy] = useState<"reset" | "clearHwid" | null>(null);
+  const [bulkMode, setBulkMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(() => new Set());
+  const [filtersVisible, setFiltersVisible] = useState(false);
+  const [columnFilters, setColumnFilters] = useState<Record<ColumnFilterId, string>>(
+    () => ({ ...DEFAULT_COLUMN_FILTERS }),
+  );
+  const [filterConn, setFilterConn] = useState<FilterConn>("");
+  const [filterAcct, setFilterAcct] = useState<FilterAcct>("");
+  const [filterInboundId, setFilterInboundId] = useState<string>("");
+  const [filterGroupId, setFilterGroupId] = useState<string>("");
+  const [groupOptions, setGroupOptions] = useState<GroupOption[]>([]);
+  const [inboundFilterOptions, setInboundFilterOptions] = useState<InboundOption[]>(
+    [],
+  );
+  const [columnVisibility, setColumnVisibility] = useState<
+    Record<DataColumnId, boolean>
+  >(() => ({ ...DEFAULT_COLUMN_VISIBILITY }));
+  const [columnsMenuOpen, setColumnsMenuOpen] = useState(false);
+  const columnsMenuRef = useRef<HTMLDivElement>(null);
+  const [trafficCompareOp, setTrafficCompareOp] = useState<CompareOp>("");
+  const [expiryCompareOp, setExpiryCompareOp] = useState<CompareOp>("");
+  const [sortKey, setSortKey] = useState<ClientSortKey>("traffic");
+  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const headerSelectRef = useRef<HTMLInputElement>(null);
   const [subscriptionQrUrl, setSubscriptionQrUrl] = useState<string | null>(null);
+  const [clientsConfirmAction, setClientsConfirmAction] = useState<ClientsConfirmAction>(null);
+  const [clientsConfirmBusy, setClientsConfirmBusy] = useState(false);
   const sheetClient =
     sheetClientId != null ? rows.find((x) => x.id === sheetClientId) : undefined;
   const keysModalClient =
@@ -916,17 +1913,18 @@ export function ClientsPage() {
   const keysModalInboundCount = keysModalClient?.inbounds?.length ?? 0;
 
   const copyText = (text: string) => {
-    void navigator.clipboard.writeText(text).then(
-      () => {
+    void copyTextToClipboard(text)
+      .then(() => {
         toast.success(t("copySuccess"));
-      },
-      () => {
-        toast.error(t("pages.clients.addError"));
-      },
-    );
+      })
+      .catch(() => {
+        toast.error(t("pages.publicSub.copyFailed", { defaultValue: "Could not copy." }));
+      });
   };
 
   const load = useCallback(async () => {
+    offlineStatusTimersRef.current.forEach((tid) => clearTimeout(tid));
+    offlineStatusTimersRef.current.clear();
     setLoading(true);
     const r = await getJson<ClientCard[]>(panel("client/list"));
     setLoading(false);
@@ -943,6 +1941,192 @@ export function ClientsPage() {
       setRows([]);
     }
   }, []);
+
+  useEffect(() => {
+    if (!ws) return;
+    const offlineTimers = offlineStatusTimersRef.current;
+    const onClients = (p: unknown) => {
+      if (!Array.isArray(p) || p.length === 0) return;
+      setRows((prev) => {
+        if (!prev.length) return prev;
+        const byId = new Map<number, WsClientEntity>();
+        for (const e of p as WsClientEntity[]) {
+          if (!e || typeof e !== "object") continue;
+          const id = entityPayloadId(e);
+          if (id == null) continue;
+          byId.set(id, e);
+        }
+        if (byId.size === 0) return prev;
+        return prev.map((row) => {
+          const e = byId.get(row.id);
+          if (!e) return row;
+          return mergeClientWithEntity(row, e);
+        });
+      });
+    };
+    const onTraffic = (p: unknown) => {
+      if (!p || typeof p !== "object") return;
+      const pl = p as Record<string, unknown>;
+      if (!("onlineClients" in pl) && !("lastOnlineMap" in pl)) return;
+      const lastOnlineMap =
+        pl.lastOnlineMap && typeof pl.lastOnlineMap === "object"
+          ? (pl.lastOnlineMap as Record<string, unknown>)
+          : {};
+      const onlineList = Array.isArray(pl.onlineClients) ? pl.onlineClients : [];
+      const onlineSet = new Set(
+        onlineList
+          .filter((e): e is string => typeof e === "string")
+          .map(normEmail),
+      );
+      setRows((prev) =>
+        prev.map((row) => {
+          const k = normEmail(row.email);
+          const serverOnline = onlineSet.has(k);
+          const lo = findLastOnlineForEmail(row.email, lastOnlineMap);
+          const base: ClientCard = {
+            ...row,
+            ...(lo != null ? { lastOnline: lo } : {}),
+          };
+
+          if (serverOnline) {
+            const existing = offlineStatusTimersRef.current.get(row.id);
+            if (existing != null) {
+              clearTimeout(existing);
+              offlineStatusTimersRef.current.delete(row.id);
+            }
+            return { ...base, isOnline: true };
+          }
+
+          if (row.isOnline !== true) {
+            return { ...base, isOnline: false };
+          }
+
+          if (!offlineStatusTimersRef.current.has(row.id)) {
+            const clientId = row.id;
+            const tid = setTimeout(() => {
+              setRows((cur) =>
+                cur.map((r) =>
+                  r.id === clientId ? { ...r, isOnline: false } : r,
+                ),
+              );
+              offlineStatusTimersRef.current.delete(clientId);
+            }, OFFLINE_STATUS_DELAY_MS);
+            offlineStatusTimersRef.current.set(row.id, tid);
+          }
+          return { ...base, isOnline: true };
+        }),
+      );
+    };
+    const onDisc = () => {
+      resyncAfterDisconnect.current = true;
+    };
+    const onConn = () => {
+      if (resyncAfterDisconnect.current) {
+        resyncAfterDisconnect.current = false;
+        void load();
+      }
+    };
+    ws.on("clients", onClients);
+    ws.on("traffic", onTraffic);
+    ws.on("disconnected", onDisc);
+    ws.on("connected", onConn);
+    return () => {
+      offlineTimers.forEach((tid) => clearTimeout(tid));
+      offlineTimers.clear();
+      ws.off("clients", onClients);
+      ws.off("traffic", onTraffic);
+      ws.off("disconnected", onDisc);
+      ws.off("connected", onConn);
+    };
+  }, [ws, load]);
+
+  const openSessionsModal = async (clientId: number) => {
+    setSessionsModalClientId(clientId);
+    setSessionsData(null);
+    setSessionsLoading(true);
+    try {
+      const r = await getJson<ClientSessionsResponse>(
+        panel(`client/sessions/${clientId}`),
+      );
+      if (r.success && r.obj) {
+        setSessionsData(r.obj as ClientSessionsResponse);
+      } else {
+        toast.error(
+          (r as { msg?: string }).msg ||
+            t("pages.clients.sessions.loadError", {
+              defaultValue: "Failed to load sessions",
+            }),
+        );
+      }
+    } catch {
+      toast.error(
+        t("pages.clients.sessions.loadError", {
+          defaultValue: "Failed to load sessions",
+        }),
+      );
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  const refreshSessionsModal = async () => {
+    if (sessionsModalClientId == null) return;
+    setSessionsLoading(true);
+    try {
+      const r = await getJson<ClientSessionsResponse>(
+        panel(`client/sessions/${sessionsModalClientId}`),
+      );
+      if (r.success && r.obj) setSessionsData(r.obj as ClientSessionsResponse);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
+  const dropAllSessions = async () => {
+    if (sessionsModalClientId == null) return;
+    setSessionsDropBusy(true);
+    try {
+      const r = await postJson(panel(`client/sessions/drop/${sessionsModalClientId}`), {});
+      if (r.success) {
+        toast.success(
+          t("pages.clients.sessions.dropSuccess", {
+            defaultValue: "Connections dropped",
+          }),
+        );
+        await refreshSessionsModal();
+      } else {
+        toast.error((r as { msg?: string }).msg || t("fail"));
+      }
+    } catch {
+      toast.error(t("fail"));
+    } finally {
+      setSessionsDropBusy(false);
+    }
+  };
+
+  const dropSessionIp = async (ip: string) => {
+    if (sessionsModalClientId == null) return;
+    setSessionsDropBusy(true);
+    try {
+      const r = await postJson(panel(`client/sessions/drop/${sessionsModalClientId}`), {
+        ips: [ip],
+      });
+      if (r.success) {
+        toast.success(
+          t("pages.clients.sessions.dropSuccess", {
+            defaultValue: "Connections dropped",
+          }),
+        );
+        await refreshSessionsModal();
+      } else {
+        toast.error((r as { msg?: string }).msg || t("fail"));
+      }
+    } catch {
+      toast.error(t("fail"));
+    } finally {
+      setSessionsDropBusy(false);
+    }
+  };
 
   const openKeysModal = async (clientId: number) => {
     setKeysModalClientId(clientId);
@@ -982,34 +2166,8 @@ export function ClientsPage() {
     }
   };
 
-  const confirmDelete = (c: ClientCard) => {
-    const msg = t("pages.clients.confirmDelete", {
-      defaultValue: "Delete this client? This cannot be undone.",
-    });
-    if (typeof window !== "undefined" && !window.confirm(`${msg}\n\n${c.email}`)) {
-      return;
-    }
-    void (async () => {
-      const r = await postJson(panel(`client/del/${c.id}`));
-      if (r.success) {
-        toast.success(
-          (r as { msg?: string }).msg ||
-            t("pages.clients.toasts.clientDeleteSuccess", { defaultValue: "Client deleted." }),
-        );
-        setActionsMenuId(null);
-        if (sheetClientId === c.id) {
-          setSheetMode(null);
-          setSheetClientId(null);
-          setForm({ ...FORM_DEFAULT });
-          setInboundIds({});
-          setEditingId(null);
-          setFetchingClient(false);
-        }
-        void load();
-      } else {
-        toast.error((r as { msg?: string }).msg || t("pages.clients.addError"));
-      }
-    })();
+  const openDeleteClientConfirm = (c: ClientCard) => {
+    setClientsConfirmAction({ kind: "deleteOne", client: c });
   };
 
   const resetTraffic = (c: ClientCard) => {
@@ -1025,7 +2183,6 @@ export function ClientsPage() {
                 defaultValue: "Traffic reset.",
               }),
           );
-          setActionsMenuId(null);
           void load();
         } else {
           toast.error((r as { msg?: string }).msg || t("pages.clients.addError"));
@@ -1047,7 +2204,6 @@ export function ClientsPage() {
             (r as { msg?: string }).msg ||
               t("pages.clients.hwidCleared", { defaultValue: "HWID records cleared." }),
           );
-          setActionsMenuId(null);
           void load();
         } else {
           toast.error((r as { msg?: string }).msg || t("pages.clients.addError"));
@@ -1063,13 +2219,6 @@ export function ClientsPage() {
   }, [load]);
 
   useEffect(() => {
-    if (actionsMenuId == null) return;
-    const close = () => setActionsMenuId(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, [actionsMenuId]);
-
-  useEffect(() => {
     if (
       sheetMode === "edit" &&
       sheetClientId != null &&
@@ -1077,13 +2226,305 @@ export function ClientsPage() {
     ) {
       setSheetMode(null);
       setSheetClientId(null);
-      setActionsMenuId(null);
       setForm({ ...FORM_DEFAULT });
       setInboundIds({});
       setEditingId(null);
       setFetchingClient(false);
     }
   }, [rows, sheetMode, sheetClientId]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      const next = new Set<number>();
+      for (const id of prev) {
+        if (rows.some((r) => r.id === id)) next.add(id);
+      }
+      return next;
+    });
+  }, [rows]);
+
+  useEffect(() => {
+    if (!bulkMode) setSelectedIds(new Set());
+  }, [bulkMode]);
+
+  useEffect(() => {
+    void (async () => {
+      const [gR, iR] = await Promise.all([
+        getJson<GroupOption[]>(panel("group/list")),
+        getJson<InboundOption[]>(panel("api/inbounds/list")),
+      ]);
+      if (gR.success && Array.isArray(gR.obj)) {
+        setGroupOptions(
+          (gR.obj as GroupOption[]).map((x) => ({
+            id: x.id,
+            name: x.name ?? `Group ${x.id}`,
+            description: x.description ?? "",
+          })),
+        );
+      }
+      if (iR.success && Array.isArray(iR.obj)) {
+        setInboundFilterOptions(
+          (iR.obj as InboundOption[]).map((x) => ({
+            id: x.id,
+            remark: x.remark || `Inbound ${x.id}`,
+            protocol: x.protocol,
+            port: x.port,
+          })),
+        );
+      }
+    })();
+  }, []);
+
+  useEffect(() => {
+    if (!columnsMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      if (
+        columnsMenuRef.current &&
+        !columnsMenuRef.current.contains(e.target as Node)
+      ) {
+        setColumnsMenuOpen(false);
+      }
+    };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [columnsMenuOpen]);
+
+  const filteredRows = useMemo(() => {
+    const noExpiryLabel = t("pages.clients.cardNoExpiry", {
+      defaultValue: "No expiry",
+    });
+    const expiredLabel = t("pages.clients.cardExpired", {
+      defaultValue: "Expired",
+    });
+    const emailNeedle = columnFilters.email.trim().toLowerCase();
+    const commentNeedle = columnFilters.comment.trim().toLowerCase();
+    const hwidNeedle = columnFilters.hwid.trim().toLowerCase();
+    const trafficRaw = columnFilters.traffic.trim();
+    const expiryRaw = columnFilters.expiry.trim();
+    const trafficNeedle = trafficCompareOp === "" ? trafficRaw.toLowerCase() : "";
+    const expiryNeedle = expiryCompareOp === "" ? expiryRaw.toLowerCase() : "";
+    const trafficThreshold =
+      trafficCompareOp !== "" ? parseTrafficFilterBytes(trafficRaw) : null;
+    const expiryBounds =
+      expiryCompareOp !== "" ? parseExpiryFilterDayBounds(expiryRaw) : null;
+
+    const anySelectFilter =
+      filterConn !== "" ||
+      filterAcct !== "" ||
+      filterInboundId !== "" ||
+      filterGroupId !== "";
+    const anyTextHaystack =
+      emailNeedle.length > 0 ||
+      commentNeedle.length > 0 ||
+      hwidNeedle.length > 0 ||
+      trafficNeedle.length > 0 ||
+      expiryNeedle.length > 0;
+    const anyTrafficCmp =
+      trafficCompareOp !== "" && trafficThreshold != null;
+    const anyExpiryCmp = expiryCompareOp !== "" && expiryBounds != null;
+
+    return rows.filter((r) => {
+      if (filterConn === "online" && !r.isOnline) return false;
+      if (filterConn === "offline" && r.isOnline) return false;
+      if (!rowMatchesAccountFilter(r, filterAcct)) return false;
+
+      if (filterInboundId === "none") {
+        if ((r.inbounds?.length ?? 0) > 0) return false;
+      } else if (filterInboundId !== "") {
+        const iid = Number(filterInboundId);
+        if (
+          !Number.isFinite(iid) ||
+          !(r.inbounds ?? []).some((x) => x.id === iid)
+        ) {
+          return false;
+        }
+      }
+
+      if (filterGroupId === "none") {
+        if (r.groupId != null) return false;
+      } else if (filterGroupId !== "") {
+        const gid = Number(filterGroupId);
+        if (!Number.isFinite(gid) || r.groupId !== gid) return false;
+      }
+
+      if (
+        !anySelectFilter &&
+        !anyTextHaystack &&
+        !anyTrafficCmp &&
+        !anyExpiryCmp
+      ) {
+        return true;
+      }
+
+      const hay = buildClientTextFilterHaystacks(
+        r,
+        t,
+        noExpiryLabel,
+        expiredLabel,
+      );
+
+      if (emailNeedle && !hay.email.includes(emailNeedle)) return false;
+      if (commentNeedle && !hay.comment.includes(commentNeedle)) return false;
+      if (hwidNeedle && !hay.hwid.includes(hwidNeedle)) return false;
+
+      if (trafficCompareOp === "") {
+        if (trafficNeedle && !hay.traffic.includes(trafficNeedle)) return false;
+      } else if (trafficThreshold != null) {
+        const used = r.up + r.down;
+        if (trafficCompareOp === "gt" && !(used > trafficThreshold))
+          return false;
+        if (trafficCompareOp === "lt" && !(used < trafficThreshold))
+          return false;
+        if (trafficCompareOp === "eq" && used !== trafficThreshold)
+          return false;
+      }
+
+      if (expiryCompareOp === "") {
+        if (expiryNeedle && !hay.expiry.includes(expiryNeedle)) return false;
+      } else if (expiryBounds != null) {
+        const ems = rowExpiryMsForFilter(r);
+        if (ems == null) return false;
+        const { start, end } = expiryBounds;
+        if (expiryCompareOp === "gt" && !(ems > end)) return false;
+        if (expiryCompareOp === "lt" && !(ems < start)) return false;
+        if (expiryCompareOp === "eq" && !(ems >= start && ems <= end))
+          return false;
+      }
+
+      return true;
+    });
+  }, [
+    rows,
+    columnFilters,
+    filterConn,
+    filterAcct,
+    filterInboundId,
+    filterGroupId,
+    trafficCompareOp,
+    expiryCompareOp,
+    t,
+  ]);
+
+  const hasActiveFilters = useMemo(() => {
+    if (
+      filterConn !== "" ||
+      filterAcct !== "" ||
+      filterInboundId !== "" ||
+      filterGroupId !== "" ||
+      trafficCompareOp !== "" ||
+      expiryCompareOp !== ""
+    ) {
+      return true;
+    }
+    return (Object.keys(columnFilters) as ColumnFilterId[]).some(
+      (k) => columnFilters[k].trim() !== "",
+    );
+  }, [
+    columnFilters,
+    filterConn,
+    filterAcct,
+    filterInboundId,
+    filterGroupId,
+    trafficCompareOp,
+    expiryCompareOp,
+  ]);
+
+  const displayedRows = useMemo(() => {
+    const next = [...filteredRows];
+    next.sort((a, b) =>
+      compareClients(a, b, sortKey, sortDir, groupOptions),
+    );
+    return next;
+  }, [filteredRows, sortKey, sortDir, groupOptions]);
+
+  const visibleDataColumnCount = useMemo(
+    () => DATA_COLUMN_ORDER.filter((k) => columnVisibility[k]).length,
+    [columnVisibility],
+  );
+
+  useEffect(() => {
+    if (!columnVisibility[sortKey]) {
+      setSortKey("email");
+      setSortDir("asc");
+    }
+  }, [columnVisibility, sortKey]);
+
+  const displayedIds = useMemo(
+    () => displayedRows.map((r) => r.id),
+    [displayedRows],
+  );
+
+  const selectedOnPage = useMemo(
+    () => displayedIds.filter((id) => selectedIds.has(id)),
+    [displayedIds, selectedIds],
+  );
+
+  const allPageSelected =
+    displayedIds.length > 0 && selectedOnPage.length === displayedIds.length;
+  const somePageSelected =
+    selectedOnPage.length > 0 && selectedOnPage.length < displayedIds.length;
+
+  useEffect(() => {
+    const el = headerSelectRef.current;
+    if (el) el.indeterminate = somePageSelected;
+  }, [somePageSelected]);
+
+  const defaultDirForKey = (k: ClientSortKey): SortDir => {
+    switch (k) {
+      case "id":
+      case "email":
+      case "comment":
+      case "expiry":
+      case "state":
+      case "group":
+      case "uuid":
+      case "subId":
+        return "asc";
+      default:
+        return "desc";
+    }
+  };
+
+  const toggleSort = (k: ClientSortKey) => {
+    if (k === sortKey) {
+      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setSortKey(k);
+      setSortDir(defaultDirForKey(k));
+    }
+  };
+
+  const bulkSelectedClients = useMemo(
+    () => rows.filter((r) => selectedIds.has(r.id)),
+    [rows, selectedIds],
+  );
+
+  const runBulkResetTraffic = () => {
+    const list = bulkSelectedClients;
+    if (!list.length) {
+      toast.error(t("pages.clients.noClientsSelected"));
+      return;
+    }
+    setClientsConfirmAction({ kind: "bulkReset", clients: [...list] });
+  };
+
+  const runBulkClearHwid = () => {
+    const list = bulkSelectedClients;
+    if (!list.length) {
+      toast.error(t("pages.clients.noClientsSelected"));
+      return;
+    }
+    setClientsConfirmAction({ kind: "bulkClearHwid", clients: [...list] });
+  };
+
+  const runBulkDelete = () => {
+    const list = bulkSelectedClients;
+    if (!list.length) {
+      toast.error(t("pages.clients.noClientsSelected"));
+      return;
+    }
+    setClientsConfirmAction({ kind: "bulkDelete", clients: [...list] });
+  };
 
   const loadModalData = useCallback(async () => {
     const [inR, gR] = await Promise.all([
@@ -1131,11 +2572,121 @@ export function ClientsPage() {
   const closeSheet = () => {
     setSheetMode(null);
     setSheetClientId(null);
-    setActionsMenuId(null);
     setSheetInlineBusy(null);
     setSubscriptionQrUrl(null);
     resetModal();
   };
+
+  const executeClientsConfirm = useCallback(async () => {
+    if (!clientsConfirmAction) return;
+    setClientsConfirmBusy(true);
+    try {
+      if (clientsConfirmAction.kind === "deleteOne") {
+        const c = clientsConfirmAction.client;
+        const r = await postJson(panel(`client/del/${c.id}`));
+        if (r.success) {
+          toast.success(
+            (r as { msg?: string }).msg ||
+              t("pages.clients.toasts.clientDeleteSuccess", { defaultValue: "Client deleted." }),
+          );
+          setSelectedIds((prev) => {
+            const next = new Set(prev);
+            next.delete(c.id);
+            return next;
+          });
+          if (sheetClientId === c.id) {
+            closeSheet();
+          }
+          void load();
+        } else {
+          toast.error((r as { msg?: string }).msg || t("pages.clients.addError"));
+        }
+        return;
+      }
+      const list = clientsConfirmAction.clients;
+      if (clientsConfirmAction.kind === "bulkReset") {
+        let ok = 0;
+        for (const c of list) {
+          const r = await postJson(panel(`client/resetTraffic/${c.id}`));
+          if (r.success) ok++;
+        }
+        if (ok === list.length) {
+          toast.success(
+            t("pages.clients.bulkOkReset", {
+              count: ok,
+              defaultValue: "Traffic reset for {{count}} clients.",
+            }),
+          );
+        } else {
+          toast.error(
+            t("pages.clients.bulkPartial", {
+              ok,
+              fail: list.length - ok,
+              defaultValue: "{{ok}} succeeded, {{fail}} failed.",
+            }),
+          );
+        }
+        setSelectedIds(new Set());
+        void load();
+        return;
+      }
+      if (clientsConfirmAction.kind === "bulkClearHwid") {
+        let ok = 0;
+        for (const c of list) {
+          const r = await postJson(panel(`client/clearHwid/${c.id}`));
+          if (r.success) ok++;
+        }
+        if (ok === list.length) {
+          toast.success(
+            t("pages.clients.bulkOkClearHwid", {
+              count: ok,
+              defaultValue: "HWID cleared for {{count}} clients.",
+            }),
+          );
+        } else {
+          toast.error(
+            t("pages.clients.bulkPartial", {
+              ok,
+              fail: list.length - ok,
+              defaultValue: "{{ok}} succeeded, {{fail}} failed.",
+            }),
+          );
+        }
+        setSelectedIds(new Set());
+        void load();
+        return;
+      }
+      let ok = 0;
+      for (const c of list) {
+        const r = await postJson(panel(`client/del/${c.id}`));
+        if (r.success) ok++;
+      }
+      if (ok === list.length) {
+        toast.success(
+          t("pages.clients.bulkOkDelete", {
+            count: ok,
+            defaultValue: "{{count}} clients deleted.",
+          }),
+        );
+      } else {
+        toast.error(
+          t("pages.clients.bulkPartial", {
+            ok,
+            fail: list.length - ok,
+            defaultValue: "{{ok}} succeeded, {{fail}} failed.",
+          }),
+        );
+      }
+      setSelectedIds(new Set());
+      if (sheetClientId != null && list.some((c) => c.id === sheetClientId)) {
+        closeSheet();
+      }
+      void load();
+    } finally {
+      setClientsConfirmBusy(false);
+      setClientsConfirmAction(null);
+    }
+  }, [clientsConfirmAction, closeSheet, load, sheetClientId, t, toast]);
 
   const openAdd = () => {
     resetModal();
@@ -1291,7 +2842,7 @@ export function ClientsPage() {
         const obj = (r as { obj?: { uuid?: string } }).obj;
         if (!isEdit && obj?.uuid) {
           try {
-            await navigator.clipboard.writeText(obj.uuid);
+            await copyTextToClipboard(obj.uuid);
             toast.success(
               msg ||
                 t("pages.clients.createdWithUuidCopied", {
@@ -1332,13 +2883,14 @@ export function ClientsPage() {
         actions={
           <>
             <Button
-              variant="primary"
-              onClick={load}
-              loading={loading}
+              variant={bulkMode ? "primary" : "secondary"}
+              onClick={() => setBulkMode((v) => !v)}
               className="!gap-2"
             >
-              <RefreshCw size={16} />
-              {t("refresh")}
+              <ListChecks size={16} />
+              {bulkMode
+                ? t("pages.clients.bulkDone", { defaultValue: "Done" })
+                : t("pages.clients.bulkActions", { defaultValue: "Bulk actions" })}
             </Button>
             <Button variant="secondary" onClick={openAdd} className="!gap-2">
               <Plus size={16} />
@@ -1348,6 +2900,107 @@ export function ClientsPage() {
         }
       />
       <Reveal>
+      {rows.length > 0 ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+              <IconButton
+                type="button"
+                label={
+                  filtersVisible
+                    ? t("pages.clients.filterToggleHide", {
+                        defaultValue: "Hide column filters",
+                      })
+                    : t("pages.clients.filterToggleShow", {
+                        defaultValue: "Show column filters",
+                      })
+                }
+                aria-pressed={filtersVisible}
+                className={
+                  filtersVisible
+                    ? "!border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] !bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] !text-[var(--accent)]"
+                    : undefined
+                }
+                onClick={() => setFiltersVisible((v) => !v)}
+              >
+                <Filter size={18} />
+              </IconButton>
+              <div className="relative" ref={columnsMenuRef}>
+                <IconButton
+                  type="button"
+                  label={t("pages.clients.columnsToggle", {
+                    defaultValue: "Show / hide columns",
+                  })}
+                  aria-expanded={columnsMenuOpen}
+                  className={
+                    columnsMenuOpen
+                      ? "!border-[color-mix(in_oklab,var(--accent)_40%,var(--border))] !bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] !text-[var(--accent)]"
+                      : undefined
+                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setColumnsMenuOpen((o) => !o);
+                  }}
+                >
+                  <Columns3 size={18} />
+                </IconButton>
+                {columnsMenuOpen ? (
+                  <div
+                    className="absolute left-0 z-30 mt-1 min-w-[16rem] rounded-xl border border-[var(--border-strong)] bg-[var(--bg-elevated)] py-2 shadow-lg"
+                    onClick={(e) => e.stopPropagation()}
+                    role="menu"
+                  >
+                    <p className="px-3 pb-1 text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                      {t("pages.clients.columnsMenuTitle", {
+                        defaultValue: "Columns",
+                      })}
+                    </p>
+                    {DATA_COLUMN_ORDER.map((colId) => (
+                      <label
+                        key={colId}
+                        className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)]"
+                      >
+                        <input
+                          type="checkbox"
+                          className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)]"
+                          checked={columnVisibility[colId]}
+                          disabled={colId === "email"}
+                          onChange={(e) => {
+                            if (colId === "email") return;
+                            setColumnVisibility((v) => ({
+                              ...v,
+                              [colId]: e.target.checked,
+                            }));
+                          }}
+                        />
+                        <span className="truncate" title={colId}>
+                          {getDataColumnLabel(colId, t)}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+              {hasActiveFilters ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-9 shrink-0 !gap-2 !text-xs"
+                  onClick={() => {
+                    setColumnFilters({ ...DEFAULT_COLUMN_FILTERS });
+                    setFilterConn("");
+                    setFilterAcct("");
+                    setFilterInboundId("");
+                    setFilterGroupId("");
+                    setTrafficCompareOp("");
+                    setExpiryCompareOp("");
+                  }}
+                >
+                  {t("pages.clients.filterClear", {
+                    defaultValue: "Reset filters",
+                  })}
+                </Button>
+              ) : null}
+        </div>
+      ) : null}
       <Surface padding="none" className="overflow-visible">
         {loading && !rows.length ? (
           <div className="grid min-h-48 place-items-center">
@@ -1365,138 +3018,468 @@ export function ClientsPage() {
             </div>
           </div>
         ) : (
-          <div className="panel-data-table overflow-x-auto">
-            <table className="w-full table-fixed border-collapse text-left text-sm">
-              <colgroup>
-                <col className="w-[22%]" />
-                <col className="w-[10%]" />
-                <col className="w-[16%]" />
-                <col className="w-[16%]" />
-                <col className="w-[18%]" />
-                <col className="w-[10%]" />
-                <col className="w-[8%]" />
-              </colgroup>
-              <thead>
-                <tr className="sticky top-0 z-[1] border-b border-[var(--border)] bg-[var(--surface)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
-                  <th className="p-3">{t("pages.clients.email")}</th>
-                  <th className="p-3">{t("status")}</th>
-                  <th className="p-3">{t("pages.clients.traffic")}</th>
-                  <th className="p-3">{t("pages.clients.expiryTime")}</th>
-                  <th className="p-3">{t("pages.clients.inbounds")}</th>
-                  <th className="p-3">HWID</th>
-                  <th className="p-3 text-right">{t("pages.clients.operate")}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((r) => {
-                  const expiryLabel = formatClientCardExpiry(
-                    r.expiryTime,
-                    t("pages.clients.cardNoExpiry", { defaultValue: "No expiry" }),
-                    t("pages.clients.cardExpired", { defaultValue: "Expired" }),
-                  );
-                  const ib = r.inbounds ?? [];
-                  const inboundSummary =
-                    ib.length === 0
-                      ? "—"
-                      : ib.length === 1
-                        ? `${ib[0]!.remark || ib[0]!.tag} · ${ib[0]!.protocol}`
-                        : `${ib[0]!.remark || ib[0]!.tag || ib[0]!.protocol} +${ib.length - 1}`;
-                  const inboundTitle = ib.length
-                    ? ib
-                        .map((x) => `${x.remark || x.tag} · ${x.protocol}:${x.port}`)
-                        .join("\n")
-                    : undefined;
-                  return (
-                    <tr
-                      key={r.id}
-                      onClick={() => void openSheetEdit(r.id)}
-                      className="cursor-pointer border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
-                    >
-                      <td
-                        className="truncate p-3 font-medium text-[var(--fg)]"
-                        title={r.email}
-                      >
-                        {r.email}
-                      </td>
-                      <td className="p-3">
-                        <StatusPill
-                          active={r.enable}
-                          activeLabel={t("enabled")}
-                          inactiveLabel={t("disabled")}
+          <>
+            {bulkMode ? (
+              <div className="flex flex-wrap items-center gap-2 border-b border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] px-3 py-2.5 sm:px-4">
+                <span className="text-xs font-medium text-[var(--fg-muted)]">
+                  {t("pages.clients.selectedCount")}: {selectedIds.size}
+                </span>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-8 !px-2.5 !text-xs"
+                  disabled={!displayedIds.length}
+                  onClick={() => setSelectedIds(new Set(displayedIds))}
+                >
+                  {t("pages.clients.selectAllFiltered", {
+                    defaultValue: "Select all (filtered)",
+                  })}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-8 !px-2.5 !text-xs"
+                  disabled={!selectedIds.size}
+                  onClick={() => setSelectedIds(new Set())}
+                >
+                  {t("pages.clients.clearSelection")}
+                </Button>
+                <span className="mx-1 hidden h-4 w-px bg-[var(--border)] sm:inline" aria-hidden />
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-8 !gap-1.5 !px-2.5 !text-xs"
+                  disabled={!selectedIds.size}
+                  onClick={() => void runBulkResetTraffic()}
+                >
+                  <RotateCcw size={14} />
+                  {t("pages.clients.resetTraffic", { defaultValue: "Reset traffic" })}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-8 !gap-1.5 !px-2.5 !text-xs"
+                  disabled={!selectedIds.size}
+                  onClick={() => void runBulkClearHwid()}
+                >
+                  <Smartphone size={14} />
+                  {t("pages.clients.clearHwid", { defaultValue: "Clear HWIDs" })}
+                </Button>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="!h-8 !gap-1.5 !px-2.5 !text-xs text-red-600 dark:text-red-400"
+                  disabled={!selectedIds.size}
+                  onClick={() => void runBulkDelete()}
+                >
+                  <Trash2 size={14} />
+                  {t("delete")}
+                </Button>
+              </div>
+            ) : null}
+            <div className="panel-data-table overflow-x-auto">
+              <table className="w-full min-w-[1200px] border-collapse text-left text-sm">
+                <thead>
+                  <tr className="sticky top-0 z-[1] border-b border-[var(--border)] bg-[var(--surface)]">
+                    {bulkMode ? (
+                      <th className="w-10 p-3">
+                        <input
+                          ref={headerSelectRef}
+                          type="checkbox"
+                          className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                          checked={allPageSelected}
+                          onChange={(e) => {
+                            e.stopPropagation();
+                            if (e.target.checked) {
+                              setSelectedIds((prev) => {
+                                const next = new Set(prev);
+                                for (const id of displayedIds) next.add(id);
+                                return next;
+                              });
+                            } else {
+                              setSelectedIds((prev) => {
+                                const next = new Set(prev);
+                                for (const id of displayedIds) next.delete(id);
+                                return next;
+                              });
+                            }
+                          }}
+                          aria-label={t("pages.clients.selectAllFiltered", {
+                            defaultValue: "Select all (filtered)",
+                          })}
                         />
-                      </td>
-                      <td className="p-3 tabular-nums whitespace-nowrap">
-                        {sizeFormat(r.up || 0)} ↑ / {sizeFormat(r.down || 0)} ↓
-                      </td>
-                      <td className="p-3 tabular-nums whitespace-nowrap">{expiryLabel}</td>
-                      <td className="truncate p-3" title={inboundTitle}>
-                        {inboundSummary}
-                      </td>
-                      <td className="p-3 tabular-nums whitespace-nowrap">
-                        {r.hwidEnabled
-                          ? `${r.activeHwidCount}${r.maxHwid != null && r.maxHwid > 0 ? ` / ${r.maxHwid}` : ""}`
-                          : "—"}
-                      </td>
-                      <td className="p-3" onClick={(e) => e.stopPropagation()}>
-                        <div className="relative flex justify-end">
-                          <IconButton
-                            type="button"
-                            label={t("pages.clients.cardActions", { defaultValue: "Actions" })}
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setActionsMenuId((id) => (id === r.id ? null : r.id));
-                            }}
-                          >
-                            <MoreHorizontal size={18} />
-                          </IconButton>
-                          {actionsMenuId === r.id ? (
-                            <div
-                              className="absolute right-0 z-20 mt-1 min-w-[11rem] rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-1 text-sm shadow-lg"
-                              onClick={(e) => e.stopPropagation()}
-                              role="menu"
+                      </th>
+                    ) : null}
+                    {DATA_COLUMN_ORDER.map((col) => {
+                      if (!columnVisibility[col]) return null;
+                      return (
+                        <SortableTh
+                          key={col}
+                          label={getDataColumnLabel(col, t)}
+                          sortKey={col}
+                          activeKey={sortKey}
+                          dir={sortDir}
+                          onSort={toggleSort}
+                          className={
+                            col === "id"
+                              ? "w-14 tabular-nums"
+                              : col === "uuid" || col === "subId"
+                                ? "min-w-[7.5rem]"
+                                : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </tr>
+                  {filtersVisible ? (
+                    <tr className="border-b border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)]">
+                      {bulkMode ? (
+                        <th className="p-2 align-top" aria-hidden />
+                      ) : null}
+                      {DATA_COLUMN_ORDER.map((col) => {
+                        if (!columnVisibility[col]) return null;
+                        if (col === "email") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
                             >
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)]"
-                                onClick={() => {
-                                  setActionsMenuId(null);
-                                  resetTraffic(r);
-                                }}
+                              <ClientsColumnFilterInput
+                                value={columnFilters.email}
+                                onChange={(v) =>
+                                  setColumnFilters((f) => ({ ...f, email: v }))
+                                }
+                                placeholder={t("pages.clients.filterColEmail", {
+                                  defaultValue: "Contains…",
+                                })}
+                              />
+                            </th>
+                          );
+                        }
+                        if (col === "comment") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <ClientsColumnFilterInput
+                                value={columnFilters.comment}
+                                onChange={(v) =>
+                                  setColumnFilters((f) => ({ ...f, comment: v }))
+                                }
+                                placeholder={t("pages.clients.filterColComment", {
+                                  defaultValue: "Contains…",
+                                })}
+                              />
+                            </th>
+                          );
+                        }
+                        if (col === "connection") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <SelectNative
+                                className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                                value={filterConn}
+                                onChange={(e) =>
+                                  setFilterConn(e.target.value as FilterConn)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={t("pages.clients.filterConnection", {
+                                  defaultValue: "Connection",
+                                })}
                               >
-                                <RotateCcw size={14} />{" "}
-                                {t("pages.clients.resetTraffic", { defaultValue: "Reset traffic" })}
-                              </button>
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-600 hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] dark:text-red-400"
-                                onClick={() => {
-                                  setActionsMenuId(null);
-                                  clearHwid(r);
-                                }}
+                                <option value="">
+                                  {t("pages.clients.filterConnAll", {
+                                    defaultValue: "All",
+                                  })}
+                                </option>
+                                <option value="online">{t("online")}</option>
+                                <option value="offline">{t("offline")}</option>
+                              </SelectNative>
+                            </th>
+                          );
+                        }
+                        if (col === "state") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <SelectNative
+                                className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                                value={filterAcct}
+                                onChange={(e) =>
+                                  setFilterAcct(e.target.value as FilterAcct)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={t("pages.clients.filterAccountState", {
+                                  defaultValue: "Account state",
+                                })}
                               >
-                                <Smartphone size={14} />{" "}
-                                {t("pages.clients.clearHwid", { defaultValue: "Clear HWIDs" })}
-                              </button>
-                              <button
-                                type="button"
-                                className="flex w-full items-center gap-2 px-3 py-2 text-left text-red-600 hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)] dark:text-red-400"
-                                onClick={() => {
-                                  setActionsMenuId(null);
-                                  confirmDelete(r);
-                                }}
+                                <option value="">
+                                  {t("pages.clients.filterStateAll", {
+                                    defaultValue: "All states",
+                                  })}
+                                </option>
+                                <option value="active">
+                                  {clientAccountStateMeta(true, "active", t).label}
+                                </option>
+                                <option value="disabled">
+                                  {t("pages.clients.stateDisabled", {
+                                    defaultValue: "Disabled",
+                                  })}
+                                </option>
+                                <option value="expired_traffic">
+                                  {
+                                    clientAccountStateMeta(
+                                      true,
+                                      "expired_traffic",
+                                      t,
+                                    ).label
+                                  }
+                                </option>
+                                <option value="expired_time">
+                                  {
+                                    clientAccountStateMeta(
+                                      true,
+                                      "expired_time",
+                                      t,
+                                    ).label
+                                  }
+                                </option>
+                              </SelectNative>
+                            </th>
+                          );
+                        }
+                        if (col === "traffic") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <CompareModeFilterField
+                                mode="traffic"
+                                compareOp={trafficCompareOp}
+                                onCompareOpChange={setTrafficCompareOp}
+                                value={columnFilters.traffic}
+                                onValueChange={(v) =>
+                                  setColumnFilters((f) => ({ ...f, traffic: v }))
+                                }
+                                placeholder={
+                                  trafficCompareOp === ""
+                                    ? t("pages.clients.filterColTraffic", {
+                                        defaultValue: "Contains…",
+                                      })
+                                    : t("pages.clients.filterTrafficAmount", {
+                                        defaultValue: "e.g. 10 gb",
+                                      })
+                                }
+                                className="w-full"
+                              />
+                            </th>
+                          );
+                        }
+                        if (col === "expiry") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <CompareModeFilterField
+                                mode="expiry"
+                                compareOp={expiryCompareOp}
+                                onCompareOpChange={setExpiryCompareOp}
+                                value={columnFilters.expiry}
+                                onValueChange={(v) =>
+                                  setColumnFilters((f) => ({ ...f, expiry: v }))
+                                }
+                                placeholder={
+                                  expiryCompareOp === ""
+                                    ? t("pages.clients.filterColExpiry", {
+                                        defaultValue: "Contains…",
+                                      })
+                                    : t("pages.clients.filterExpiryDate", {
+                                        defaultValue: "YYYY-MM-DD",
+                                      })
+                                }
+                                className="w-full"
+                              />
+                            </th>
+                          );
+                        }
+                        if (col === "inbounds") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <SelectNative
+                                className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                                value={filterInboundId}
+                                onChange={(e) =>
+                                  setFilterInboundId(e.target.value)
+                                }
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={t("pages.clients.inbounds")}
                               >
-                                <Trash2 size={14} /> {t("delete")}
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
+                                <option value="">
+                                  {t("pages.clients.filterInboundAll", {
+                                    defaultValue: "All inbounds",
+                                  })}
+                                </option>
+                                <option value="none">
+                                  {t("pages.clients.filterInboundNone", {
+                                    defaultValue: "None assigned",
+                                  })}
+                                </option>
+                                {inboundFilterOptions.map((ib) => (
+                                  <option key={ib.id} value={String(ib.id)}>
+                                    {ib.remark || `${ib.protocol}:${ib.port}`}
+                                  </option>
+                                ))}
+                              </SelectNative>
+                            </th>
+                          );
+                        }
+                        if (col === "group") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <SelectNative
+                                className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                                value={filterGroupId}
+                                onChange={(e) => setFilterGroupId(e.target.value)}
+                                onClick={(e) => e.stopPropagation()}
+                                aria-label={t("pages.clients.group")}
+                              >
+                                <option value="">
+                                  {t("pages.clients.filterGroupAll", {
+                                    defaultValue: "All groups",
+                                  })}
+                                </option>
+                                <option value="none">
+                                  {t("pages.clients.filterGroupNone", {
+                                    defaultValue: "No group",
+                                  })}
+                                </option>
+                                {groupOptions.map((g) => (
+                                  <option key={g.id} value={String(g.id)}>
+                                    {g.name}
+                                  </option>
+                                ))}
+                              </SelectNative>
+                            </th>
+                          );
+                        }
+                        if (col === "hwid") {
+                          return (
+                            <th
+                              key={col}
+                              className="p-2 align-top font-normal"
+                            >
+                              <ClientsColumnFilterInput
+                                value={columnFilters.hwid}
+                                onChange={(v) =>
+                                  setColumnFilters((f) => ({ ...f, hwid: v }))
+                                }
+                                placeholder={t("pages.clients.filterColHwid", {
+                                  defaultValue: "Contains…",
+                                })}
+                              />
+                            </th>
+                          );
+                        }
+                        return <th key={col} className="p-2" aria-hidden />;
+                      })}
+                    </tr>
+                  ) : null}
+                </thead>
+                <tbody>
+                  {displayedRows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={
+                          (bulkMode ? 1 : 0) + visibleDataColumnCount
+                        }
+                        className="px-4 py-10 text-center text-sm text-[var(--fg-muted)]"
+                      >
+                        {t("pages.clients.filterNoResults", {
+                          defaultValue: "No clients match the current filters.",
+                        })}
                       </td>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  ) : (
+                    displayedRows.map((r) => {
+                      const noExpiryL = t("pages.clients.cardNoExpiry", {
+                        defaultValue: "No expiry",
+                      });
+                      const expiredL = t("pages.clients.cardExpired", {
+                        defaultValue: "Expired",
+                      });
+                      return (
+                        <tr
+                          key={r.id}
+                          onClick={() => void openSheetEdit(r.id)}
+                          className="cursor-pointer border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                        >
+                          {bulkMode ? (
+                            <td
+                              className="p-3 align-middle"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <input
+                                type="checkbox"
+                                className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                                checked={selectedIds.has(r.id)}
+                                onChange={(e) => {
+                                  e.stopPropagation();
+                                  const on = e.target.checked;
+                                  setSelectedIds((prev) => {
+                                    const next = new Set(prev);
+                                    if (on) next.add(r.id);
+                                    else next.delete(r.id);
+                                    return next;
+                                  });
+                                }}
+                                aria-label={r.email}
+                              />
+                            </td>
+                          ) : null}
+                          {DATA_COLUMN_ORDER.map((col) => {
+                            if (!columnVisibility[col]) return null;
+                            return (
+                              <td
+                                key={col}
+                                className={cx(
+                                  "p-3 align-middle",
+                                  col === "email" &&
+                                    "max-w-[14rem] font-medium text-[var(--fg)]",
+                                )}
+                              >
+                                <ClientDataCell
+                                  col={col}
+                                  r={r}
+                                  t={t}
+                                  groupOptions={groupOptions}
+                                  noExpiry={noExpiryL}
+                                  expired={expiredL}
+                                />
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </Surface>
       </Reveal>
@@ -1564,13 +3547,16 @@ export function ClientsPage() {
               sheetClient != null ? clearHwid(sheetClient) : undefined
             }
             onDelete={() =>
-              sheetClient != null ? confirmDelete(sheetClient) : undefined
+              sheetClient != null ? openDeleteClientConfirm(sheetClient) : undefined
             }
             onOpenKeys={() => {
               if (sheetClient != null) void openKeysModal(sheetClient.id);
             }}
             onOpenHwid={() => {
               if (sheetClient != null) void openHwidModal(sheetClient.id);
+            }}
+            onOpenSessions={() => {
+              if (sheetClient != null) void openSessionsModal(sheetClient.id);
             }}
             onShowSubscriptionQr={(url) => setSubscriptionQrUrl(url)}
           />
@@ -1690,15 +3676,153 @@ export function ClientsPage() {
       </Modal>
 
       <Modal
+        open={sessionsModalClientId != null}
+        onClose={() => {
+          setSessionsModalClientId(null);
+          setSessionsData(null);
+        }}
+        title={t("pages.clients.sessions.modalTitle", {
+          defaultValue: "Active sessions",
+        })}
+        width={640}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <p className="max-w-[min(100%,28rem)] text-xs text-[var(--fg-muted)]">
+              {t("pages.clients.sessions.natWarning", {
+                defaultValue:
+                  "Dropping traffic by IP affects all connections using that IP (shared NAT may impact other users).",
+              })}
+            </p>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                disabled={sessionsDropBusy}
+                onClick={() => void refreshSessionsModal()}
+              >
+                {t("pages.clients.sessions.refresh", { defaultValue: "Refresh" })}
+              </Button>
+              <Button
+                type="button"
+                variant="primary"
+                loading={sessionsDropBusy}
+                disabled={
+                  sessionsLoading ||
+                  !sessionsData?.results?.some((x) => x.dropAvailable)
+                }
+                onClick={() => void dropAllSessions()}
+              >
+                {t("pages.clients.sessions.dropAll", {
+                  defaultValue: "Disconnect all",
+                })}
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={() => {
+                  setSessionsModalClientId(null);
+                  setSessionsData(null);
+                }}
+              >
+                {t("close", { defaultValue: "Close" })}
+              </Button>
+            </div>
+          </div>
+        }
+      >
+        {sessionsLoading && !sessionsData ? (
+          <div className="grid min-h-40 place-items-center">
+            <Spinner size={32} />
+          </div>
+        ) : sessionsData ? (
+          <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
+            {sessionsData.results.map((block) => (
+              <div
+                key={`${block.nodeId ?? "local"}-${block.nodeName}`}
+                className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
+              >
+                <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-semibold text-[var(--fg)]">
+                    {block.nodeName}
+                  </span>
+                  {!block.error && !block.dropAvailable ? (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-400">
+                      {t("pages.clients.sessions.dropUnavailable", {
+                        defaultValue: "Drop unavailable (need Linux + conntrack + NET_ADMIN)",
+                      })}
+                    </span>
+                  ) : null}
+                </div>
+                {block.error ? (
+                  <p className="text-xs text-red-600 dark:text-red-400">{block.error}</p>
+                ) : !block.sessions?.length ? (
+                  <p className="text-xs text-[var(--fg-muted)]">
+                    {t("pages.clients.sessions.empty", {
+                      defaultValue: "No active IP entries (client offline or stats not ready).",
+                    })}
+                  </p>
+                ) : (
+                  <table className="w-full border-collapse text-left text-xs">
+                    <thead>
+                      <tr className="border-b border-[var(--border)] text-[var(--fg-subtle)]">
+                        <th className="p-2">IP</th>
+                        <th className="p-2">
+                          {t("pages.clients.sessions.lastSeen", {
+                            defaultValue: "Last seen",
+                          })}
+                        </th>
+                        <th className="p-2 w-24" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {block.sessions.map((s) => (
+                        <tr
+                          key={`${block.nodeName}-${s.ip}`}
+                          className="border-b border-[var(--border)] text-[var(--fg-muted)]"
+                        >
+                          <td className="p-2 font-mono text-[11px]">{s.ip}</td>
+                          <td className="p-2">
+                            {s.lastSeen > 0
+                              ? new Date(s.lastSeen * 1000).toLocaleString()
+                              : "—"}
+                          </td>
+                          <td className="p-2 text-right">
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="!h-7 !px-2 !text-[10px]"
+                              disabled={sessionsDropBusy || !block.dropAvailable}
+                              onClick={() => void dropSessionIp(s.ip)}
+                            >
+                              {t("pages.clients.sessions.dropOne", {
+                                defaultValue: "Disconnect",
+                              })}
+                            </Button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-[var(--fg-muted)]">{t("noData")}</p>
+        )}
+      </Modal>
+
+      <Modal
         open={hwidModalClientId != null}
         onClose={() => {
           setHwidModalClientId(null);
           setHwidRows([]);
+          setHwidDeleteRow(null);
         }}
         title={t("pages.clients.hwidModalTitle", {
           defaultValue: "Registered devices (HWID)",
         })}
-        width={560}
+        width={720}
         footer={
           <Button
             type="button"
@@ -1706,6 +3830,7 @@ export function ClientsPage() {
             onClick={() => {
               setHwidModalClientId(null);
               setHwidRows([]);
+              setHwidDeleteRow(null);
             }}
           >
             {t("close", { defaultValue: "Close" })}
@@ -1723,19 +3848,42 @@ export function ClientsPage() {
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[var(--fg-subtle)]">
-                  <th className="p-2">HWID</th>
-                  <th className="p-2">{t("pages.clients.device", { defaultValue: "Device" })}</th>
-                  <th className="p-2">{t("status")}</th>
+                  <th className="p-2 align-bottom">HWID</th>
+                  <th className="p-2 align-bottom">
+                    {t("pages.clients.device", { defaultValue: "Device" })}
+                  </th>
+                  <th className="p-2 align-bottom min-w-[8rem]">
+                    {t("pages.clients.hwidUserAgent", { defaultValue: "User-Agent" })}
+                  </th>
+                  <th className="p-2 align-bottom whitespace-nowrap">{t("status")}</th>
+                  <th className="p-2 align-bottom w-12" aria-label={t("delete")} />
                 </tr>
               </thead>
               <tbody>
                 {hwidRows.map((h) => (
                   <tr key={h.id} className="border-b border-[var(--border)] text-[var(--fg-muted)]">
-                    <td className="p-2 font-mono text-[10px] break-all">{h.hwid}</td>
-                    <td className="p-2">
+                    <td className="p-2 font-mono text-[10px] break-all align-top">{h.hwid}</td>
+                    <td className="p-2 align-top">
                       {[h.deviceModel, h.deviceOs].filter(Boolean).join(" · ") || "—"}
                     </td>
-                    <td className="p-2">{h.isActive ? t("enabled") : t("disabled")}</td>
+                    <td className="p-2 align-top font-mono text-[10px] leading-snug break-all text-[var(--fg-muted)]">
+                      {h.userAgent?.trim() ? h.userAgent.trim() : "—"}
+                    </td>
+                    <td className="p-2 align-top whitespace-nowrap">
+                      {h.isActive ? t("enabled") : t("disabled")}
+                    </td>
+                    <td className="p-2 align-top text-right">
+                      <IconButton
+                        type="button"
+                        label={t("pages.clients.hwidRemoveDevice", {
+                          defaultValue: "Remove device",
+                        })}
+                        className="!h-8 !w-8 text-[var(--fg-subtle)] hover:text-red-400"
+                        onClick={() => setHwidDeleteRow(h)}
+                      >
+                        <Trash2 className="size-4" aria-hidden />
+                      </IconButton>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -1743,6 +3891,100 @@ export function ClientsPage() {
           </div>
         )}
       </Modal>
+
+      <ConfirmDialog
+        open={hwidDeleteRow != null}
+        title={t("pages.clients.hwidDeleteConfirmTitle", {
+          defaultValue: "Remove this registered device?",
+        })}
+        description={
+          hwidDeleteRow
+            ? [
+                [hwidDeleteRow.deviceModel, hwidDeleteRow.deviceOs].filter(Boolean).join(" · ") ||
+                  t("pages.clients.hwidUnknownDevice", { defaultValue: "Unknown device" }),
+                hwidDeleteRow.hwid,
+              ].join(" — ")
+            : undefined
+        }
+        confirmLabel={t("delete")}
+        cancelLabel={t("cancel")}
+        danger
+        loading={hwidDeleteBusy}
+        onCancel={() => {
+          if (!hwidDeleteBusy) setHwidDeleteRow(null);
+        }}
+        onConfirm={async () => {
+          if (!hwidDeleteRow) return;
+          const id = hwidDeleteRow.id;
+          setHwidDeleteBusy(true);
+          try {
+            const r = await postJson(panel(`client/hwid/del/${id}`));
+            if (r.success) {
+              toast.success(
+                (r as { msg?: string }).msg ||
+                  t("pages.clients.hwidDeviceRemoved", {
+                    defaultValue: "Device removed.",
+                  }),
+              );
+              setHwidDeleteRow(null);
+              setHwidRows((prev) => prev.filter((x) => x.id !== id));
+              void load();
+            } else {
+              toast.error((r as { msg?: string }).msg || t("pages.clients.addError"));
+            }
+          } catch {
+            toast.error(t("pages.clients.addError"));
+          } finally {
+            setHwidDeleteBusy(false);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={clientsConfirmAction != null}
+        title={
+          clientsConfirmAction == null
+            ? ""
+            : clientsConfirmAction.kind === "deleteOne"
+              ? t("pages.clients.confirmDelete", {
+                  defaultValue: "Delete this client? This cannot be undone.",
+                })
+              : clientsConfirmAction.kind === "bulkReset"
+                ? t("pages.clients.bulkConfirmReset", {
+                    count: clientsConfirmAction.clients.length,
+                    defaultValue: "Reset traffic for {{count}} clients?",
+                  })
+                : clientsConfirmAction.kind === "bulkClearHwid"
+                  ? t("pages.clients.bulkConfirmClearHwid", {
+                      count: clientsConfirmAction.clients.length,
+                      defaultValue: "Clear HWID for {{count}} clients?",
+                    })
+                  : t("pages.clients.bulkConfirmDelete", {
+                      count: clientsConfirmAction.clients.length,
+                      defaultValue:
+                        "Permanently delete {{count}} clients? This cannot be undone.",
+                    })
+        }
+        description={
+          clientsConfirmAction?.kind === "deleteOne"
+            ? clientsConfirmAction.client.email
+            : undefined
+        }
+        confirmLabel={
+          clientsConfirmAction?.kind === "bulkDelete" ||
+          clientsConfirmAction?.kind === "deleteOne"
+            ? t("delete")
+            : t("confirm")
+        }
+        cancelLabel={t("cancel")}
+        danger={
+          clientsConfirmAction?.kind === "bulkDelete" ||
+          clientsConfirmAction?.kind === "deleteOne"
+        }
+        loading={clientsConfirmBusy}
+        onCancel={() => setClientsConfirmAction(null)}
+        onConfirm={() => void executeClientsConfirm()}
+      />
     </PageScaffold>
   );
 }

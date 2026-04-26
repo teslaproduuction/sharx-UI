@@ -63,6 +63,7 @@ var defaultValueMap = map[string]string{
 	"tgLang":                      "en-US",
 	"twoFactorEnable":             "false",
 	"twoFactorToken":              "",
+	"twoFactorTelegram":           "false",
 	"subEnable":                   "true",
 	"subJsonEnable":               "false",
 	"subTitle":                    "",
@@ -480,6 +481,14 @@ func (s *SettingService) GetTwoFactorToken() (string, error) {
 
 func (s *SettingService) SetTwoFactorToken(value string) error {
 	return s.setString("twoFactorToken", value)
+}
+
+func (s *SettingService) GetTwoFactorTelegram() (bool, error) {
+	return s.getBool("twoFactorTelegram")
+}
+
+func (s *SettingService) SetTwoFactorTelegram(value bool) error {
+	return s.setBool("twoFactorTelegram", value)
 }
 
 func (s *SettingService) GetPort() (int, error) {
@@ -973,6 +982,10 @@ func (s *SettingService) SetHwidMode(mode string) error {
 func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	if err := allSetting.CheckValid(); err != nil {
 		return err
+	}
+
+	if !allSetting.TwoFactorEnable {
+		allSetting.TwoFactorToken = ""
 	}
 
 	// Settings that should only be configured via environment variables

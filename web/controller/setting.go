@@ -1,16 +1,22 @@
 package controller
 
 import (
+	"encoding/base64"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/crypto"
 	"github.com/konstpic/sharx-code/v2/web/entity"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"github.com/skip2/go-qrcode"
+	"github.com/xlzd/gotp"
 )
 
 // updateUserForm represents the form for updating user credentials.
@@ -19,6 +25,10 @@ type updateUserForm struct {
 	OldPassword string `json:"oldPassword" form:"oldPassword"`
 	NewUsername string `json:"newUsername" form:"newUsername"`
 	NewPassword string `json:"newPassword" form:"newPassword"`
+}
+
+type twoFactorCodeForm struct {
+	Code string `json:"code" form:"code"`
 }
 
 // SettingController handles settings and user management operations.
@@ -50,6 +60,10 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/subscriptionPageConfig/list", a.subscriptionPageConfigList)
 	g.POST("/subscriptionPageConfig/get", a.subscriptionPageConfigGet)
 	g.POST("/subscriptionPageConfig/save", a.subscriptionPageConfigSave)
+
+	g.POST("/twoFactor/begin", a.beginTwoFactorSetup)
+	g.POST("/twoFactor/complete", a.completeTwoFactorSetup)
+	g.POST("/twoFactor/cancel", a.cancelTwoFactorSetup)
 
 	// Initialize migration controller
 	NewMigrationController(g)
@@ -109,6 +123,11 @@ func (a *SettingController) updateUser(c *gin.Context) {
 		user.Username = form.NewUsername
 		user.Password, _ = crypto.HashPasswordAsBcrypt(form.NewPassword)
 		session.SetLoginUser(c, user)
+		tgbot := service.Tgbot{}
+		if tgbot.IsRunning() {
+			detail := fmt.Sprintf("<b>User:</b> %s → %s\n", form.OldUsername, form.NewUsername)
+			tgbot.NotifyPanelAction("Panel admin login changed", detail, getRemoteIp(c))
+		}
 	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifyUser"), err)
 }
@@ -116,6 +135,12 @@ func (a *SettingController) updateUser(c *gin.Context) {
 // restartPanel restarts the panel service after a delay.
 func (a *SettingController) restartPanel(c *gin.Context) {
 	err := a.panelService.RestartPanel(time.Second * 3)
+	if err == nil {
+		tgbot := service.Tgbot{}
+		if tgbot.IsRunning() {
+			tgbot.NotifyPanelAction("Panel process restart requested", "The service will exit and come back in a few seconds.\n", getRemoteIp(c))
+		}
+	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.restartPanelSuccess"), err)
 }
 
@@ -139,4 +164,75 @@ func (a *SettingController) getGrafanaDashboard(c *gin.Context) {
 	c.Header("Content-Type", "application/json")
 	c.Header("Content-Disposition", "attachment; filename=sharx-grafana-dashboard.json")
 	c.String(http.StatusOK, dashboardJSON)
+}
+
+func (a *SettingController) beginTwoFactorSetup(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	if user == nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorBeginUnauthorized"))
+		return
+	}
+	secret := gotp.RandomSecret(20)
+	if secret == "" {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorBeginError"))
+		return
+	}
+	session.SetPendingTwoFactorSecret(c, secret)
+	if err := sessions.Default(c).Save(); err != nil {
+		logger.Warning("2FA begin session save:", err)
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorBeginError"))
+		return
+	}
+	totp := gotp.NewDefaultTOTP(secret)
+	uri := totp.ProvisioningUri(user.Username, "SharX Panel")
+	png, err := qrcode.Encode(uri, qrcode.Medium, 256)
+	if err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorBeginError"))
+		return
+	}
+	jsonObj(c, map[string]any{
+		"secret":          secret,
+		"provisioningUri": uri,
+		"qrPngBase64":     base64.StdEncoding.EncodeToString(png),
+	}, nil)
+}
+
+func (a *SettingController) completeTwoFactorSetup(c *gin.Context) {
+	form := &twoFactorCodeForm{}
+	if err := c.ShouldBind(form); err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorCompleteError"))
+		return
+	}
+	secret := session.GetPendingTwoFactorSecret(c)
+	if secret == "" {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorCompleteError"))
+		return
+	}
+	if !service.VerifyTOTPCode(secret, form.Code) {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorModalError"))
+		return
+	}
+	if err := a.settingService.SetTwoFactorToken(secret); err != nil {
+		logger.Warning("SetTwoFactorToken:", err)
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorCompleteError"))
+		return
+	}
+	if err := a.settingService.SetTwoFactorEnable(true); err != nil {
+		logger.Warning("SetTwoFactorEnable:", err)
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.settings.security.twoFactorCompleteError"))
+		return
+	}
+	session.ClearPendingTwoFactorSecret(c)
+	if err := sessions.Default(c).Save(); err != nil {
+		logger.Warning("session save after 2FA setup:", err)
+	}
+	jsonMsg(c, I18nWeb(c, "pages.settings.security.twoFactorModalSetSuccess"), nil)
+}
+
+func (a *SettingController) cancelTwoFactorSetup(c *gin.Context) {
+	session.ClearPendingTwoFactorSecret(c)
+	if err := sessions.Default(c).Save(); err != nil {
+		logger.Warning("session save after 2FA cancel:", err)
+	}
+	jsonMsg(c, "", nil)
 }

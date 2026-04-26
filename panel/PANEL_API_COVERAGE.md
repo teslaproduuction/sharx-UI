@@ -81,6 +81,8 @@
 |--------|------|-----------|------------|
 | GET | `client/list` | Да | ClientsPage |
 | GET | `client/get/:id` | Да | ClientsPage |
+| GET | `client/sessions/:id` | Да | ClientsPage (active sessions / IPs modal) |
+| POST | `client/sessions/drop/:id` | Да | ClientsPage (drop all or per-IP) |
 | POST | `client/add` | Да | ClientsPage |
 | POST | `client/update/:id` | Да | ClientsPage |
 | POST | `client/del/:id` | Нет | — |

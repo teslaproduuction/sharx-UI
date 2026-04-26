@@ -122,17 +122,6 @@ Select **1) Install Panel** and follow the prompts:
 3. Generate or enter database password
 4. Choose SSL certificate type (domain/IP/skip)
 
-### Node Installation via Script
-
-```bash
-sudo bash install.sh
-```
-
-Select **2) Install Node** and follow the prompts:
-1. Choose network mode (host/bridge)
-2. Set API port
-3. Choose SSL certificate type
-
 ### Management Menu
 
 After installation, run the script again to access the management menu:
@@ -144,21 +133,26 @@ sudo bash install.sh
 **Available options:**
 - **Panel**: Install, Update, Start, Stop, Restart, Status, Logs
 - **Panel Settings**: Change ports, Change DB password, Renew/Setup certificates
-- **Node**: Install, Update, Start, Stop, Restart, Status, Logs, Renew certificates
 - **Uninstall**
 
-### Update Panel/Node
+### Update Panel
 
-```bash
-sudo bash install.sh
-# Select: 2) Update Panel or 21) Update Node
-```
+**Watchtower** (`sharx_watchtower`) runs in the same `docker compose` stack. The panel uses `XUI_DOCKER_UPDATER_URL` and `XUI_DOCKER_UPDATER_TOKEN` to call its HTTP API (no public port) and pull a new `sharx` image with `com.centurylinklabs.watchtower.enable: "true"`. The **in-panel update button** usually goes through this path. For production, set `WATCHTOWER_HTTP_API_TOKEN` in `.env` (e.g. `openssl rand -hex 24`).
 
-The update process:
-1. Pulls new Docker image (while service is running)
-2. Stops and removes old container
-3. Starts new container with updated image
-4. Database is NOT restarted (no data loss)
+You can also:
+
+- **With Docker Compose**:
+  ```bash
+  docker compose pull
+  docker compose up -d
+  ```
+- **Via the SharX install script** (if you use that distribution):
+  ```bash
+  sudo bash install.sh
+  # 2) Update Panel
+  ```
+
+The panel container is recreated with a new image; your **PostgreSQL** data on the volume is usually **preserved**.
 
 ---
 
@@ -263,7 +257,7 @@ The update process:
 6. **Initial Setup**
    - Complete the initial setup wizard
    - Set up your admin account
-   - Configure your first node connection
+   - Optionally add and manage remote nodes in the web UI (**Nodes** / **Geography**)
 
 7. **Configure TLS in Panel Settings**
    
@@ -299,47 +293,11 @@ The update process:
    - Access the panel via HTTPS: `https://your-domain.com:2053`
    - Check that the browser shows a valid SSL certificate
 
-### Node Installation
+### Remote nodes (multi-node)
 
-1. **Navigate to the node directory**
-   ```bash
-   cd node
-   ```
+Adding nodes, binding them to inbounds, and day-to-day management are done **in the web panel** (e.g. **Nodes** and **Geography**). The `install.sh` script in the SharX distribution only deploys the panel and database stack.
 
-2. **Configure the node**
-   
-   Edit `docker-compose.yml` and configure:
-   - **Ports**: Set appropriate ports for your node
-   - **Network Mode**: Choose between bridge or host networking
-   - **Configuration**: Adjust `bin/config.json` if needed
-   
-   **SSL Certificates for Node (Recommended):**
-   - Create `cert` directory in the node folder:
-     ```bash
-     mkdir -p cert
-     ```
-   - Copy your SSL certificates:
-     - **Certificate file**: `fullchain.pem` (recommended for nodes)
-     - **Private key file**: `privkey.pem`
-     ```bash
-     cp /path/to/fullchain.pem cert/fullchain.pem
-     cp /path/to/privkey.pem cert/privkey.pem
-     ```
-   - The certificates will be mounted to `/app/cert/` inside the container
-   - Environment variables in `docker-compose.yml` should point to:
-     - `NODE_TLS_CERT_FILE=/app/cert/fullchain.pem`
-     - `NODE_TLS_KEY_FILE=/app/cert/privkey.pem`
-
-3. **Start the node**
-   ```bash
-   docker-compose up -d
-   ```
-
-4. **Connect to Panel**
-   - The node will start in registration mode
-   - In the panel, add a new node
-   - The panel will issue an API token and connect to the node
-   - The node will be signed and stored for future use
+To run a **separate** node worker container on another machine (image, ports, `NODE_TLS_*`), see [node/README.md](node/README.md) in this repository.
 
 ### Advanced Configuration
 
@@ -422,12 +380,7 @@ SharX supports comprehensive configuration through environment variables. These 
 |----------|-------------|---------|---------|
 | `XUI_ENABLE_FAIL2BAN` | Enable fail2ban | `true` | `true`, `false` |
 
-**Node Service TLS Settings:**
-
-| Variable | Description | Default | Example |
-|----------|-------------|---------|---------|
-| `NODE_TLS_CERT_FILE` | SSL certificate path for node API | - | `/app/cert/node-cert.pem` |
-| `NODE_TLS_KEY_FILE` | SSL private key path for node API | - | `/app/cert/node-key.pem` |
+**Node worker TLS (not the panel):** `NODE_TLS_CERT_FILE` and `NODE_TLS_KEY_FILE` apply only to the **node** service `docker-compose`; see [node/README.md](node/README.md).
 
 **Example docker-compose.yml configuration:**
 
@@ -478,8 +431,7 @@ services:
    - Obtain SSL certificates (e.g., from Let's Encrypt, or use your own CA)
    - You need two files:
      - **For Panel**: Certificate file: `cert.pem` (or `fullchain.pem`)
-     - **For Nodes** (recommended): Certificate file: `fullchain.pem`
-     - Private key file: `privkey.pem` (for both panel and nodes)
+     - Private key file: `privkey.pem`
 
 2. **Place Certificates in cert/ Directory**
    ```bash
@@ -499,15 +451,6 @@ services:
    - Domain Name: Your domain (e.g., `panel.example.com`)
    - Certificate Path: `/app/cert/cert.pem`
    - Private Key Path: `/app/cert/privkey.pem`
-
-**For Nodes:**
-- **Recommended certificate format**: Use `fullchain.pem` for nodes
-- Certificate file: `fullchain.pem`
-- Private key file: `privkey.pem`
-- These files should be placed in the `node/cert/` directory
-- Environment variables in node's `docker-compose.yml`:
-  - `NODE_TLS_CERT_FILE=/app/cert/fullchain.pem`
-  - `NODE_TLS_KEY_FILE=/app/cert/privkey.pem`
 
 **Certificate Path Mapping:**
 - Host path: `./cert/` (relative to docker-compose.yml)

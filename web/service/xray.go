@@ -23,7 +23,35 @@ var (
 	// API connection pool: map[apiPort]*xray.XrayAPI
 	apiConnectionPool sync.Map
 	apiPoolLock       sync.Mutex
+	// When local Xray is not running (multi-node), the online set is not stored on *Process p.
+	// We keep a copy here so GetOnlineClients() / WebSocket traffic broadcast still work.
+	panelOnlineMu     sync.RWMutex
+	panelOnlineEmails []string
 )
+
+// setPanelOnlineClients updates the in-memory online list. When local Xray is running,
+// the same list is also applied to the *Process. When p is nil (typical in multi-node),
+// only the snapshot is updated — otherwise panel would always show all clients as offline.
+func setPanelOnlineClients(emails []string) {
+	cpy := append([]string(nil), emails...)
+	panelOnlineMu.Lock()
+	panelOnlineEmails = cpy
+	panelOnlineMu.Unlock()
+	if p != nil {
+		p.SetOnlineClients(cpy)
+	}
+}
+
+// getPanelOnlineClients returns the current online list from the local Xray when it exists,
+// otherwise the last snapshot (multi-node, node traffic collection, etc.).
+func getPanelOnlineClients() []string {
+	if p != nil {
+		return p.GetOnlineClients()
+	}
+	panelOnlineMu.RLock()
+	defer panelOnlineMu.RUnlock()
+	return append([]string(nil), panelOnlineEmails...)
+}
 
 // XrayService provides business logic for Xray process management.
 // It handles starting, stopping, restarting Xray, and managing its configuration.
@@ -203,6 +231,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		logger.Debugf("[DEBUG-AGENT] GetXrayConfig: failed to unmarshal template JSON: %v", err)
 		return nil, err
 	}
+	xray.EnsurePolicyStatsUserOnline(xrayConfig)
 
 	s.inboundService.AddTraffic(nil, nil)
 
@@ -376,13 +405,197 @@ func (s *XrayService) RestartXrayAsync(isForce bool) {
 	}()
 }
 
+// buildNodeWorkerConfigJSON builds the same Xray JSON that ApplyConfigToNode sends for one node.
+func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*model.Inbound, baseConfig *xray.Config, hyCert, hyKey string) ([]byte, error) {
+	// Determine which core config profile to use
+	var coreConfigProfile *model.XrayCoreConfigProfile
+	profileService := XrayCoreConfigProfileService{}
+
+	if len(inbounds) > 0 {
+		profiles, err := profileService.GetAllProfiles(inbounds[0].UserId)
+		if err == nil {
+			for _, profile := range profiles {
+				for _, profileNodeId := range profile.NodeIds {
+					if profileNodeId == node.Id {
+						coreConfigProfile = profile
+						break
+					}
+				}
+				if coreConfigProfile != nil {
+					break
+				}
+			}
+		}
+
+		if coreConfigProfile == nil {
+			profile, err := profileService.EnsureDefaultProfile(inbounds[0].UserId)
+			if err == nil && profile != nil {
+				coreConfigProfile = profile
+			}
+		}
+	}
+
+	var configToUse *xray.Config
+	if coreConfigProfile != nil {
+		configToUse = &xray.Config{}
+		if err := json.Unmarshal([]byte(coreConfigProfile.ConfigJson), configToUse); err == nil {
+			// ok
+		} else {
+			configToUse = baseConfig
+		}
+	} else {
+		configToUse = baseConfig
+	}
+
+	nodeConfig := *configToUse
+	xray.EnsurePolicyStatsUserOnline(&nodeConfig)
+	apiInbound := xray.InboundConfig{}
+	hasAPIInbound := false
+	for _, inbound := range baseConfig.InboundConfigs {
+		if inbound.Tag == "api" {
+			apiInbound = inbound
+			hasAPIInbound = true
+			break
+		}
+	}
+	nodeConfig.InboundConfigs = []xray.InboundConfig{}
+	if hasAPIInbound {
+		nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, apiInbound)
+	}
+
+	for _, inbound := range inbounds {
+		settings := map[string]any{}
+		json.Unmarshal([]byte(inbound.Settings), &settings)
+		clients, ok := settings["clients"].([]any)
+		if ok {
+			clientStats := inbound.ClientStats
+			for _, clientTraffic := range clientStats {
+				indexDecrease := 0
+				for index, client := range clients {
+					c := client.(map[string]any)
+					if c["email"] == clientTraffic.Email {
+						if !clientTraffic.Enable {
+							clients = RemoveIndex(clients, index-indexDecrease)
+							indexDecrease++
+						}
+					}
+				}
+			}
+
+			var final_clients []any
+			for _, client := range clients {
+				c := client.(map[string]any)
+				if c["enable"] != nil {
+					if enable, ok := c["enable"].(bool); ok && !enable {
+						continue
+					}
+				}
+				for key := range c {
+					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" {
+						delete(c, key)
+					}
+					if c["flow"] == "xtls-rprx-vision-udp443" {
+						c["flow"] = "xtls-rprx-vision"
+					}
+				}
+				final_clients = append(final_clients, any(c))
+			}
+
+			settings["clients"] = final_clients
+			modifiedSettings, _ := json.MarshalIndent(settings, "", "  ")
+			inbound.Settings = string(modifiedSettings)
+		}
+
+		if len(inbound.StreamSettings) > 0 {
+			var stream map[string]any
+			json.Unmarshal([]byte(inbound.StreamSettings), &stream)
+			tlsSettings, ok1 := stream["tlsSettings"].(map[string]any)
+			realitySettings, ok2 := stream["realitySettings"].(map[string]any)
+			if ok1 || ok2 {
+				if ok1 {
+					delete(tlsSettings, "settings")
+				} else if ok2 {
+					delete(realitySettings, "settings")
+				}
+			}
+			delete(stream, "externalProxy")
+			newStream, _ := json.MarshalIndent(stream, "", "  ")
+			inbound.StreamSettings = string(newStream)
+		}
+
+		inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
+		nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, *inboundConfig)
+	}
+
+	return json.MarshalIndent(&nodeConfig, "", "  ")
+}
+
+// BuildWorkerXrayConfigForNode returns the Xray config JSON for a worker node (same as apply-config payload).
+func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, error) {
+	if node == nil {
+		return nil, fmt.Errorf("node is nil")
+	}
+	if s.nodeService == (NodeService{}) {
+		s.nodeService = NodeService{}
+	}
+	if s.inboundService == (InboundService{}) {
+		s.inboundService = InboundService{}
+	}
+	if s.settingService == (SettingService{}) {
+		s.settingService = SettingService{}
+	}
+
+	nodeInbounds := make(map[int][]*model.Inbound)
+	allInbounds, err := s.inboundService.GetAllInbounds()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get inbounds: %w", err)
+	}
+
+	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
+		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in BuildWorkerXrayConfigForNode: %v", err)
+	}
+
+	templateConfig, err := s.settingService.GetXrayConfigTemplate()
+	if err != nil {
+		return nil, err
+	}
+
+	baseConfig := &xray.Config{}
+	if err := json.Unmarshal([]byte(templateConfig), baseConfig); err != nil {
+		return nil, err
+	}
+
+	for _, inbound := range allInbounds {
+		if !inbound.Enable {
+			continue
+		}
+		nodesForIB, err := s.nodeService.GetNodesForInbound(inbound.Id)
+		if err != nil || len(nodesForIB) == 0 {
+			logger.Debugf("Inbound %d is not assigned to any node, skipping", inbound.Id)
+			continue
+		}
+		for _, n := range nodesForIB {
+			nodeInbounds[n.Id] = append(nodeInbounds[n.Id], inbound)
+		}
+	}
+
+	hyCert, _ := s.settingService.GetCertFile()
+	hyKey, _ := s.settingService.GetKeyFile()
+
+	var ibs []*model.Inbound
+	if v, ok := nodeInbounds[node.Id]; ok {
+		ibs = v
+	}
+	return s.buildNodeWorkerConfigJSON(node, ibs, baseConfig, hyCert, hyKey)
+}
+
 // restartXrayMultiMode handles Xray restart in multi-node mode by sending configs to nodes.
 func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 	// Initialize nodeService if not already initialized
 	if s.nodeService == (NodeService{}) {
 		s.nodeService = NodeService{}
 	}
-	
+
 	// Get all nodes
 	nodes, err := s.nodeService.GetAllNodes()
 	if err != nil {
@@ -418,17 +631,14 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 			continue
 		}
 
-		// Get all nodes assigned to this inbound (multi-node support)
-		nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
-		if err != nil || len(nodes) == 0 {
-			// Inbound not assigned to any node, skip it (this is normal - not all inbounds need to be assigned)
+		nodesForIB, err := s.nodeService.GetNodesForInbound(inbound.Id)
+		if err != nil || len(nodesForIB) == 0 {
 			logger.Debugf("Inbound %d is not assigned to any node, skipping", inbound.Id)
 			continue
 		}
 
-		// Add inbound to all assigned nodes
-		for _, node := range nodes {
-			nodeInbounds[node.Id] = append(nodeInbounds[node.Id], inbound)
+		for _, n := range nodesForIB {
+			nodeInbounds[n.Id] = append(nodeInbounds[n.Id], inbound)
 		}
 	}
 
@@ -440,146 +650,11 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 	var mu sync.Mutex
 	var errors []error
 
-	// Helper function to build config for a node
-	buildNodeConfig := func(node *model.Node, inbounds []*model.Inbound) ([]byte, error) {
-		// Determine which core config profile to use
-		// First, try to get profile directly assigned to this node
-		var coreConfigProfile *model.XrayCoreConfigProfile
-		profileService := XrayCoreConfigProfileService{}
-		
-		// Get all profiles for user (assuming all inbounds have same user)
-		if len(inbounds) > 0 {
-			profiles, err := profileService.GetAllProfiles(inbounds[0].UserId)
-			if err == nil {
-				// Find profile assigned to this node
-				for _, profile := range profiles {
-					for _, profileNodeId := range profile.NodeIds {
-						if profileNodeId == node.Id {
-							coreConfigProfile = profile
-							break
-						}
-					}
-					if coreConfigProfile != nil {
-						break
-					}
-				}
-			}
-			
-			// If no profile assigned to node, use default profile
-			if coreConfigProfile == nil {
-				profile, err := profileService.EnsureDefaultProfile(inbounds[0].UserId)
-				if err == nil && profile != nil {
-					coreConfigProfile = profile
-				}
-			}
-		}
-		
-		// Use profile config if available, otherwise use template
-		var configToUse *xray.Config
-		if coreConfigProfile != nil {
-			configToUse = &xray.Config{}
-			if err := json.Unmarshal([]byte(coreConfigProfile.ConfigJson), configToUse); err == nil {
-				// Successfully loaded profile config
-			} else {
-				// Fallback to base config if profile JSON is invalid
-				configToUse = baseConfig
-			}
-		} else {
-			configToUse = baseConfig
-		}
-		
-		// Build config for this node
-		nodeConfig := *configToUse
-		// Preserve API inbound from template (if exists)
-		apiInbound := xray.InboundConfig{}
-		hasAPIInbound := false
-		for _, inbound := range baseConfig.InboundConfigs {
-			if inbound.Tag == "api" {
-				apiInbound = inbound
-				hasAPIInbound = true
-				break
-			}
-		}
-		nodeConfig.InboundConfigs = []xray.InboundConfig{}
-		// Add API inbound first if it exists
-		if hasAPIInbound {
-			nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, apiInbound)
-		}
-
-		for _, inbound := range inbounds {
-			// Process clients (same logic as GetXrayConfig)
-			settings := map[string]any{}
-			json.Unmarshal([]byte(inbound.Settings), &settings)
-			clients, ok := settings["clients"].([]any)
-			if ok {
-				clientStats := inbound.ClientStats
-				for _, clientTraffic := range clientStats {
-					indexDecrease := 0
-					for index, client := range clients {
-						c := client.(map[string]any)
-						if c["email"] == clientTraffic.Email {
-							if !clientTraffic.Enable {
-								clients = RemoveIndex(clients, index-indexDecrease)
-								indexDecrease++
-							}
-						}
-					}
-				}
-
-				var final_clients []any
-				for _, client := range clients {
-					c := client.(map[string]any)
-					if c["enable"] != nil {
-						if enable, ok := c["enable"].(bool); ok && !enable {
-							continue
-						}
-					}
-					for key := range c {
-						if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" {
-							delete(c, key)
-						}
-						if c["flow"] == "xtls-rprx-vision-udp443" {
-							c["flow"] = "xtls-rprx-vision"
-						}
-					}
-					final_clients = append(final_clients, any(c))
-				}
-
-				settings["clients"] = final_clients
-				modifiedSettings, _ := json.MarshalIndent(settings, "", "  ")
-				inbound.Settings = string(modifiedSettings)
-			}
-
-			if len(inbound.StreamSettings) > 0 {
-				var stream map[string]any
-				json.Unmarshal([]byte(inbound.StreamSettings), &stream)
-				tlsSettings, ok1 := stream["tlsSettings"].(map[string]any)
-				realitySettings, ok2 := stream["realitySettings"].(map[string]any)
-				if ok1 || ok2 {
-					if ok1 {
-						delete(tlsSettings, "settings")
-					} else if ok2 {
-						delete(realitySettings, "settings")
-					}
-				}
-				delete(stream, "externalProxy")
-				newStream, _ := json.MarshalIndent(stream, "", "  ")
-				inbound.StreamSettings = string(newStream)
-			}
-
-			inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
-			nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, *inboundConfig)
-		}
-
-		// Note: Outbounds are now included in the profile's ConfigJson
-		// They should be defined in the profile configuration itself
-
-		// Marshal config to JSON
-		return json.MarshalIndent(&nodeConfig, "", "  ")
-	}
-
 	// Send configs to all nodes in parallel
 	for _, node := range nodes {
+		if !node.Enable {
+			continue
+		}
 		inbounds, ok := nodeInbounds[node.Id]
 		if !ok {
 			// No inbounds assigned to this node, skip
@@ -590,8 +665,7 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 		go func(n *model.Node, ibs []*model.Inbound) {
 			defer wg.Done()
 
-			// Build config for this node
-			configJSON, err := buildNodeConfig(n, ibs)
+			configJSON, err := s.buildNodeWorkerConfigJSON(n, ibs, baseConfig, hyCert, hyKey)
 			if err != nil {
 				logger.Errorf("[Node: %s] Failed to marshal config: %v", n.Name, err)
 				mu.Lock()
@@ -600,7 +674,6 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 				return
 			}
 
-			// Send to node
 			if err := s.nodeService.ApplyConfigToNode(n, configJSON); err != nil {
 				logger.Errorf("[Node: %s] Failed to apply config: %v", n.Name, err)
 				mu.Lock()

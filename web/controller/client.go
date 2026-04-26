@@ -64,6 +64,22 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.POST("/bulk/delete", a.bulkDelete)
 	g.POST("/bulk/enable", a.bulkEnable)
 	g.POST("/bulk/setHwidLimit", a.bulkSetHwidLimit)
+	// Per-client online sessions (Xray + conntrack on workers)
+	g.GET("/sessions/:id", a.getClientSessions)
+	g.POST("/sessions/drop/:id", a.dropClientSessions)
+}
+
+// onlineClientEmailSet returns lowercase trimmed emails currently reported as online by Xray.
+func onlineClientEmailSet(inboundSvc service.InboundService) map[string]struct{} {
+	list := inboundSvc.GetOnlineClients()
+	m := make(map[string]struct{}, len(list))
+	for _, e := range list {
+		k := strings.ToLower(strings.TrimSpace(e))
+		if k != "" {
+			m[k] = struct{}{}
+		}
+	}
+	return m
 }
 
 // getClients retrieves the list of all clients for the current user.
@@ -77,12 +93,18 @@ func (a *ClientController) getClients(c *gin.Context) {
 	host := requestHostOnly(c)
 	tls := c.Request.TLS != nil
 	inboundSvc := service.InboundService{}
+	online := onlineClientEmailSet(inboundSvc)
 	cards := make([]*model.ClientCardView, 0, len(clients))
 	for _, cl := range clients {
 		card, err := a.clientService.ClientToCardView(cl, inboundSvc, host, tls, true)
 		if err != nil {
 			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 			return
+		}
+		if k := strings.ToLower(strings.TrimSpace(cl.Email)); k != "" {
+			if _, ok := online[k]; ok {
+				card.IsOnline = true
+			}
 		}
 		cards = append(cards, card)
 	}
@@ -111,6 +133,12 @@ func (a *ClientController) getClient(c *gin.Context) {
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
+	}
+	online := onlineClientEmailSet(inboundSvc)
+	if k := strings.ToLower(strings.TrimSpace(client.Email)); k != "" {
+		if _, ok := online[k]; ok {
+			card.IsOnline = true
+		}
 	}
 	jsonObj(c, card, nil)
 }
@@ -183,13 +211,13 @@ func (a *ClientController) getClientShareLinks(c *gin.Context) {
 // addClient creates a new client.
 func (a *ClientController) addClient(c *gin.Context) {
 	user := session.GetLoginUser(c)
-	
+
 	// Extract inboundIds and groupId from JSON or form data
 	var inboundIdsFromJSON []int
 	var hasInboundIdsInJSON bool
 	var groupIdFromJSON *int
 	var hasGroupIdInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract inboundIds and groupId
 		bodyBytes, err := c.GetRawData()
@@ -233,14 +261,14 @@ func (a *ClientController) addClient(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	client := &model.ClientEntity{}
 	err := c.ShouldBind(client)
 	if err != nil {
 		jsonMsg(c, "Invalid client data", err)
 		return
 	}
-	
+
 	// Set inboundIds from JSON if available
 	if hasInboundIdsInJSON {
 		client.InboundIds = inboundIdsFromJSON
@@ -310,7 +338,7 @@ func (a *ClientController) updateClient(c *gin.Context) {
 	}
 
 	user := session.GetLoginUser(c)
-	
+
 	// Get existing client first to preserve fields not being updated
 	existing, err := a.clientService.GetClient(id)
 	if err != nil {
@@ -321,11 +349,11 @@ func (a *ClientController) updateClient(c *gin.Context) {
 		jsonMsg(c, "Client not found or access denied", nil)
 		return
 	}
-	
+
 	// Extract inboundIds from JSON or form data
 	var inboundIdsFromJSON []int = nil // nil means not provided, empty array means remove all
 	var hasInboundIdsInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract inboundIds
 		bodyBytes, err := c.GetRawData()
@@ -369,10 +397,10 @@ func (a *ClientController) updateClient(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	// Use existing client as base and update only provided fields
 	client := existing
-	
+
 	// Try to bind only provided fields - use ShouldBindJSON for JSON requests
 	if c.ContentType() == "application/json" {
 		var updateData map[string]interface{}
@@ -512,50 +540,50 @@ func (a *ClientController) updateClient(c *gin.Context) {
 				client.Flow = flowVal
 			}
 			// Handle totalGB - can be 0 (unlimited)
-		totalGBStr := c.PostForm("totalGB")
-		if totalGBStr != "" {
-			if totalGB, err := strconv.ParseFloat(totalGBStr, 64); err == nil {
-				client.TotalGB = totalGB
-			}
-		}
-		// Handle expiryTime - can be 0 (never expires)
-		expiryTimeStr := c.PostForm("expiryTime")
-		if expiryTimeStr != "" {
-			if expiryTime, err := strconv.ParseInt(expiryTimeStr, 10, 64); err == nil {
-				client.ExpiryTime = expiryTime
-			}
-		}
-		// Always update enable if it's in the request (even if false)
-		enableStr := c.PostForm("enable")
-		if enableStr != "" {
-			client.Enable = enableStr == "true" || enableStr == "1"
-		}
-		// Handle tgId - can be 0 or empty (to clear)
-		if tgIdVal, exists := c.GetPostForm("tgId"); exists {
-			if tgIdVal == "" {
-				// Empty string means clear the value
-				client.TgID = 0
-			} else {
-				if tgId, err := strconv.ParseInt(tgIdVal, 10, 64); err == nil {
-					client.TgID = tgId
+			totalGBStr := c.PostForm("totalGB")
+			if totalGBStr != "" {
+				if totalGB, err := strconv.ParseFloat(totalGBStr, 64); err == nil {
+					client.TotalGB = totalGB
 				}
 			}
-		}
-		// Handle subId - can be empty to clear
-		if subIdVal, exists := c.GetPostForm("subId"); exists {
-			client.SubID = subIdVal
-		}
-		// Handle comment - can be empty to clear
-		if commentVal, exists := c.GetPostForm("comment"); exists {
-			client.Comment = commentVal
-		}
-		// Handle reset - can be 0 (disabled)
-		resetStr := c.PostForm("reset")
-		if resetStr != "" {
-			if reset, err := strconv.Atoi(resetStr); err == nil {
-				client.Reset = reset
+			// Handle expiryTime - can be 0 (never expires)
+			expiryTimeStr := c.PostForm("expiryTime")
+			if expiryTimeStr != "" {
+				if expiryTime, err := strconv.ParseInt(expiryTimeStr, 10, 64); err == nil {
+					client.ExpiryTime = expiryTime
+				}
 			}
-		}
+			// Always update enable if it's in the request (even if false)
+			enableStr := c.PostForm("enable")
+			if enableStr != "" {
+				client.Enable = enableStr == "true" || enableStr == "1"
+			}
+			// Handle tgId - can be 0 or empty (to clear)
+			if tgIdVal, exists := c.GetPostForm("tgId"); exists {
+				if tgIdVal == "" {
+					// Empty string means clear the value
+					client.TgID = 0
+				} else {
+					if tgId, err := strconv.ParseInt(tgIdVal, 10, 64); err == nil {
+						client.TgID = tgId
+					}
+				}
+			}
+			// Handle subId - can be empty to clear
+			if subIdVal, exists := c.GetPostForm("subId"); exists {
+				client.SubID = subIdVal
+			}
+			// Handle comment - can be empty to clear
+			if commentVal, exists := c.GetPostForm("comment"); exists {
+				client.Comment = commentVal
+			}
+			// Handle reset - can be 0 (disabled)
+			resetStr := c.PostForm("reset")
+			if resetStr != "" {
+				if reset, err := strconv.Atoi(resetStr); err == nil {
+					client.Reset = reset
+				}
+			}
 			// Always update hwidEnabled if it's in the request (even if false)
 			hwidEnabledStr := c.PostForm("hwidEnabled")
 			if hwidEnabledStr != "" {
@@ -581,7 +609,7 @@ func (a *ClientController) updateClient(c *gin.Context) {
 			}
 		}
 	}
-	
+
 	// Set inboundIds from JSON if available
 	if hasInboundIdsInJSON {
 		// Ensure empty array is not nil (empty array means remove all, nil means not provided)
@@ -601,7 +629,7 @@ func (a *ClientController) updateClient(c *gin.Context) {
 		if c.Request.PostForm != nil {
 			_, inboundIdsKeyExists = c.Request.PostForm["inboundIds"]
 		}
-		
+
 		if inboundIdsKeyExists {
 			// Key exists - process the array (even if empty, this means remove all)
 			var inboundIds []int
@@ -727,7 +755,7 @@ func (a *ClientController) delDepletedClients(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	
+
 	if count > 0 {
 		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.delDepletedClientsSuccess"), nil)
 		if needRestart {
@@ -771,7 +799,7 @@ func (a *ClientController) clearClientHWIDs(c *gin.Context) {
 // clearAllClientHWIDs clears all HWIDs for all clients of the current user.
 func (a *ClientController) clearAllClientHWIDs(c *gin.Context) {
 	user := session.GetLoginUser(c)
-	
+
 	hwidService := service.ClientHWIDService{}
 	count, err := hwidService.ClearAllHWIDs(user.Id)
 	if err != nil {
@@ -789,14 +817,14 @@ func (a *ClientController) setHWIDLimitForAllClients(c *gin.Context) {
 		MaxHwid int  `json:"maxHwid" form:"maxHwid"`
 		Enabled bool `json:"enabled" form:"enabled"`
 	}
-	
+
 	if err := c.ShouldBind(&req); err != nil {
 		jsonMsg(c, "Invalid request", err)
 		return
 	}
 
 	user := session.GetLoginUser(c)
-	
+
 	hwidService := service.ClientHWIDService{}
 	count, err := hwidService.SetHWIDLimitForAllClients(user.Id, req.MaxHwid, req.Enabled)
 	if err != nil {
@@ -921,4 +949,47 @@ func (a *ClientController) bulkSetHwidLimit(c *gin.Context) {
 		return
 	}
 	jsonMsg(c, "HWID limit set successfully", nil)
+}
+
+// getClientSessions returns per-IP active sessions for the client (local Xray and/or worker nodes).
+func (a *ClientController) getClientSessions(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid client ID", err)
+		return
+	}
+	user := session.GetLoginUser(c)
+	svc := service.ClientSessionService{}
+	data, err := svc.GetOnlineSessionsForClient(user.Id, id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, data, nil)
+}
+
+// dropClientSessions tears down kernel connections for the client; optional JSON body { "ips": ["x"] } for specific IPs only.
+func (a *ClientController) dropClientSessions(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid client ID", err)
+		return
+	}
+	user := session.GetLoginUser(c)
+	var body struct {
+		IPs []string `json:"ips"`
+	}
+	_ = c.ShouldBindJSON(&body)
+	svc := service.ClientSessionService{}
+	var opErr error
+	if len(body.IPs) > 0 {
+		opErr = svc.DropSessionsByIPsForClient(user.Id, id, body.IPs)
+	} else {
+		opErr = svc.DropAllSessionsForClient(user.Id, id)
+	}
+	if opErr != nil {
+		jsonMsg(c, opErr.Error(), opErr)
+		return
+	}
+	jsonMsg(c, I18nWeb(c, "pages.clients.sessions.dropSuccess"), nil)
 }

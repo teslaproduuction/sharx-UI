@@ -34,6 +34,34 @@ func normalizeClientUUID(s string) (string, error) {
 	return parsed.String(), nil
 }
 
+func inboundProtocolUsesClientSecret(p model.Protocol) bool {
+	switch model.NormalizeProtocol(p) {
+	case model.Trojan, model.Shadowsocks, model.Mixed, model.Hysteria, model.Hysteria2:
+		return true
+	default:
+		return false
+	}
+}
+
+// ensurePasswordForSecretInbounds returns password unchanged if already set or if no assigned inbound
+// needs a per-client secret; otherwise generates a random password (Trojan / Shadowsocks / Mixed / Hysteria).
+func (s *ClientService) ensurePasswordForSecretInbounds(password string, inboundIds []int) string {
+	if strings.TrimSpace(password) != "" || len(inboundIds) == 0 {
+		return password
+	}
+	inboundSvc := InboundService{}
+	for _, id := range inboundIds {
+		inb, err := inboundSvc.GetInbound(id)
+		if err != nil || inb == nil {
+			continue
+		}
+		if inboundProtocolUsesClientSecret(inb.Protocol) {
+			return random.Seq(32)
+		}
+	}
+	return password
+}
+
 // isClientUUIDTaken returns true if another client of this user already has the given uuid.
 // For inserts use excludeId 0. For updates pass the current client's id to exclude.
 func (s *ClientService) isClientUUIDTaken(userId int, u string, excludeId int) (bool, error) {
@@ -263,6 +291,8 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 		client.SubID = random.Seq(16)
 	}
 
+	client.Password = s.ensurePasswordForSecretInbounds(client.Password, client.InboundIds)
+
 	// Validate comment length (spaces count as characters)
 	if len(client.Comment) > 100 {
 		return false, common.NewError("Client comment exceeds maximum length of 100 characters (spaces count as characters)")
@@ -459,6 +489,14 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if client.Email != "" {
 		client.Email = strings.ToLower(client.Email)
 	}
+
+	var effectiveInboundIds []int
+	if client.InboundIds != nil {
+		effectiveInboundIds = append(effectiveInboundIds, client.InboundIds...)
+	} else if ids, err := s.GetInboundIdsForClient(client.Id); err == nil {
+		effectiveInboundIds = ids
+	}
+	client.Password = s.ensurePasswordForSecretInbounds(client.Password, effectiveInboundIds)
 
 	// Update timestamp
 	client.UpdatedAt = time.Now().Unix()
@@ -702,8 +740,19 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 							clientData["email"] = finalClient.Email
 							
 							switch inbound.Protocol {
-							case model.Trojan:
+							case model.Trojan, model.Mixed:
 								clientData["password"] = finalClient.Password
+								if inbound.Protocol == model.Mixed {
+									u := finalClient.Email
+									if i := strings.IndexByte(u, '@'); i > 0 {
+										u = u[:i]
+									}
+									if u == "" {
+										u = "user"
+									}
+									clientData["user"] = u
+									clientData["pass"] = finalClient.Password
+								}
 							case model.Hysteria, model.Hysteria2:
 								clientData["auth"] = finalClient.Password
 							case model.Shadowsocks:
@@ -1010,10 +1059,9 @@ func (s *ClientService) AssignClientToInbounds(tx *gorm.DB, clientId int, inboun
 			ClientId:  clientId,
 			InboundId: inboundId,
 		}
-		err := tx.Create(mapping).Error
-		if err != nil {
+		if err := tx.Create(mapping).Error; err != nil {
 			logger.Warningf("Failed to assign client %d to inbound %d: %v", clientId, inboundId, err)
-			// Continue with other assignments
+			return err
 		}
 	}
 	return nil
@@ -1289,16 +1337,18 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 	if result.Error != nil {
 		return false, result.Error
 	}
-	
+
+	_ = db.Where("client_id IN (?)", db.Model(&model.ClientEntity{}).Select("id").Where("user_id = ?", userId)).Delete(&model.ClientNodeTraffic{}).Error
+
 	// Invalidate cache for this user's clients
 	cache.InvalidateClients(userId)
-	
+
 	// Reset status to "active" for clients expired due to traffic
 	// This will allow clients to be re-added to Xray if they were removed
 	db.Model(&model.ClientEntity{}).
 		Where("user_id = ? AND status = ?", userId, "expired_traffic").
 		Update("status", "active")
-	
+
 	// Re-add expired clients to Xray if they were removed
 	needRestart := false
 	if len(expiredClients) > 0 {
@@ -1306,7 +1356,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 		settingService := SettingService{}
 		multiMode, _ := settingService.GetMultiNodeMode()
 		xrayService := XrayService{}
-		
+
 		// Re-add expired clients to Xray if they were removed
 		{
 			// Group clients by inbound
@@ -1348,6 +1398,17 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Mixed:
+						clientData["password"] = client.Password
+						u := client.Email
+						if i := strings.IndexByte(u, '@'); i > 0 {
+							u = u[:i]
+						}
+						if u == "" {
+							u = "user"
+						}
+						clientData["user"] = u
+						clientData["pass"] = client.Password
 					case model.Hysteria, model.Hysteria2:
 						clientData["auth"] = client.Password
 					case model.Shadowsocks:
@@ -1433,17 +1494,19 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 	if result.Error != nil {
 		return false, result.Error
 	}
-	
+
+	_ = db.Where("client_id = ?", clientId).Delete(&model.ClientNodeTraffic{}).Error
+
 	// Invalidate cache for this user's clients
 	cache.InvalidateClients(userId)
-	
+
 	// Reset status to "active" if client was expired due to traffic
 	if wasExpired {
 		db.Model(&model.ClientEntity{}).
 			Where("id = ? AND user_id = ?", clientId, userId).
 			Update("status", "active")
 	}
-	
+
 	// Re-add client to Xray if it was expired and is now active
 	needRestart := false
 	if wasExpired && client.Enable {
@@ -1473,6 +1536,17 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Mixed:
+						clientData["password"] = client.Password
+						u := client.Email
+						if i := strings.IndexByte(u, '@'); i > 0 {
+							u = u[:i]
+						}
+						if u == "" {
+							u = "user"
+						}
+						clientData["user"] = u
+						clientData["pass"] = client.Password
 					case model.Hysteria, model.Hysteria2:
 						clientData["auth"] = client.Password
 					case model.Shadowsocks:
@@ -1774,6 +1848,8 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 		return false, result.Error
 	}
 
+	_ = db.Where("client_id IN ?", clientIds).Delete(&model.ClientNodeTraffic{}).Error
+
 	// Invalidate cache for this user's clients
 	cache.InvalidateClients(userId)
 
@@ -1792,10 +1868,10 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 		multiMode, _ := settingService.GetMultiNodeMode()
 		nodeService := NodeService{}
 		xrayService := XrayService{}
-		
+
 		// Check if we can use API (multi-node mode or local Xray running)
 		canUseAPI := multiMode || xrayService.IsXrayRunning()
-		
+
 		if canUseAPI {
 			// Group clients by inbound
 			inboundClients := make(map[int][]model.ClientEntity)
@@ -1826,6 +1902,17 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
+					case model.Mixed:
+						clientData["password"] = client.Password
+						u := client.Email
+						if i := strings.IndexByte(u, '@'); i > 0 {
+							u = u[:i]
+						}
+						if u == "" {
+							u = "user"
+						}
+						clientData["user"] = u
+						clientData["pass"] = client.Password
 					case model.Hysteria, model.Hysteria2:
 						clientData["auth"] = client.Password
 					case model.Shadowsocks:
@@ -2099,6 +2186,17 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 						switch inbound.Protocol {
 						case model.Trojan:
 							clientData["password"] = client.Password
+						case model.Mixed:
+							clientData["password"] = client.Password
+							u := client.Email
+							if i := strings.IndexByte(u, '@'); i > 0 {
+								u = u[:i]
+							}
+							if u == "" {
+								u = "user"
+							}
+							clientData["user"] = u
+							clientData["pass"] = client.Password
 						case model.Hysteria, model.Hysteria2:
 							clientData["auth"] = client.Password
 						case model.Shadowsocks:

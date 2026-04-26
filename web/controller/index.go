@@ -2,15 +2,19 @@ package controller
 
 import (
 	"net/http"
+	"strings"
 	"text/template"
 	"time"
 
+	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/web/entity"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
+	"github.com/xlzd/gotp"
 )
 
 // LoginForm represents the login request structure.
@@ -82,11 +86,11 @@ func (a *IndexController) login(c *gin.Context) {
 		return
 	}
 
-	user := a.userService.CheckUser(form.Username, form.Password, form.TwoFactorCode)
 	timeStr := time.Now().Format("2006-01-02 15:04:05")
 	safeUser := template.HTMLEscapeString(form.Username)
 	safePass := template.HTMLEscapeString(form.Password)
 
+	user := a.userService.VerifyPassword(form.Username, form.Password)
 	if user == nil {
 		logger.Warningf("wrong username: \"%s\", password: \"%s\", IP: \"%s\"", safeUser, safePass, getRemoteIp(c))
 		a.tgbot.UserLoginNotify(safeUser, safePass, getRemoteIp(c), timeStr, 0)
@@ -94,6 +98,53 @@ func (a *IndexController) login(c *gin.Context) {
 		return
 	}
 
+	twoFactorEnable, err := a.settingService.GetTwoFactorEnable()
+	if err != nil {
+		logger.Warning("two-factor setting read error:", err)
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.wrongUsernameOrPassword"))
+		return
+	}
+
+	if twoFactorEnable {
+		twoFactorToken, err := a.settingService.GetTwoFactorToken()
+		if err != nil || twoFactorToken == "" {
+			logger.Warning("two-factor enabled but secret missing")
+			pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.wrongUsernameOrPassword"))
+			return
+		}
+
+		code := strings.TrimSpace(form.TwoFactorCode)
+		if code == "" {
+			tgSent := false
+			tgOpt, _ := a.settingService.GetTwoFactorTelegram()
+			if tgOpt && a.tgbot.IsRunning() {
+				otp := gotp.NewDefaultTOTP(twoFactorToken).Now()
+				a.tgbot.SendTwoFactorLoginCode(safeUser, getRemoteIp(c), otp)
+				tgSent = true
+			}
+			c.JSON(http.StatusOK, entity.Msg{
+				Success: false,
+				Msg:     I18nWeb(c, "pages.login.toasts.needTwoFactor"),
+				Obj: map[string]any{
+					"needTwoFactor":  true,
+					"telegramSent": tgSent,
+				},
+			})
+			return
+		}
+
+		if !service.VerifyTOTPCode(twoFactorToken, code) {
+			logger.Warningf("wrong two-factor code for user \"%s\", IP: \"%s\"", safeUser, getRemoteIp(c))
+			a.tgbot.UserLoginNotify(safeUser, safePass, getRemoteIp(c), timeStr, 0)
+			pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "pages.login.toasts.wrongTwoFactorCode"))
+			return
+		}
+	}
+
+	a.finishLoginSuccess(c, user, safeUser, timeStr)
+}
+
+func (a *IndexController) finishLoginSuccess(c *gin.Context, user *model.User, safeUser, timeStr string) {
 	logger.Infof("%s logged in successfully, Ip Address: %s\n", safeUser, getRemoteIp(c))
 	a.tgbot.UserLoginNotify(safeUser, ``, getRemoteIp(c), timeStr, 1)
 

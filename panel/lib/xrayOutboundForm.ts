@@ -1,0 +1,189 @@
+/**
+ * Parse/serialize the Xray `outbounds` array for the template GUI.
+ * Unknown/complex outbounds are preserved as raw objects (round-trip).
+ */
+
+function randomId(): string {
+  if (typeof globalThis !== "undefined" && globalThis.crypto?.getRandomValues) {
+    const a = new Uint8Array(8);
+    globalThis.crypto.getRandomValues(a);
+    return Array.from(a, (b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return `ob-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+export const OUTBOUND_PROTOCOL_OPTIONS = [
+  "freedom",
+  "blackhole",
+  "dns",
+  "http",
+  "socks",
+  "shadowsocks",
+  "vmess",
+  "vless",
+  "trojan",
+  "wireguard",
+  "loopback",
+] as const;
+
+export type OutboundProtocolOption = (typeof OUTBOUND_PROTOCOL_OPTIONS)[number];
+
+export type OutboundFormRow = {
+  id: string;
+  tag: string;
+  protocol: string;
+  /** Raw Xray outbound object; edited by GUI and serialized as-is. */
+  raw: Record<string, unknown>;
+};
+
+function asRecord(v: unknown): Record<string, unknown> | null {
+  if (v && typeof v === "object" && !Array.isArray(v)) return v as Record<string, unknown>;
+  return null;
+}
+
+function cloneOb(ob: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(ob)) as Record<string, unknown>;
+}
+
+/**
+ * New outbound: freedom, tag from prefix (direct / proxy-N).
+ */
+export function newOutboundRow(protocol: string = "freedom"): OutboundFormRow {
+  const tag =
+    protocol === "blackhole"
+      ? "blocked"
+      : protocol === "freedom"
+        ? "direct"
+        : `out-${randomId().slice(0, 6)}`;
+  const base: Record<string, unknown> = { tag, protocol, settings: defaultSettingsFor(protocol) };
+  if (needsStreamSettings(protocol)) {
+    base.streamSettings = { network: "tcp", security: "none" };
+  }
+  return { id: randomId(), tag, protocol, raw: base };
+}
+
+function defaultSettingsFor(protocol: string): Record<string, unknown> {
+  switch (protocol) {
+    case "freedom":
+      return { domainStrategy: "AsIs", redirect: "" };
+    case "blackhole":
+      return {};
+    case "dns":
+      return { network: "tcp", address: "1.1.1.1", port: 53 };
+    case "http":
+      return { servers: [{ uri: "http://127.0.0.1:0" }] };
+    case "socks":
+      return { servers: [{ address: "127.0.0.1", port: 1080 }], userLevel: 0 };
+    case "shadowsocks":
+      return { servers: [{ address: "127.0.0.1", port: 443, method: "aes-256-gcm", password: "" }] };
+    case "vmess":
+      return {
+        vnext: [
+          { address: "127.0.0.1", port: 443, users: [{ id: "", alterId: 0, security: "auto" }] },
+        ],
+      };
+    case "vless":
+      return {
+        vnext: [
+          { address: "127.0.0.1", port: 443, users: [{ id: "", encryption: "none", flow: "" }] },
+        ],
+      };
+    case "trojan":
+      return {
+        servers: [{ address: "127.0.0.1", port: 443, password: "" }],
+      };
+    case "wireguard":
+      return {
+        address: "10.0.0.2",
+        peers: [{ publicKey: "", endpoint: "127.0.0.1:51820" }],
+        mtu: 1420,
+      };
+    case "loopback":
+      return { inboundTag: "api" };
+    default:
+      return {};
+  }
+}
+
+function needsStreamSettings(protocol: string): boolean {
+  return ["http", "socks", "shadowsocks", "vmess", "vless", "trojan"].includes(protocol);
+}
+
+/**
+ * Parse `outbounds` key content (array JSON string).
+ */
+export function parseOutboundsSection(sectionJson: string): {
+  rows: OutboundFormRow[] | null;
+  error: string | null;
+} {
+  if (!sectionJson.trim() || sectionJson.trim() === "null") {
+    return { rows: [newOutboundRow("freedom")], error: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(sectionJson) as unknown;
+  } catch {
+    return { rows: null, error: "invalid" };
+  }
+  if (!Array.isArray(parsed)) {
+    return { rows: null, error: "not-array" };
+  }
+  const rows: OutboundFormRow[] = [];
+  for (const item of parsed) {
+    const ob = asRecord(item);
+    if (!ob) continue;
+    const tag = typeof ob.tag === "string" ? ob.tag : "";
+    const protocol = typeof ob.protocol === "string" ? ob.protocol : "freedom";
+    rows.push({ id: randomId(), tag, protocol, raw: cloneOb(ob) });
+  }
+  if (rows.length === 0) {
+    return { rows: [newOutboundRow("freedom")], error: null };
+  }
+  return { rows, error: null };
+}
+
+export function serializeOutboundsSection(rows: OutboundFormRow[]): string {
+  const arr = rows.map((r) => {
+    const o = cloneOb(r.raw);
+    o.tag = r.tag.trim() || "outbound";
+    o.protocol = r.protocol;
+    return o;
+  });
+  return JSON.stringify(arr, null, 2);
+}
+
+export function updateRowProtocol(row: OutboundFormRow, protocol: string): OutboundFormRow {
+  const next: OutboundFormRow = {
+    ...row,
+    protocol,
+    raw: {
+      ...cloneOb(row.raw),
+      protocol,
+      settings: defaultSettingsFor(protocol),
+    },
+  };
+  if (needsStreamSettings(protocol)) {
+    const prevStream = asRecord(row.raw.streamSettings) ?? {};
+    next.raw.streamSettings = Object.keys(prevStream).length
+      ? prevStream
+      : { network: "tcp", security: "none" };
+  } else {
+    delete next.raw.streamSettings;
+  }
+  if (row.tag) next.raw.tag = row.tag;
+  return next;
+}
+
+export function patchRowRaw(row: OutboundFormRow, raw: Record<string, unknown>): OutboundFormRow {
+  const tag = typeof raw.tag === "string" ? raw.tag : row.tag;
+  const protocol = typeof raw.protocol === "string" ? raw.protocol : row.protocol;
+  return { ...row, tag, protocol, raw: cloneOb(raw) };
+}
+
+export function moveRow(rows: OutboundFormRow[], from: number, to: number): OutboundFormRow[] {
+  if (from === to || from < 0 || to < 0 || from >= rows.length || to >= rows.length) return rows;
+  const next = rows.slice();
+  const [r] = next.splice(from, 1);
+  next.splice(to, 0, r);
+  return next;
+}

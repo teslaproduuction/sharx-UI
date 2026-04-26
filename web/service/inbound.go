@@ -302,6 +302,7 @@ func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, err
 // BuildSettingsFromClientEntities builds Settings JSON for Xray from ClientEntity.
 // This method creates a minimal Settings structure with only fields needed by Xray.
 func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound, clientEntities []*model.ClientEntity) (string, error) {
+	proto := model.NormalizeProtocol(inbound.Protocol)
 	// Parse existing settings to preserve other fields (like encryption for VLESS)
 	var settings map[string]any
 	if inbound.Settings != "" {
@@ -311,6 +312,43 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		settings = make(map[string]any)
 	}
 	
+	// Mixed inbound (HTTP + SOCKS on one port): Xray uses `accounts`, not `clients`.
+	if proto == model.Mixed {
+		var accounts []map[string]any
+		for _, entity := range clientEntities {
+			if !entity.Enable || entity.Status == "expired_traffic" || entity.Status == "expired_time" {
+				continue
+			}
+			u := entity.Email
+			if i := strings.IndexByte(u, '@'); i > 0 {
+				u = u[:i]
+			}
+			if u == "" {
+				u = "user"
+			}
+			accounts = append(accounts, map[string]any{
+				"user": u,
+				"pass": entity.Password,
+			})
+		}
+		if len(accounts) > 0 {
+			settings["auth"] = "password"
+			settings["accounts"] = accounts
+		} else {
+			settings["auth"] = "noauth"
+			delete(settings, "accounts")
+		}
+		if _, ok := settings["udp"]; !ok {
+			settings["udp"] = true
+		}
+		delete(settings, "clients")
+		settingsJSON, err := json.MarshalIndent(settings, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		return string(settingsJSON), nil
+	}
+
 	// Build clients array for Xray (only minimal fields)
 	var xrayClients []map[string]any
 	for _, entity := range clientEntities {
@@ -322,7 +360,7 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		client := make(map[string]any)
 		client["email"] = entity.Email
 		
-		switch inbound.Protocol {
+		switch proto {
 		case model.Trojan:
 			client["password"] = entity.Password
 		case model.Hysteria, model.Hysteria2:
@@ -335,12 +373,12 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 			client["password"] = entity.Password
 		case model.VMESS, model.VLESS:
 			client["id"] = entity.UUID
-			if inbound.Protocol == model.VMESS {
+			if proto == model.VMESS {
 				if entity.Security != "" {
 					client["security"] = entity.Security
 				}
 			}
-			if inbound.Protocol == model.VLESS && entity.Flow != "" {
+			if proto == model.VLESS && entity.Flow != "" {
 				client["flow"] = entity.Flow
 			}
 		}
@@ -485,7 +523,7 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	if len(clients) > 0 {
 		for _, client := range clients {
 			switch inbound.Protocol {
-			case "trojan", "hysteria", "hysteria2":
+			case "trojan", "hysteria", "hysteria2", "mixed":
 				if client.Password == "" {
 					return inbound, false, common.NewError("empty client ID")
 				}
@@ -2596,10 +2634,7 @@ func (s *InboundService) MigrateDB() {
 }
 
 func (s *InboundService) GetOnlineClients() []string {
-	if p == nil {
-		return []string{}
-	}
-	return p.GetOnlineClients()
+	return getPanelOnlineClients()
 }
 
 func (s *InboundService) GetClientsLastOnline() (map[string]int64, error) {

@@ -6,13 +6,13 @@ import {
   Building2,
   CalendarSync,
   Download,
+  Globe,
   Gauge,
   KeyRound,
   Link2,
   ListOrdered,
   Palette,
   Power,
-  RefreshCw,
   RotateCcw,
   Save,
   Send,
@@ -30,32 +30,47 @@ import {
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { AllSetting } from "@/lib/allSetting";
 import { normalizeAllSetting } from "@/lib/allSetting";
-import { postJson } from "@/lib/api";
+import { getJson, postJson } from "@/lib/api";
+import { copyTextToClipboard } from "@/lib/copyToClipboard";
+import { getPanelTimeZoneOptions } from "@/lib/panelTimeZones";
+import { changeLanguage, supported } from "@/lib/i18n";
+import { linkP, panel, p } from "@/lib/paths";
 import {
-  buildRemarkModel,
-  formatRemarkModelPreview,
-  parseRemarkModelUi,
-} from "@/lib/remarkModelUi";
-import { panel, p } from "@/lib/paths";
+  applyPanelTheme,
+  getStoredPanelTheme,
+  PANEL_THEME_DEFAULT,
+  PANEL_THEME_IDS,
+  type PanelThemeId,
+} from "@/lib/panelTheme";
 import { parseSettingsTab, type SettingsTabId } from "@/lib/settingsTabs";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
+import { RemarkModelConstructor } from "@/components/settings/RemarkModelConstructor";
 import { SubscriptionBuilder } from "@/components/settings/subscription/SubscriptionBuilder";
+import { TgRunTimeField } from "@/components/settings/TgRunTimeField";
 import {
   AlertBanner,
   Button,
-  CheckboxField,
   ConfirmDialog,
   IconTile,
   Input,
+  Modal,
   SelectNative,
   Spinner,
+  Switch,
   useToast,
   type IconTileTone,
 } from "@/components/ui";
+
+type ApiTokenRow = {
+  id: number;
+  name: string;
+  createdAt: number;
+  lastUsedAt?: number | null;
+};
 
 function SettingsSection({
   title,
@@ -122,7 +137,7 @@ type SettingsTabConfig = {
 };
 
 export function SettingsPage() {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const toast = useToast();
   const params = useParams();
   const activeTab = parseSettingsTab(
@@ -135,12 +150,33 @@ export function SettingsPage() {
   const [restartOpen, setRestartOpen] = useState(false);
   const [restartLoading, setRestartLoading] = useState(false);
   const [multiConfirmOpen, setMultiConfirmOpen] = useState(false);
+  const [twoFactorModalOpen, setTwoFactorModalOpen] = useState(false);
+  const [twoFactorQrB64, setTwoFactorQrB64] = useState("");
+  const [twoFactorSecret, setTwoFactorSecret] = useState("");
+  const [twoFactorCodeInput, setTwoFactorCodeInput] = useState("");
+  const [twoFactorBusy, setTwoFactorBusy] = useState(false);
+  const [twoFactorSubmitting, setTwoFactorSubmitting] = useState(false);
+  const [twoFactorDisableOpen, setTwoFactorDisableOpen] = useState(false);
+  const [twoFactorDisableLoading, setTwoFactorDisableLoading] = useState(false);
+  const [panelTheme, setPanelTheme] = useState<PanelThemeId>(() =>
+    typeof window !== "undefined" ? getStoredPanelTheme() : PANEL_THEME_DEFAULT,
+  );
   const [account, setAccount] = useState({
     oldUsername: "",
     oldPassword: "",
     newUsername: "",
     newPassword: "",
   });
+  const [apiTokens, setApiTokens] = useState<ApiTokenRow[]>([]);
+  const [apiTokensLoading, setApiTokensLoading] = useState(false);
+  const [newApiTokenName, setNewApiTokenName] = useState("");
+  const [apiTokenCreating, setApiTokenCreating] = useState(false);
+  const [apiTokenModalOpen, setApiTokenModalOpen] = useState(false);
+  const [apiTokenModalValue, setApiTokenModalValue] = useState("");
+  const [apiTokenRevokeOpen, setApiTokenRevokeOpen] = useState(false);
+  const [apiTokenRevokeId, setApiTokenRevokeId] = useState<number | null>(null);
+  const [apiTokenRevoking, setApiTokenRevoking] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await postJson<Record<string, unknown>>(panel("setting/all"));
@@ -158,19 +194,29 @@ export function SettingsPage() {
     void load();
   }, [load]);
 
+  const loadApiTokens = useCallback(async () => {
+    setApiTokensLoading(true);
+    const r = await getJson<ApiTokenRow[]>(panel("api/tokens/list"));
+    setApiTokensLoading(false);
+    if (r.success && Array.isArray(r.obj)) {
+      setApiTokens(r.obj);
+    } else {
+      toast.error(r.msg || t("pages.settings.security.apiTokenLoadError"));
+    }
+  }, [t, toast]);
+
+  useEffect(() => {
+    if (activeTab !== "security" || !form) return;
+    void loadApiTokens();
+  }, [activeTab, form, loadApiTokens]);
+
   const dirty = useMemo(() => {
     if (!form || !baseline) return false;
     return JSON.stringify(form) !== JSON.stringify(baseline);
   }, [form, baseline]);
 
-  const remarkModelUi = useMemo(
-    () => parseRemarkModelUi(form?.remarkModel ?? ""),
-    [form?.remarkModel],
-  );
-  const remarkModelPreview = useMemo(
-    () => formatRemarkModelPreview(form?.remarkModel ?? "-ieo"),
-    [form?.remarkModel],
-  );
+  const timeZoneListId = useId();
+  const timeZoneOptions = useMemo(() => getPanelTimeZoneOptions(), []);
 
   const patch = useCallback(<K extends keyof AllSetting>(key: K, value: AllSetting[K]) => {
     setForm((prev) => (prev ? { ...prev, [key]: value } : prev));
@@ -248,9 +294,30 @@ export function SettingsPage() {
 
   if (loading && !form) {
     return (
-      <PageScaffold>
-        <div className="grid min-h-[50vh] place-items-center">
-          <Spinner size={40} />
+      <PageScaffold compact>
+        <PageHeader
+          title={t("menu.settings")}
+          eyebrow={activeTabLabel}
+          description={t("pages.settings.infoDesc")}
+          icon={SettingsGearIcon}
+          iconTone="neutral"
+        />
+        <div className="min-w-0">
+          <div
+            className="mb-4 flex gap-1 overflow-x-auto border-b border-[var(--border)] pb-px md:hidden"
+            aria-hidden
+          >
+            {settingsTabs.map((tab) => (
+              <div
+                key={tab.id}
+                className="h-9 w-24 shrink-0 rounded-t-lg bg-[var(--surface)]/50 animate-pulse"
+              />
+            ))}
+          </div>
+          <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2" aria-hidden>
+            <div className="h-56 rounded-xl border border-[var(--border)]/30 bg-[var(--surface)]/50 animate-pulse" />
+            <div className="h-56 rounded-xl border border-[var(--border)]/30 bg-[var(--surface)]/50 animate-pulse" />
+          </div>
         </div>
       </PageScaffold>
     );
@@ -282,7 +349,7 @@ export function SettingsPage() {
         return (
           <Link
             key={tab.id}
-            href={p(`panel/settings/${tab.id}`)}
+            href={linkP(`panel/settings/${tab.id}`)}
             scroll={false}
             role="tab"
             aria-selected={on}
@@ -306,6 +373,51 @@ export function SettingsPage() {
     <>
       {activeTab === "general" ? (
         <SettingsGrid>
+          <SettingsSection
+            title={t("pages.settings.sections.generalInterface")}
+            hint={t("pages.settings.languageDesc")}
+            icon={Globe}
+            iconTone="accent"
+            full
+          >
+            <Row label={t("pages.settings.language")}>
+              <SelectNative
+                value={i18n.resolvedLanguage || i18n.language}
+                onChange={async (e) => {
+                  await changeLanguage(e.target.value);
+                }}
+              >
+                {supported.map((s) => (
+                  <option key={s.code} value={s.code}>
+                    {s.label}
+                  </option>
+                ))}
+              </SelectNative>
+            </Row>
+            <Row
+              label={t("pages.settings.panelTheme")}
+              hint={t("pages.settings.panelThemeDesc")}
+            >
+              <SelectNative
+                value={panelTheme}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if ((PANEL_THEME_IDS as readonly string[]).includes(v)) {
+                    const id = v as PanelThemeId;
+                    setPanelTheme(id);
+                    applyPanelTheme(id);
+                  }
+                }}
+              >
+                {PANEL_THEME_IDS.map((id) => (
+                  <option key={id} value={id}>
+                    {t(`pages.settings.panelThemePreset.${id}`)}
+                  </option>
+                ))}
+              </SelectNative>
+            </Row>
+          </SettingsSection>
+
           <SettingsSection
             title={t("pages.settings.sections.generalPanelBind")}
             hint={envHint}
@@ -359,91 +471,82 @@ export function SettingsPage() {
             iconTone="warning"
           >
             <Row label={t("pages.settings.expireTimeDiff")} hint={t("pages.settings.expireTimeDiffDesc")}>
-              <Input
-                type="number"
-                value={form.expireDiff}
-                onChange={(e) => patch("expireDiff", parseInt(e.target.value, 10) || 0)}
-              />
+              <div className="flex max-w-xs items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  className="min-w-0 flex-1"
+                  value={form.expireDiff}
+                  onChange={(e) => patch("expireDiff", parseInt(e.target.value, 10) || 0)}
+                />
+                <span className="shrink-0 text-xs tabular-nums text-[var(--fg-muted)]">
+                  {t("pages.settings.thresholdUnitDays", { defaultValue: "days" })}
+                </span>
+              </div>
             </Row>
             <Row label={t("pages.settings.trafficDiff")} hint={t("pages.settings.trafficDiffDesc")}>
-              <Input
-                type="number"
-                value={form.trafficDiff}
-                onChange={(e) => patch("trafficDiff", parseInt(e.target.value, 10) || 0)}
-              />
+              <div className="flex max-w-xs items-center gap-2">
+                <Input
+                  type="number"
+                  min={0}
+                  className="min-w-0 flex-1"
+                  value={form.trafficDiff}
+                  onChange={(e) => patch("trafficDiff", parseInt(e.target.value, 10) || 0)}
+                />
+                <span className="shrink-0 text-xs tabular-nums text-[var(--fg-muted)]">
+                  {t("pages.settings.thresholdUnitGb", { defaultValue: "GB" })}
+                </span>
+              </div>
             </Row>
             <Row
               label={t("pages.settings.remarkModel")}
               hint={t("pages.settings.remarkModelDesc")}
             >
-              <div className="flex flex-col gap-2">
-                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
-                  <div className="w-full sm:max-w-[6rem]">
-                    <label
-                      className="mb-1.5 block text-xs font-medium text-[var(--fg-subtle)]"
-                      htmlFor="set-remark-sep"
-                    >
-                      {t("pages.settings.remarkModelSep")}
-                    </label>
-                    <Input
-                      id="set-remark-sep"
-                      className="font-mono"
-                      value={remarkModelUi.sep}
-                      onChange={(e) => {
-                        const first =
-                          Array.from(e.target.value || "-")[0] ?? "-";
-                        patch(
-                          "remarkModel",
-                          buildRemarkModel(first, remarkModelUi.order),
-                        );
-                      }}
-                    />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <label
-                      className="mb-1.5 block text-xs font-medium text-[var(--fg-subtle)]"
-                      htmlFor="set-remark-order"
-                    >
-                      {t("pages.settings.remarkModelOrder")}
-                    </label>
-                    <Input
-                      id="set-remark-order"
-                      className="font-mono"
-                      value={remarkModelUi.order}
-                      onChange={(e) =>
-                        patch(
-                          "remarkModel",
-                          buildRemarkModel(remarkModelUi.sep, e.target.value),
-                        )
-                      }
-                      placeholder="ieo"
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </div>
-                </div>
-                <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
-                  {t("pages.settings.remarkModelOrderHint")}
-                </p>
-                <p className="text-xs text-[var(--fg-muted)]">
-                  <span className="text-[var(--fg-subtle)]">
-                    {t("pages.settings.sampleRemark")}:
-                  </span>{" "}
-                  <span className="font-mono text-[var(--fg)]">
-                    {remarkModelPreview}
-                  </span>
-                </p>
-              </div>
-            </Row>
-            <Row label={t("pages.settings.datepicker")} hint={t("pages.settings.datepickerDescription")}>
-              <Input
-                value={form.datepicker}
-                onChange={(e) => patch("datepicker", e.target.value)}
-                placeholder={t("pages.settings.datepickerPlaceholder")}
+              <RemarkModelConstructor
+                value={form.remarkModel}
+                onChange={(model) => patch("remarkModel", model)}
               />
             </Row>
+            <Row label={t("pages.settings.datepicker")} hint={t("pages.settings.datepickerDescription")}>
+              <SelectNative
+                className="max-w-md"
+                value={form.datepicker}
+                onChange={(e) => patch("datepicker", e.target.value)}
+              >
+                {form.datepicker &&
+                form.datepicker !== "gregorian" &&
+                form.datepicker !== "jalalian" ? (
+                  <option value={form.datepicker}>{form.datepicker}</option>
+                ) : null}
+                <option value="gregorian">
+                  {t("pages.settings.datepickerGregorian", {
+                    defaultValue: "Gregorian (standard)",
+                  })}
+                </option>
+                <option value="jalalian">
+                  {t("pages.settings.datepickerJalalian", {
+                    defaultValue: "Jalali (Solar Hijri)",
+                  })}
+                </option>
+              </SelectNative>
+            </Row>
             <Row label={t("pages.settings.timeZone")} hint={t("pages.settings.timeZoneDesc")}>
-              <Input value={form.timeLocation} onChange={(e) => patch("timeLocation", e.target.value)} />
+              <div className="max-w-md space-y-1.5">
+                <Input
+                  list={timeZoneListId}
+                  value={form.timeLocation}
+                  onChange={(e) => patch("timeLocation", e.target.value)}
+                  placeholder={t("pages.settings.timeZonePlaceholder", {
+                    defaultValue: "Local, UTC, or IANA zone",
+                  })}
+                  autoComplete="off"
+                />
+                <datalist id={timeZoneListId}>
+                  {timeZoneOptions.map((z) => (
+                    <option key={z} value={z} />
+                  ))}
+                </datalist>
+              </div>
             </Row>
           </SettingsSection>
 
@@ -467,17 +570,16 @@ export function SettingsPage() {
               </SelectNative>
             </Row>
             <Row label={t("pages.settings.multiNodeMode")} hint={t("pages.settings.multiNodeModeDesc")}>
-              <CheckboxField
-                label={t("pages.settings.enableMultiNodeMode", { defaultValue: "Enable multi-node mode" })}
+              <Switch
                 checked={form.multiNodeMode}
-                onChange={(e) => {
-                  const on = e.target.checked;
+                onChange={(on) => {
                   if (on && !form.multiNodeMode) {
                     setMultiConfirmOpen(true);
                   } else {
                     patch("multiNodeMode", on);
                   }
                 }}
+                ariaLabel={t("pages.settings.enableMultiNodeMode", { defaultValue: "Enable multi-node mode" })}
               />
             </Row>
             <Row label={t("hwidSettings")} hint={t("hwidBetaWarningDesc")}>
@@ -503,20 +605,175 @@ export function SettingsPage() {
           iconTone="danger"
           full
         >
-          <Row label={t("pages.settings.security.twoFactorEnable")} hint={t("pages.settings.security.twoFactorEnableDesc")}>
-            <CheckboxField
-              label={t("enable")}
-              checked={form.twoFactorEnable}
-              onChange={(e) => patch("twoFactorEnable", e.target.checked)}
-            />
+          {form.twoFactorEnable && form.twoFactorToken ? (
+            <>
+              <Row label={t("pages.settings.security.twoFactorEnable")}>
+                <p className="text-sm text-[var(--fg-muted)]">
+                  {t("pages.settings.security.twoFactorEnabledHint")}
+                </p>
+              </Row>
+              <Row
+                label={t("pages.settings.security.twoFactorTelegram")}
+                hint={t("pages.settings.security.twoFactorTelegramDesc")}
+              >
+                <Switch
+                  checked={form.twoFactorTelegram}
+                  onChange={(v) => patch("twoFactorTelegram", v)}
+                  ariaLabel={t("pages.settings.security.twoFactorTelegram")}
+                />
+              </Row>
+              <Row label={t("pages.settings.security.twoFactorDisable")}>
+                <Button type="button" variant="secondary" onClick={() => setTwoFactorDisableOpen(true)}>
+                  {t("pages.settings.security.twoFactorDisable")}
+                </Button>
+              </Row>
+            </>
+          ) : (
+            <Row label={t("pages.settings.security.twoFactorEnable")} hint={t("pages.settings.security.twoFactorEnableDesc")}>
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => {
+                  setTwoFactorCodeInput("");
+                  setTwoFactorModalOpen(true);
+                  void (async () => {
+                    setTwoFactorBusy(true);
+                    setTwoFactorQrB64("");
+                    setTwoFactorSecret("");
+                    const r = await postJson<{ qrPngBase64: string; secret: string }>(
+                      panel("setting/twoFactor/begin"),
+                      {},
+                    );
+                    setTwoFactorBusy(false);
+                    if (r.success && r.obj && typeof r.obj === "object") {
+                      const o = r.obj as { qrPngBase64?: string; secret?: string };
+                      setTwoFactorQrB64(o.qrPngBase64 ?? "");
+                      setTwoFactorSecret(o.secret ?? "");
+                    } else {
+                      toast.error(r.msg || t("pages.settings.security.twoFactorBeginError"));
+                      setTwoFactorModalOpen(false);
+                    }
+                  })();
+                }}
+              >
+                {t("pages.settings.security.twoFactorSetupButton")}
+              </Button>
+            </Row>
+          )}
+        </SettingsSection>
+
+        <SettingsSection
+          title={t("pages.settings.security.apiTokenSection")}
+          hint={t("pages.settings.security.apiTokenHint")}
+          icon={KeyRound}
+          iconTone="warning"
+          full
+        >
+          <Row
+            label={t("pages.settings.security.apiTokenName")}
+            hint={t("pages.settings.security.apiTokenNamePlaceholder")}
+          >
+            <div className="flex max-w-2xl flex-col gap-2 sm:flex-row sm:items-end">
+              <Input
+                value={newApiTokenName}
+                onChange={(e) => setNewApiTokenName(e.target.value)}
+                placeholder={t("pages.settings.security.apiTokenNamePlaceholder")}
+                autoComplete="off"
+                className="min-w-0 flex-1"
+              />
+              <Button
+                type="button"
+                variant="primary"
+                loading={apiTokenCreating}
+                onClick={() => {
+                  void (async () => {
+                    setApiTokenCreating(true);
+                    const r = await postJson<{ token: string; id: number; name: string }>(
+                      panel("api/tokens/create"),
+                      { name: newApiTokenName.trim() },
+                      true,
+                    );
+                    setApiTokenCreating(false);
+                    if (r.success && r.obj && typeof r.obj === "object") {
+                      const o = r.obj as { token?: string };
+                      if (o.token) {
+                        setApiTokenModalValue(o.token);
+                        setApiTokenModalOpen(true);
+                      }
+                      setNewApiTokenName("");
+                      await loadApiTokens();
+                    } else {
+                      toast.error(r.msg || t("pages.settings.security.apiTokenCreateError"));
+                    }
+                  })();
+                }}
+              >
+                {t("pages.settings.security.apiTokenCreate")}
+              </Button>
+            </div>
           </Row>
-          <Row label={t("pages.settings.security.twoFactor")}>
-            <Input
-              value={form.twoFactorToken}
-              onChange={(e) => patch("twoFactorToken", e.target.value)}
-              autoComplete="off"
-            />
-          </Row>
+          {apiTokensLoading ? (
+            <div className="flex justify-center px-4 py-10">
+              <Spinner size={32} />
+            </div>
+          ) : apiTokens.length === 0 ? (
+            <p className="px-4 py-3 text-sm leading-relaxed text-[var(--fg-muted)]">
+              {t("pages.settings.security.apiTokenNoTokens")}
+            </p>
+          ) : (
+            <div className="px-4 pb-4 pt-1 sm:pt-0">
+              <div className="overflow-x-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] shadow-sm">
+                <table className="w-full min-w-[28rem] border-collapse text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] text-xs text-[var(--fg-muted)]">
+                      <th className="px-4 py-3 pr-3 font-medium">{t("pages.settings.security.apiTokenName")}</th>
+                      <th className="px-3 py-3 font-medium whitespace-nowrap">
+                        {t("pages.settings.security.apiTokenCreatedAt")}
+                      </th>
+                      <th className="px-3 py-3 font-medium whitespace-nowrap">
+                        {t("pages.settings.security.apiTokenLastUsed")}
+                      </th>
+                      <th className="w-0 min-w-0 px-3 py-3 pr-4 text-right font-medium" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {apiTokens.map((row) => (
+                      <tr
+                        key={row.id}
+                        className="border-b border-[var(--border)]/70 transition-colors last:border-0 hover:bg-[color-mix(in_oklab,var(--accent)_6%,transparent)]"
+                      >
+                        <td className="px-4 py-3 pr-3 align-middle text-[var(--fg)]">
+                          <span className="font-medium">{row.name || "—"}</span>
+                        </td>
+                        <td className="px-3 py-3 text-[var(--fg-muted)] tabular-nums">
+                          {row.createdAt
+                            ? new Date(row.createdAt * 1000).toLocaleString(i18n.language)
+                            : "—"}
+                        </td>
+                        <td className="px-3 py-3 text-[var(--fg-muted)] tabular-nums">
+                          {row.lastUsedAt != null && row.lastUsedAt > 0
+                            ? new Date(row.lastUsedAt * 1000).toLocaleString(i18n.language)
+                            : "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2.5 pr-4 text-right align-middle">
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            onClick={() => {
+                              setApiTokenRevokeId(row.id);
+                              setApiTokenRevokeOpen(true);
+                            }}
+                          >
+                            {t("pages.settings.security.apiTokenRevoke")}
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </SettingsSection>
         </SettingsGrid>
       ) : null}
@@ -529,10 +786,10 @@ export function SettingsPage() {
             iconTone="info"
           >
             <Row label={t("pages.settings.telegramBotEnable")} hint={t("pages.settings.telegramBotEnableDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.tgBotEnable}
-                onChange={(e) => patch("tgBotEnable", e.target.checked)}
+                onChange={(v) => patch("tgBotEnable", v)}
+                ariaLabel={t("pages.settings.telegramBotEnable")}
               />
             </Row>
             <Row label={t("pages.settings.telegramToken")} hint={t("pages.settings.telegramTokenDesc")}>
@@ -554,20 +811,20 @@ export function SettingsPage() {
               <Input value={form.tgBotChatId} onChange={(e) => patch("tgBotChatId", e.target.value)} />
             </Row>
             <Row label={t("pages.settings.telegramNotifyTime")} hint={t("pages.settings.telegramNotifyTimeDesc")}>
-              <Input value={form.tgRunTime} onChange={(e) => patch("tgRunTime", e.target.value)} />
+              <TgRunTimeField value={form.tgRunTime} onChange={(v) => patch("tgRunTime", v)} t={t} />
             </Row>
             <Row label={t("pages.settings.tgNotifyBackup")} hint={t("pages.settings.tgNotifyBackupDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.tgBotBackup}
-                onChange={(e) => patch("tgBotBackup", e.target.checked)}
+                onChange={(v) => patch("tgBotBackup", v)}
+                ariaLabel={t("pages.settings.tgNotifyBackup")}
               />
             </Row>
             <Row label={t("pages.settings.tgNotifyLogin")} hint={t("pages.settings.tgNotifyLoginDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.tgBotLoginNotify}
-                onChange={(e) => patch("tgBotLoginNotify", e.target.checked)}
+                onChange={(v) => patch("tgBotLoginNotify", v)}
+                ariaLabel={t("pages.settings.tgNotifyLogin")}
               />
             </Row>
             <Row label={t("pages.settings.tgNotifyCpu")} hint={t("pages.settings.tgNotifyCpuDesc")}>
@@ -593,17 +850,17 @@ export function SettingsPage() {
             iconTone="accent"
           >
             <Row label={t("pages.settings.subEnable")} hint={t("pages.settings.subEnableDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.subEnable}
-                onChange={(e) => patch("subEnable", e.target.checked)}
+                onChange={(v) => patch("subEnable", v)}
+                ariaLabel={t("pages.settings.subEnable")}
               />
             </Row>
             <Row label={t("pages.settings.subJsonEnable")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.subJsonEnable}
-                onChange={(e) => patch("subJsonEnable", e.target.checked)}
+                onChange={(v) => patch("subJsonEnable", v)}
+                ariaLabel={t("pages.settings.subJsonEnable")}
               />
             </Row>
             <Row label={t("pages.settings.subListen")} hint={t("pages.settings.subListenDesc")}>
@@ -645,10 +902,10 @@ export function SettingsPage() {
             iconTone="warning"
           >
             <Row label={t("pages.settings.externalTrafficInformEnable")} hint={t("pages.settings.externalTrafficInformEnableDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.externalTrafficInformEnable}
-                onChange={(e) => patch("externalTrafficInformEnable", e.target.checked)}
+                onChange={(v) => patch("externalTrafficInformEnable", v)}
+                ariaLabel={t("pages.settings.externalTrafficInformEnable")}
               />
             </Row>
             <Row label={t("pages.settings.externalTrafficInformURI")} hint={t("pages.settings.externalTrafficInformURIDesc")}>
@@ -707,10 +964,10 @@ export function SettingsPage() {
             iconTone="info"
           >
             <Row label={t("pages.settings.ldapEnable", { defaultValue: "Enable LDAP" })}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.ldapEnable}
-                onChange={(e) => patch("ldapEnable", e.target.checked)}
+                onChange={(v) => patch("ldapEnable", v)}
+                ariaLabel={t("pages.settings.ldapEnable", { defaultValue: "Enable LDAP" })}
               />
             </Row>
             <Row label={t("host")}>
@@ -724,10 +981,10 @@ export function SettingsPage() {
               />
             </Row>
             <Row label={t("pages.settings.certs", { defaultValue: "TLS" })}>
-              <CheckboxField
-                label={t("pages.settings.ldapUseTLS", { defaultValue: "Use TLS" })}
+              <Switch
                 checked={form.ldapUseTLS}
-                onChange={(e) => patch("ldapUseTLS", e.target.checked)}
+                onChange={(v) => patch("ldapUseTLS", v)}
+                ariaLabel={t("pages.settings.ldapUseTLS", { defaultValue: "Use TLS" })}
               />
             </Row>
           </SettingsSection>
@@ -777,10 +1034,10 @@ export function SettingsPage() {
               <Input value={form.ldapTruthyValues} onChange={(e) => patch("ldapTruthyValues", e.target.value)} />
             </Row>
             <Row label={t("pages.settings.ldapInvertFlag", { defaultValue: "Invert flag" })}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.ldapInvertFlag}
-                onChange={(e) => patch("ldapInvertFlag", e.target.checked)}
+                onChange={(v) => patch("ldapInvertFlag", v)}
+                ariaLabel={t("pages.settings.ldapInvertFlag", { defaultValue: "Invert flag" })}
               />
             </Row>
             <Row label={t("pages.settings.ldapInboundTags", { defaultValue: "Inbound tags" })}>
@@ -794,17 +1051,17 @@ export function SettingsPage() {
             iconTone="success"
           >
             <Row label={t("pages.settings.ldapAutoCreate", { defaultValue: "Auto-create clients" })}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.ldapAutoCreate}
-                onChange={(e) => patch("ldapAutoCreate", e.target.checked)}
+                onChange={(v) => patch("ldapAutoCreate", v)}
+                ariaLabel={t("pages.settings.ldapAutoCreate", { defaultValue: "Auto-create clients" })}
               />
             </Row>
             <Row label={t("pages.settings.ldapAutoDelete", { defaultValue: "Auto-delete clients" })}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.ldapAutoDelete}
-                onChange={(e) => patch("ldapAutoDelete", e.target.checked)}
+                onChange={(v) => patch("ldapAutoDelete", v)}
+                ariaLabel={t("pages.settings.ldapAutoDelete", { defaultValue: "Auto-delete clients" })}
               />
             </Row>
             <Row label={t("pages.settings.ldapDefaultTotalGB", { defaultValue: "Default traffic (GB)" })}>
@@ -841,10 +1098,10 @@ export function SettingsPage() {
             iconTone="info"
           >
             <Row label={t("pages.settings.grafanaEnable")} hint={t("pages.settings.grafanaEnableDesc")}>
-              <CheckboxField
-                label={t("enable")}
+              <Switch
                 checked={form.grafanaEnable}
-                onChange={(e) => patch("grafanaEnable", e.target.checked)}
+                onChange={(v) => patch("grafanaEnable", v)}
+                ariaLabel={t("pages.settings.grafanaEnable")}
               />
             </Row>
             <Row label={t("pages.settings.grafanaLokiUrl")} hint={t("pages.settings.grafanaLokiUrlDesc")}>
@@ -953,10 +1210,6 @@ export function SettingsPage() {
         iconTone="neutral"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => void load()} loading={loading} className="!gap-2">
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button variant="secondary" onClick={revert} disabled={!dirty} className="!gap-2">
               <RotateCcw size={16} />
               {t("reset")}
@@ -1009,6 +1262,218 @@ export function SettingsPage() {
         onConfirm={() => {
           patch("multiNodeMode", true);
           setMultiConfirmOpen(false);
+        }}
+      />
+
+      <Modal
+        open={twoFactorModalOpen}
+        onClose={() => {
+          if (!twoFactorSubmitting) {
+            void postJson(panel("setting/twoFactor/cancel"), {});
+            setTwoFactorModalOpen(false);
+            setTwoFactorQrB64("");
+            setTwoFactorSecret("");
+            setTwoFactorCodeInput("");
+          }
+        }}
+        title={t("pages.settings.security.twoFactorModalSetTitle")}
+        width={440}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={twoFactorSubmitting || twoFactorBusy}
+              onClick={() => {
+                void postJson(panel("setting/twoFactor/cancel"), {});
+                setTwoFactorModalOpen(false);
+                setTwoFactorQrB64("");
+                setTwoFactorSecret("");
+                setTwoFactorCodeInput("");
+              }}
+            >
+              {t("cancel")}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              loading={twoFactorSubmitting}
+              disabled={twoFactorBusy || !twoFactorSecret}
+              onClick={() => {
+                void (async () => {
+                  setTwoFactorSubmitting(true);
+                  const r = await postJson(
+                    panel("setting/twoFactor/complete"),
+                    { code: twoFactorCodeInput.trim() },
+                    true,
+                  );
+                  setTwoFactorSubmitting(false);
+                  if (r.success) {
+                    toast.success(r.msg || t("pages.settings.security.twoFactorModalSetSuccess"));
+                    setTwoFactorModalOpen(false);
+                    setTwoFactorQrB64("");
+                    setTwoFactorSecret("");
+                    setTwoFactorCodeInput("");
+                    await load();
+                  } else {
+                    toast.error(r.msg || t("pages.settings.security.twoFactorModalError"));
+                  }
+                })();
+              }}
+            >
+              {t("confirm")}
+            </Button>
+          </div>
+        }
+      >
+        <div className={`space-y-4 px-5 py-4 ${twoFactorBusy ? "pointer-events-none opacity-60" : ""}`}>
+          <p className="text-sm text-[var(--fg-muted)]">{t("pages.settings.security.twoFactorModalSteps")}</p>
+          {twoFactorBusy ? (
+            <div className="flex justify-center py-8">
+              <Spinner size={36} />
+            </div>
+          ) : (
+            <>
+              <p className="text-sm text-[var(--fg-muted)]">{t("pages.settings.security.twoFactorModalFirstStep")}</p>
+              {twoFactorQrB64 ? (
+                <div className="flex justify-center">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={`data:image/png;base64,${twoFactorQrB64}`}
+                    width={200}
+                    height={200}
+                    alt=""
+                    className="rounded-lg border border-[var(--border)] bg-white p-1"
+                  />
+                </div>
+              ) : null}
+              {twoFactorSecret ? (
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">
+                    {t("pages.settings.security.twoFactor")}
+                  </label>
+                  <Input value={twoFactorSecret} readOnly className="font-mono text-sm" />
+                </div>
+              ) : null}
+              <p className="text-sm text-[var(--fg-muted)]">{t("pages.settings.security.twoFactorModalSecondStep")}</p>
+              <Input
+                value={twoFactorCodeInput}
+                onChange={(e) => setTwoFactorCodeInput(e.target.value)}
+                autoComplete="one-time-code"
+                placeholder={t("twoFactorCode")}
+                inputMode="numeric"
+              />
+            </>
+          )}
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={twoFactorDisableOpen}
+        title={t("pages.settings.security.twoFactorModalDeleteTitle")}
+        description={t("pages.settings.security.twoFactorDisableConfirm")}
+        confirmLabel={t("pages.settings.security.twoFactorDisable")}
+        cancelLabel={t("cancel")}
+        danger
+        loading={twoFactorDisableLoading}
+        onCancel={() => setTwoFactorDisableOpen(false)}
+        onConfirm={() => {
+          void (async () => {
+            if (!form) return;
+            setTwoFactorDisableLoading(true);
+            const body = {
+              ...form,
+              twoFactorEnable: false,
+              twoFactorToken: "",
+              twoFactorTelegram: false,
+            };
+            const r = await postJson(panel("setting/update"), body, true);
+            setTwoFactorDisableLoading(false);
+            setTwoFactorDisableOpen(false);
+            if (r.success) {
+              toast.success(r.msg || t("pages.settings.security.twoFactorModalDeleteSuccess"));
+              await load();
+            } else {
+              toast.error(r.msg || t("pages.settings.toasts.modifySettings"));
+            }
+          })();
+        }}
+      />
+
+      <Modal
+        open={apiTokenModalOpen}
+        onClose={() => {
+          setApiTokenModalOpen(false);
+          setApiTokenModalValue("");
+        }}
+        title={t("pages.settings.security.apiTokenModalTitle")}
+        width={480}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="primary"
+              onClick={() => {
+                if (!apiTokenModalValue) {
+                  return;
+                }
+                void copyTextToClipboard(apiTokenModalValue)
+                  .then(() => {
+                    toast.success(t("copySuccess"));
+                  })
+                  .catch(() => {
+                    toast.error(t("fail"));
+                  });
+              }}
+            >
+              {t("copy")}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => {
+                setApiTokenModalOpen(false);
+                setApiTokenModalValue("");
+              }}
+            >
+              {t("close")}
+            </Button>
+          </div>
+        }
+      >
+        <div className="space-y-3 px-5 py-4">
+          <p className="text-sm text-[var(--fg-muted)]">{t("pages.settings.security.apiTokenModalHint")}</p>
+          <Input value={apiTokenModalValue} readOnly className="font-mono text-xs" />
+        </div>
+      </Modal>
+
+      <ConfirmDialog
+        open={apiTokenRevokeOpen}
+        title={t("pages.settings.security.apiTokenRevoke")}
+        description={t("pages.settings.security.apiTokenConfirmRevoke")}
+        confirmLabel={t("pages.settings.security.apiTokenRevoke")}
+        cancelLabel={t("cancel")}
+        danger
+        loading={apiTokenRevoking}
+        onCancel={() => {
+          setApiTokenRevokeOpen(false);
+          setApiTokenRevokeId(null);
+        }}
+        onConfirm={() => {
+          void (async () => {
+            if (apiTokenRevokeId == null) return;
+            setApiTokenRevoking(true);
+            const r = await postJson(panel("api/tokens/revoke"), { id: apiTokenRevokeId }, true);
+            setApiTokenRevoking(false);
+            setApiTokenRevokeOpen(false);
+            setApiTokenRevokeId(null);
+            if (r.success) {
+              toast.success(r.msg || t("success"));
+              await loadApiTokens();
+            } else {
+              toast.error(r.msg || t("pages.settings.security.apiTokenRevokeError"));
+            }
+          })();
         }}
       />
     </PageScaffold>

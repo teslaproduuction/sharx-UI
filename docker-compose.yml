@@ -2,13 +2,23 @@
 # Set XUI_WEB_DOMAIN (and TLS env vars if needed) so user-facing links resolve to the panel host.
 # VPN clients use the subscription port (e.g. 2096) for raw configs; browsers hitting the sub URL
 # with Accept: text/html are redirected to the first-party page unless ?legacy=1 is set.
+#
+# In-stack updater: Watchtower shares sharx_network only (no host ports). The panel calls
+# http://watchtower:8080/v1/update with the same token. If WATCHTOWER_HTTP_API_TOKEN is unset, a dev-only
+# default is used so `docker compose up` works; for production set it in .env (e.g. openssl rand -hex 24).
+# Image: beatkind/watchtower (containrrr image breaks on Docker Engine 29+: API 1.44 minimum).
+# Docs: https://github.com/beatkind/watchtower
 services:
   sharx:
     build:
       context: .
       dockerfile: ./Dockerfile
     container_name: sharx_app
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     # hostname: yourhostname
+    # For "kick user" (conntrack drop) in single-node mode, grant network admin to the app container:
+    # cap_add: [NET_ADMIN]
     ports:
       - "2053:2053"   # Web UI
       - "2096:2096"   # Subscriptions
@@ -41,14 +51,36 @@ services:
       XUI_DB_PASSWORD: change_this_password
       XUI_DB_NAME: xui_db
       XUI_DB_SSLMODE: disable
+      # Internal HTTP API to Watchtower (same compose project, not exposed outside Docker).
+      XUI_DOCKER_UPDATER_URL: http://watchtower:8080/v1/update
+      XUI_DOCKER_UPDATER_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
     depends_on:
       postgres:
         condition: service_healthy
+      watchtower:
+        condition: service_started
     networks:
       - sharx_network
     tty: true
 #    network_mode: host
     restart: unless-stopped
+
+  watchtower:
+    image: beatkind/watchtower:2.3.2
+    container_name: sharx_watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --http-api-update
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    networks:
+      - sharx_network
 
   postgres:
     image: postgres:16-alpine

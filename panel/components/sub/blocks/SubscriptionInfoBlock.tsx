@@ -117,6 +117,13 @@ export function SubscriptionInfoBlock({
                   {t("pages.publicSub.status", { defaultValue: "Status" })}
                 </div>
                 <div className={shell.metricValue}>{user.userStatus}</div>
+                {user.isOnline != null ? (
+                  <div className="mt-0.5 text-[11px] text-[#8b949e]">
+                    {user.isOnline
+                      ? t("online", { defaultValue: "Online" })
+                      : t("offline", { defaultValue: "Offline" })}
+                  </div>
+                ) : null}
               </div>
             </div>
           </div>
@@ -201,6 +208,13 @@ export function SubscriptionInfoBlock({
                 {t("pages.publicSub.status", { defaultValue: "Status" })}
               </div>
               <div className={shell.metricValue}>{user.userStatus}</div>
+              {user.isOnline != null ? (
+                <div className="mt-0.5 text-[11px] text-[#8b949e]">
+                  {user.isOnline
+                    ? t("online", { defaultValue: "Online" })
+                    : t("offline", { defaultValue: "Offline" })}
+                </div>
+              ) : null}
             </div>
           </div>
         </div>

@@ -1,11 +1,11 @@
 "use client";
 
-import { FileText, Pencil, Plus, RefreshCw, Trash2, Users } from "lucide-react";
+import { FileText, Pencil, Plus, Trash2, Users } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
-import { panel, p } from "@/lib/paths";
+import { linkP, panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
   XrayConfigTemplateEditor,
@@ -50,6 +50,26 @@ function prettyJson(s: string): string {
   } catch {
     return s;
   }
+}
+
+/** Renders count + node names; avoids showing raw DB ids like "5" (one node with id 5). */
+function formatProfileAssignmentsLine(
+  nodeIds: number[] | undefined,
+  nodeRows: NodeRow[],
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  if (!nodeIds?.length) return "";
+  const parts = nodeIds.map((id) => {
+    const n = nodeRows.find((x) => x.id === id);
+    const name = n?.name?.trim();
+    return name ? `${name} (ID ${id})` : `ID ${id}`;
+  });
+  const list = parts.join(", ");
+  const countLabel =
+    nodeIds.length === 1
+      ? t("pages.xrayCoreConfigProfiles.assignedNodesCountOne")
+      : t("pages.xrayCoreConfigProfiles.assignedNodesCountMany", { count: nodeIds.length });
+  return `${countLabel}: ${list}`;
 }
 
 export function XrayCoreConfigProfilesPage() {
@@ -306,10 +326,6 @@ export function XrayCoreConfigProfilesPage() {
         iconTone="neutral"
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="secondary" onClick={() => void loadProfiles()} loading={loading} className="!gap-2">
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button
               variant="primary"
               onClick={() => setAddOpen(true)}
@@ -330,7 +346,7 @@ export function XrayCoreConfigProfilesPage() {
               defaultValue: "Enable multi-node mode in panel settings to use core config profiles.",
             })}
           </p>
-          <Link href={p("panel/settings/general")} className="mt-2 inline-block text-[var(--accent)] underline-offset-2 hover:underline">
+          <Link href={linkP("panel/settings/general")} className="mt-2 inline-block text-[var(--accent)] underline-offset-2 hover:underline">
             {t("menu.settings")}
           </Link>
         </div>
@@ -366,7 +382,7 @@ export function XrayCoreConfigProfilesPage() {
                     {t("pages.xrayCoreConfigProfiles.assignedNodes")}:{" "}
                     {(pr.nodeIds?.length ?? 0) === 0
                       ? t("pages.xrayCoreConfigProfiles.nodesNone", { defaultValue: "none assigned" })
-                      : pr.nodeIds?.join(", ")}
+                      : formatProfileAssignmentsLine(pr.nodeIds, nodes, t)}
                     {" · "}
                     {t("pages.xrayCoreConfigProfiles.updatedLabel", { defaultValue: "Updated" })}{" "}
                     {formatTs(pr.updatedAt, locale)}

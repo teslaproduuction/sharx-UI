@@ -1,7 +1,7 @@
 -- Migration: Panel-wide SharX node pairing bundle
 --
--- A single shared SECRET_KEY is generated once at panel startup and reused by every node
--- (Remnawave-style). Panel stores the full material locally so it can verify nodes via mTLS
+-- A single shared SECRET_KEY is generated once at panel startup and reused by every node.
+-- Panel stores the full material locally so it can verify nodes via mTLS
 -- and sign JWT tokens; nodes only receive the public half via SECRET_KEY env var.
 --
 -- Per-node columns kept on "nodes" table remain for backwards compatibility but are no

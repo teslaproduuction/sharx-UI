@@ -10,43 +10,11 @@ import (
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/service"
+	"github.com/konstpic/sharx-code/v2/web/session"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
 
 	"github.com/gin-gonic/gin"
 )
-
-// getRequestPanelURL extracts the panel URL from the HTTP request.
-// This is the URL the user is accessing the panel from (e.g., http://192.168.0.7:2053).
-func getRequestPanelURL(c *gin.Context) string {
-	req := c.Request
-	scheme := "http"
-	if req.TLS != nil {
-		scheme = "https"
-	} else if req.Header.Get("X-Forwarded-Proto") == "https" {
-		scheme = "https"
-	}
-	
-	host := req.Host
-	if host == "" {
-		host = req.Header.Get("Host")
-	}
-	if host == "" {
-		// Fallback: try to get from X-Forwarded-Host (for reverse proxies)
-		host = req.Header.Get("X-Forwarded-Host")
-	}
-	
-	if host == "" {
-		return ""
-	}
-	
-	// Get base path from context if available
-	basePath := c.GetString("base_path")
-	if basePath == "" {
-		basePath = "/"
-	}
-	
-	return fmt.Sprintf("%s://%s%s", scheme, host, basePath)
-}
 
 // isNodeReregistrationError checks if the error indicates that node needs re-registration.
 func isNodeReregistrationError(err error) bool {
@@ -82,9 +50,26 @@ func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.GET("/status/:id", a.getNodeStatus)
 	g.POST("/logs/:id", a.getNodeLogs)
 	g.POST("/check-connection", a.checkNodeConnection) // Check node connection without API key
-	g.POST("/resetTraffic/:id", a.resetNodeTraffic)   // Reset node traffic
-	g.GET("/secret", a.getPairingSecret)              // Panel-wide SECRET_KEY for node docker-compose
+	g.POST("/resetTraffic/:id", a.resetNodeTraffic)    // Reset node traffic
+	g.GET("/secret", a.getPairingSecret)               // Panel-wide SECRET_KEY for node docker-compose
+	g.GET("/geography", a.getNodesGeography)
+	g.GET("/client-traffic-per-node", a.getClientTrafficPerNode)
 	// push-logs endpoint moved to APIController to bypass session auth
+}
+
+// getClientTrafficPerNode returns live per-user per-node traffic (and a Local column in single-node mode).
+func (a *NodeController) getClientTrafficPerNode(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	if user == nil {
+		jsonMsg(c, "Unauthorized", nil)
+		return
+	}
+	out, err := a.nodeService.GetClientTrafficPerNodeMatrix(user.Id)
+	if err != nil {
+		jsonMsg(c, "Failed to load client traffic per node", err)
+		return
+	}
+	jsonObj(c, out, nil)
 }
 
 // getPairingSecret returns the shared SECRET_KEY (base64 JSON) that every pairing-mode node
@@ -107,15 +92,15 @@ func (a *NodeController) getNodes(c *gin.Context) {
 		jsonMsg(c, "Failed to get nodes", err)
 		return
 	}
-	
+
 	// Enrich nodes with assigned inbounds and profiles information
 	type NodeWithInbounds struct {
 		*model.Node
-		Inbounds    []*model.Inbound                    `json:"inbounds,omitempty"`
-		Profiles    []*model.XrayCoreConfigProfile       `json:"profiles,omitempty"`
-		XrayVersion string                                `json:"xrayVersion,omitempty"`
+		Inbounds    []*model.Inbound               `json:"inbounds,omitempty"`
+		Profiles    []*model.XrayCoreConfigProfile `json:"profiles,omitempty"`
+		XrayVersion string                         `json:"xrayVersion,omitempty"`
 	}
-	
+
 	profileService := service.XrayCoreConfigProfileService{}
 	result := make([]NodeWithInbounds, 0, len(nodes))
 	for _, node := range nodes {
@@ -133,7 +118,7 @@ func (a *NodeController) getNodes(c *gin.Context) {
 			XrayVersion: xrayVersion,
 		})
 	}
-	
+
 	jsonObj(c, result, nil)
 }
 
@@ -152,11 +137,10 @@ func (a *NodeController) getNode(c *gin.Context) {
 	jsonObj(c, node, nil)
 }
 
-// addNode creates a new node and registers it with a generated API key.
+// addNode creates a new node (pairing: JWT + mTLS; worker uses panel SECRET_KEY).
 func (a *NodeController) addNode(c *gin.Context) {
 	var body struct {
 		model.Node
-		LegacyAuth bool `json:"legacyAuth" form:"legacyAuth"`
 	}
 	err := c.ShouldBind(&body)
 	if err != nil {
@@ -169,27 +153,14 @@ func (a *NodeController) addNode(c *gin.Context) {
 	node.PanelClientKeyPem = ""
 	node.CaCertPem = ""
 	node.AuthMode = ""
+	node.Enable = true
 
-	logger.Debugf("[Node: %s] Adding node: address=%s legacyAuth=%v", node.Name, node.Address, body.LegacyAuth)
+	logger.Debugf("[Node: %s] Adding node: address=%s", node.Name, node.Address)
 
-	panelURL := getRequestPanelURL(c)
-
-	var secretKey string
-	if body.LegacyAuth {
-		apiKey, regErr := a.nodeService.RegisterNode(node, panelURL)
-		if regErr != nil {
-			logger.Errorf("[Node: %s] Registration failed: %v", node.Name, regErr)
-			jsonMsg(c, "Failed to register node: "+regErr.Error(), regErr)
-			return
-		}
-		node.ApiKey = apiKey
-	} else {
-		var prepErr error
-		secretKey, prepErr = a.nodeService.PrepareNodePairing(node)
-		if prepErr != nil {
-			jsonMsg(c, "Failed to prepare node pairing: "+prepErr.Error(), prepErr)
-			return
-		}
+	secretKey, prepErr := a.nodeService.PrepareNodePairing(node)
+	if prepErr != nil {
+		jsonMsg(c, "Failed to prepare node pairing: "+prepErr.Error(), prepErr)
+		return
 	}
 
 	if node.Status == "" {
@@ -239,16 +210,10 @@ func (a *NodeController) updateNode(c *gin.Context) {
 		return
 	}
 
-	// Get existing node first to preserve fields that are not being updated
-	existingNode, err := a.nodeService.GetNode(id)
-	if err != nil {
-		jsonMsg(c, "Failed to get existing node", err)
-		return
-	}
-
 	// Create node with only provided fields
 	node := &model.Node{Id: id}
-	
+	var jsonEnable *bool
+
 	// Try to parse as JSON first (for API calls)
 	contentType := c.GetHeader("Content-Type")
 	if contentType == "application/json" {
@@ -260,9 +225,6 @@ func (a *NodeController) updateNode(c *gin.Context) {
 			}
 			if addressVal, ok := jsonData["address"].(string); ok && addressVal != "" {
 				node.Address = addressVal
-			}
-			if apiKeyVal, ok := jsonData["apiKey"].(string); ok && apiKeyVal != "" {
-				node.ApiKey = apiKeyVal
 			}
 			// TLS settings
 			if useTlsVal, ok := jsonData["useTls"].(bool); ok {
@@ -281,6 +243,9 @@ func (a *NodeController) updateNode(c *gin.Context) {
 			if trafficLimitGBVal, ok := jsonData["trafficLimitGB"].(float64); ok {
 				node.TrafficLimitGB = trafficLimitGBVal
 			}
+			if enableVal, ok := jsonData["enable"].(bool); ok {
+				jsonEnable = &enableVal
+			}
 		}
 	} else {
 		// Parse as form data (default for web UI)
@@ -290,9 +255,6 @@ func (a *NodeController) updateNode(c *gin.Context) {
 		}
 		if address := c.PostForm("address"); address != "" {
 			node.Address = address
-		}
-		if apiKey := c.PostForm("apiKey"); apiKey != "" {
-			node.ApiKey = apiKey
 		}
 		// TLS settings
 		node.UseTLS = c.PostForm("useTls") == "true" || c.PostForm("useTls") == "on"
@@ -309,23 +271,9 @@ func (a *NodeController) updateNode(c *gin.Context) {
 				node.TrafficLimitGB = trafficLimitGB
 			}
 		}
-	}
-
-	// Validate API key if it was changed
-	if node.ApiKey != "" && node.ApiKey != existingNode.ApiKey {
-		// Create a temporary node for validation
-		validationNode := &model.Node{
-			Id:      id,
-			Address: node.Address,
-			ApiKey:  node.ApiKey,
-		}
-		if validationNode.Address == "" {
-			validationNode.Address = existingNode.Address
-		}
-		err = a.nodeService.ValidateApiKey(validationNode)
-		if err != nil {
-			jsonMsg(c, "Invalid API key or node unreachable: "+err.Error(), err)
-			return
+		if enableStr := c.PostForm("enable"); enableStr != "" {
+			v := enableStr == "true" || enableStr == "on"
+			jsonEnable = &v
 		}
 	}
 
@@ -334,11 +282,50 @@ func (a *NodeController) updateNode(c *gin.Context) {
 		jsonMsg(c, "Failed to update node", err)
 		return
 	}
+	if jsonEnable != nil {
+		if err := a.nodeService.SetNodeEnabled(id, *jsonEnable); err != nil {
+			jsonMsg(c, "Failed to update node enabled state", err)
+			return
+		}
+		if !*jsonEnable {
+			go func(nodeID int) {
+				n, err := a.nodeService.GetNode(nodeID)
+				if err != nil || n == nil {
+					return
+				}
+				if err := a.nodeService.StopXrayOnNode(n); err != nil {
+					logger.Warningf("[Node: %s] stop Xray on worker: %v", n.Name, err)
+					_ = a.nodeService.SetNodeXrayState(n.Id, model.NodeXrayError)
+				} else {
+					logger.Infof("[Node: %s] Xray stopped on worker (node disabled in panel)", n.Name)
+					_ = a.nodeService.SetNodeXrayState(n.Id, model.NodeXrayStopped)
+				}
+				time.Sleep(100 * time.Millisecond)
+				a.broadcastNodesUpdate()
+			}(id)
+		} else {
+			go func(nodeID int) {
+				xs := service.XrayService{}
+				xs.RestartXrayAsync(false)
+				time.Sleep(3 * time.Second)
+				n, err := a.nodeService.GetNode(nodeID)
+				if err == nil && n != nil && n.Enable {
+					_ = a.nodeService.RefreshNodeXrayStateFromWorker(n)
+				}
+				a.broadcastNodesUpdate()
+			}(id)
+		}
+	}
 
 	// Broadcast nodes update via WebSocket
 	a.broadcastNodesUpdate()
 
-	jsonMsgObj(c, "Node updated successfully", node, nil)
+	out, gerr := a.nodeService.GetNode(id)
+	if gerr != nil {
+		jsonMsg(c, "Node updated but failed to reload", gerr)
+		return
+	}
+	jsonMsgObj(c, "Node updated successfully", out, nil)
 }
 
 // deleteNode deletes a node by its ID.
@@ -349,10 +336,19 @@ func (a *NodeController) deleteNode(c *gin.Context) {
 		return
 	}
 
+	n, _ := a.nodeService.GetNode(id)
 	err = a.nodeService.DeleteNode(id)
 	if err != nil {
 		jsonMsg(c, "Failed to delete node", err)
 		return
+	}
+
+	if n != nil {
+		tgbot := service.Tgbot{}
+		if tgbot.IsRunning() {
+			detail := fmt.Sprintf("<b>Name:</b> %s\n<b>Address:</b> %s\n<b>ID:</b> %d\n", n.Name, n.Address, n.Id)
+			tgbot.NotifyPanelAction("Node removed in panel", detail, getRemoteIp(c))
+		}
 	}
 
 	// Broadcast nodes update via WebSocket
@@ -654,6 +650,46 @@ func (a *NodeController) checkNodeConnection(c *gin.Context) {
 	}, nil)
 }
 
+// getNodesGeography returns panel and node coordinates for the world map (multi-node UI).
+func (a *NodeController) getNodesGeography(c *gin.Context) {
+	type nodeGeoRow struct {
+		Id           int      `json:"id"`
+		Name         string   `json:"name"`
+		Status       string   `json:"status"`
+		GeoLat       *float64 `json:"geoLat,omitempty"`
+		GeoLng       *float64 `json:"geoLng,omitempty"`
+		GeoUpdatedAt int64    `json:"geoUpdatedAt"`
+		GeoSource    string   `json:"geoSource,omitempty"`
+	}
+	settingSvc := service.SettingService{}
+	panelGeo, err := settingSvc.GetPanelGeography()
+	if err != nil {
+		jsonMsg(c, "Failed to load panel geography", err)
+		return
+	}
+	nodes, err := a.nodeService.GetAllNodes()
+	if err != nil {
+		jsonMsg(c, "Failed to get nodes", err)
+		return
+	}
+	rows := make([]nodeGeoRow, 0, len(nodes))
+	for _, n := range nodes {
+		rows = append(rows, nodeGeoRow{
+			Id:           n.Id,
+			Name:         n.Name,
+			Status:       n.Status,
+			GeoLat:       n.GeoLat,
+			GeoLng:       n.GeoLng,
+			GeoUpdatedAt: n.GeoUpdatedAt,
+			GeoSource:    n.GeoSource,
+		})
+	}
+	jsonObj(c, gin.H{
+		"panel": panelGeo,
+		"nodes": rows,
+	}, nil)
+}
+
 // broadcastNodesUpdate broadcasts the current nodes list to all WebSocket clients
 func (a *NodeController) broadcastNodesUpdate() {
 	// Get all nodes with their inbounds and profiles
@@ -666,9 +702,9 @@ func (a *NodeController) broadcastNodesUpdate() {
 	// Enrich nodes with assigned inbounds and profiles information
 	type NodeWithInbounds struct {
 		*model.Node
-		Inbounds    []*model.Inbound                    `json:"inbounds,omitempty"`
-		Profiles    []*model.XrayCoreConfigProfile       `json:"profiles,omitempty"`
-		XrayVersion string                                `json:"xrayVersion,omitempty"`
+		Inbounds    []*model.Inbound               `json:"inbounds,omitempty"`
+		Profiles    []*model.XrayCoreConfigProfile `json:"profiles,omitempty"`
+		XrayVersion string                         `json:"xrayVersion,omitempty"`
 	}
 
 	profileService := service.XrayCoreConfigProfileService{}

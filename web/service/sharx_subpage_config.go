@@ -88,11 +88,13 @@ type SharxSubpageAppSettings struct {
 
 // SharxSubpageRoutingProfile is an inline or URL-provided routing profile.
 type SharxSubpageRoutingProfile struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	Source string `json:"source"` // "inline" | "url"
-	Body   string `json:"body"`
-	URL    string `json:"url"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Source               string `json:"source"` // "inline" | "url"
+	Body                 string `json:"body"`
+	URL                  string `json:"url"`
+	DeepLinkPreset       string `json:"deepLinkPreset,omitempty"`       // happ | incy | sharx | custom
+	DeepLinkCustomPrefix string `json:"deepLinkCustomPrefix,omitempty"` // when custom: prefix before Base64 payload
 }
 
 // SharxSubpageRouting groups declared routing profiles.
@@ -144,7 +146,9 @@ type SharxSubpageConfigV2 struct {
 		SuccessColor       string `json:"successColor,omitempty"`
 		DangerColor        string `json:"dangerColor,omitempty"`
 	} `json:"branding"`
-	Theme         string                     `json:"theme"`
+	Theme string `json:"theme"`
+	// ColorPreset matches panel theme ids (default, midnight, ember, boreal, web). Empty means web.
+	ColorPreset   string                     `json:"colorPreset,omitempty"`
 	ShowQrCodes   bool                       `json:"showQrCodes"`
 	Locales       []string                   `json:"locales"`
 	Blocks        []json.RawMessage          `json:"blocks"`

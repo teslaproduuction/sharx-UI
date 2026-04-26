@@ -33,7 +33,11 @@ export function SubscriptionPreview({ config }: Props) {
           className="h-[720px] w-full overflow-y-auto overflow-x-hidden"
           style={{ scrollbarWidth: "thin" }}
         >
-          <SubPageShell branding={config.branding} theme={config.theme}>
+          <SubPageShell
+            branding={config.branding}
+            theme={config.theme}
+            colorPreset={config.colorPreset}
+          >
             <SubPageRenderer data={data} interactive={false} />
           </SubPageShell>
         </div>

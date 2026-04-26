@@ -17,11 +17,11 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/sub"
 	"github.com/konstpic/sharx-code/v2/util/crypto"
-	"github.com/konstpic/sharx-code/v2/xray"
 	"github.com/konstpic/sharx-code/v2/web"
 	"github.com/konstpic/sharx-code/v2/web/controller"
 	"github.com/konstpic/sharx-code/v2/web/global"
 	"github.com/konstpic/sharx-code/v2/web/service"
+	"github.com/konstpic/sharx-code/v2/xray"
 
 	"github.com/joho/godotenv"
 	"github.com/op/go-logging"
@@ -84,6 +84,8 @@ func runWebServer() {
 	if err := pairingService.Ensure(); err != nil {
 		logger.Warningf("Failed to ensure panel pairing bundle: %v", err)
 	}
+
+	service.StartPanelGeographyRefresh()
 
 	// Pre-generate Xray configuration file from database at startup.
 	// This ensures the config file is ready before Xray starts.

@@ -1,6 +1,6 @@
 "use client";
 
-import { Plus, RefreshCw, Server } from "lucide-react";
+import { Plus, Server } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -162,15 +162,6 @@ export function HostsPage() {
         iconTone="info"
         actions={
           <>
-            <Button
-              variant="primary"
-              onClick={() => void load()}
-              loading={loading}
-              className="!gap-2"
-            >
-              <RefreshCw size={16} />
-              {t("refresh")}
-            </Button>
             <Button variant="secondary" onClick={openAdd} className="!gap-2">
               <Plus size={16} />
               {t("pages.hosts.addHost")}

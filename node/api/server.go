@@ -3,9 +3,12 @@ package api
 
 import (
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -13,14 +16,18 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/auth"
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
+	"github.com/konstpic/sharx-code/v2/conndrop"
+	"github.com/konstpic/sharx-code/v2/node/geopush"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
 	"github.com/konstpic/sharx-code/v2/node/xray"
+	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 	"github.com/gin-gonic/gin"
 )
 
@@ -37,7 +44,6 @@ func try(fn func()) {
 // Server provides REST API for managing the node.
 type Server struct {
 	port        int
-	apiKey      string
 	xrayManager *xray.Manager
 	httpServer  *http.Server
 	certFile    string
@@ -48,11 +54,40 @@ type Server struct {
 	pairing *auth.Bundle
 }
 
-// NewServer creates a new API server instance.
-func NewServer(port int, apiKey string, xrayManager *xray.Manager) *Server {
+// Code returned in JSON when Xray is not running (expected before first apply-config).
+const errCodeXrayNotReady = "XRAY_NOT_READY"
+
+var (
+	notReadyLogMu   sync.Mutex
+	lastLogStats503 time.Time
+	lastLogLogs503  time.Time
+)
+
+// logXrayNotReadyThrottled logs at most once per minute per endpoint to avoid log spam from panel polls.
+func logXrayNotReadyThrottled(endpoint string) {
+	const interval = time.Minute
+	now := time.Now()
+	notReadyLogMu.Lock()
+	defer notReadyLogMu.Unlock()
+	switch endpoint {
+	case "stats":
+		if now.Sub(lastLogStats503) < interval {
+			return
+		}
+		lastLogStats503 = now
+	case "logs":
+		if now.Sub(lastLogLogs503) < interval {
+			return
+		}
+		lastLogLogs503 = now
+	}
+	logger.Debugf("Xray not ready: returning 503 for %s (repeats suppressed for %v)", endpoint, interval)
+}
+
+// NewServer creates a new API server instance. Call SetPairing before Start (pairing-only).
+func NewServer(port int, xrayManager *xray.Manager) *Server {
 	return &Server{
 		port:        port,
-		apiKey:      apiKey,
 		xrayManager: xrayManager,
 	}
 }
@@ -97,19 +132,21 @@ func (s *Server) Start() error {
 
 	// Health check endpoint (no auth required)
 	router.GET("/health", s.health)
-
-	// Registration endpoint (no auth required, used for initial setup)
-	router.POST("/api/v1/register", s.register)
+	router.GET("/api/v1/ready", s.health)
 
 	// API endpoints (require auth)
 	api := router.Group("/api/v1")
 	{
 		api.POST("/apply-config", s.applyConfig)
+		api.POST("/stop-xray", s.stopXray)
 		api.POST("/reload", s.reload)
 		api.POST("/force-reload", s.forceReload)
 		api.POST("/install-xray/:version", s.installXray)
 		api.GET("/status", s.status)
 		api.GET("/stats", s.stats)
+		api.GET("/user-online-sessions", s.userOnlineSessions)
+		api.POST("/drop-connections", s.dropConnections)
+		api.POST("/drop-ips", s.dropIPs)
 		api.GET("/logs", s.getLogs)
 		api.GET("/service-logs", s.getServiceLogs)
 		api.POST("/add-user", s.addUser)
@@ -190,8 +227,8 @@ func (s *Server) Stop() error {
 // authMiddleware validates API key from Authorization header.
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Skip auth for health and registration endpoints
-		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/api/v1/register" {
+		// Skip auth for health
+		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/api/v1/ready" {
 			c.Next()
 			return
 		}
@@ -207,32 +244,17 @@ func (s *Server) authMiddleware() gin.HandlerFunc {
 			return
 		}
 
-		if s.pairing != nil {
-			if err := verifyBearerJWT(authHeader, s.pairing.JWTPublicKey); err != nil {
-				logger.Warningf("Request to %s rejected: JWT: %v", c.Request.URL.Path, err)
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
-				c.Abort()
-				return
-			}
-			c.Next()
-			return
-		}
-
-		// Support both "Bearer <key>" and direct key
-		apiKey := authHeader
-		if len(authHeader) > 7 && authHeader[:7] == "Bearer " {
-			apiKey = authHeader[7:]
-		}
-
-		if apiKey != s.apiKey {
-			logger.Warningf("Request to %s rejected: invalid API key (received: %s..., expected: %s...)",
-				c.Request.URL.Path, apiKey[:min(8, len(apiKey))], s.apiKey[:min(8, len(s.apiKey))])
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid API key"})
+		if s.pairing == nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "server not configured"})
 			c.Abort()
 			return
 		}
-
-		logger.Debugf("Request to %s authenticated successfully", c.Request.URL.Path)
+		if err := verifyBearerJWT(authHeader, s.pairing.JWTPublicKey); err != nil {
+			logger.Warningf("Request to %s rejected: JWT: %v", c.Request.URL.Path, err)
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			c.Abort()
+			return
+		}
 		c.Next()
 	}
 }
@@ -256,19 +278,15 @@ func verifyBearerJWT(authHeader string, pub *rsa.PublicKey) error {
 	return err
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// health returns the health status of the node.
+// health returns the health status of the node (includes xray readiness; no auth required).
 func (s *Server) health(c *gin.Context) {
+	st := s.xrayManager.GetStatus()
 	c.JSON(http.StatusOK, gin.H{
-		"status": "ok",
-		"service": "sharx-node",
+		"status":        "ok",
+		"service":       "sharx-node",
+		"xrayRunning":   st["running"],
+		"xrayVersion":   st["version"],
+		"xrayUptime":    st["uptime"],
 	})
 }
 
@@ -285,25 +303,41 @@ func (s *Server) applyConfig(c *gin.Context) {
 
 	logger.Infof("Request body read, size: %d bytes", len(body))
 
-	// Try to parse as JSON with optional panelUrl field
 	var requestData struct {
 		Config   json.RawMessage `json:"config"`
 		PanelURL string          `json:"panelUrl,omitempty"`
 	}
 
-	// First try to parse as new format with panelUrl
-	if err := json.Unmarshal(body, &requestData); err == nil && requestData.PanelURL != "" {
-		// New format: { "config": {...}, "panelUrl": "http://..." }
-		logger.Infof("Parsed request with panelUrl: %s", requestData.PanelURL)
-		body = requestData.Config
-		// Set panel URL for log pusher in background to avoid blocking
-		go try(func() {
-			nodeLogs.SetPanelURL(requestData.PanelURL)
-			logger.Infof("Panel URL updated in log pusher: %s", requestData.PanelURL)
-		})
+	configBytes := body
+	// Envelope: { "config": {...}, "panelUrl" }
+	if err := json.Unmarshal(body, &requestData); err == nil && len(requestData.Config) > 0 {
+		configBytes = requestData.Config
+		if requestData.PanelURL != "" {
+			panelURL := requestData.PanelURL
+			logger.Infof("Parsed request with panelUrl: %s", panelURL)
+			go try(func() {
+				if err := nodeConfig.SetPanelURL(panelURL); err != nil {
+					logger.Warningf("Failed to persist panel URL: %v", err)
+				}
+				nodeLogs.SetPanelURL(panelURL)
+				logger.Infof("Panel URL updated in log pusher: %s", panelURL)
+				// Startup geopush may have skipped with empty PANEL_URL; panel sends URL on first apply-config.
+				if s.pairing != nil {
+					hk := pairing_outbound.OutboundHMACKey(s.pairing.Payload.CACertPem, s.pairing.Payload.JWTPublicKey)
+					nodeAddr := nodeConfig.GetConfig().NodeAddress
+					if nodeAddr == "" {
+						nodeAddr = os.Getenv("NODE_ADDRESS")
+					}
+					if nodeAddr == "" {
+						nodeAddr = fmt.Sprintf("http://127.0.0.1:%d", s.port)
+					}
+					geopush.Run(panelURL, nodeAddr, hk)
+				}
+			})
+		}
 	} else {
-		// Old format: just JSON config, validate it
-		logger.Infof("Parsing as old format (no panelUrl)")
+		// Raw Xray JSON (no envelope)
+		logger.Infof("Parsing as raw Xray config (no envelope)")
 		var configJSON json.RawMessage
 		if err := json.Unmarshal(body, &configJSON); err != nil {
 			logger.Errorf("Invalid JSON: %v", err)
@@ -312,16 +346,40 @@ func (s *Server) applyConfig(c *gin.Context) {
 		}
 	}
 
+	cfgHash := sha256.Sum256(configBytes)
+	cfgHashHex := hex.EncodeToString(cfgHash[:])
+
 	logger.Infof("Applying XRAY configuration...")
-	if err := s.xrayManager.ApplyConfig(body); err != nil {
+	if err := s.xrayManager.ApplyConfig(configBytes); err != nil {
 		logger.Errorf("Failed to apply config: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
 
+	st := s.xrayManager.GetStatus()
+	appliedAt := time.Now().Unix()
+	resp := gin.H{
+		"message":        "Configuration applied successfully",
+		"appliedAt":      appliedAt,
+		"configSha256":   cfgHashHex,
+		"xrayVersion":    st["version"],
+		"xrayUptime":     st["uptime"],
+		"xrayRunning":    st["running"],
+	}
 	logger.Infof("Configuration applied successfully, sending response")
-	c.JSON(http.StatusOK, gin.H{"message": "Configuration applied successfully"})
+	c.JSON(http.StatusOK, resp)
 	logger.Infof("Apply config response sent")
+}
+
+// stopXray stops the Xray core process on this worker (panel "disable node").
+func (s *Server) stopXray(c *gin.Context) {
+	logger.Infof("stop-xray: stopping Xray core on worker")
+	if err := s.xrayManager.Stop(); err != nil {
+		logger.Errorf("stop-xray: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "XRAY stopped", "xrayRunning": false})
 }
 
 // reload reloads XRAY configuration.
@@ -362,6 +420,11 @@ func (s *Server) stats(c *gin.Context) {
 
 	stats, err := s.xrayManager.GetStats(reset)
 	if err != nil {
+		if errors.Is(err, xray.ErrXrayNotReady) {
+			logXrayNotReadyThrottled("stats")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": errCodeXrayNotReady})
+			return
+		}
 		logger.Errorf("Failed to get stats: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -370,6 +433,98 @@ func (s *Server) stats(c *gin.Context) {
 	logger.Debugf("Stats retrieved successfully, sending response")
 	c.JSON(http.StatusOK, stats)
 	logger.Debugf("Stats response sent")
+}
+
+// userOnlineSessions returns per-IP online data from Xray stats (user>>>email>>>online).
+func (s *Server) userOnlineSessions(c *gin.Context) {
+	email := strings.TrimSpace(c.Query("email"))
+	if email == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email query parameter is required"})
+		return
+	}
+	reset := c.DefaultQuery("reset", "false") == "true"
+	sessions, err := s.xrayManager.GetUserOnlineSessions(email, reset)
+	if err != nil {
+		if errors.Is(err, xray.ErrXrayNotReady) {
+			logXrayNotReadyThrottled("user-online-sessions")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": errCodeXrayNotReady})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"email":         email,
+		"sessions":      sessions,
+		"dropAvailable": s.xrayManager.ConntrackDropAvailable(),
+	})
+}
+
+type dropConnBody struct {
+	Emails []string `json:"emails"`
+	Email  string   `json:"email"`
+}
+
+// dropConnections drops kernel connections for one or more client emails (all IPs in their online map).
+func (s *Server) dropConnections(c *gin.Context) {
+	var body dropConnBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	emails := body.Emails
+	if body.Email != "" {
+		emails = append(emails, body.Email)
+	}
+	if len(emails) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "email or emails required"})
+		return
+	}
+	if !s.xrayManager.ConntrackDropAvailable() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": conndrop.ErrConntrackUnavailable.Error()})
+		return
+	}
+	var lastErr error
+	for _, e := range emails {
+		e = strings.TrimSpace(e)
+		if e == "" {
+			continue
+		}
+		if err := s.xrayManager.DropConnectionsByEmail(e); err != nil {
+			lastErr = err
+		}
+	}
+	if lastErr != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": lastErr.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
+}
+
+type dropIPsBody struct {
+	IPs []string `json:"ips"`
+}
+
+// dropIPs drops kernel connections for the given IPs (conntrack).
+func (s *Server) dropIPs(c *gin.Context) {
+	var body dropIPsBody
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(body.IPs) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "ips required"})
+		return
+	}
+	if !s.xrayManager.ConntrackDropAvailable() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": conndrop.ErrConntrackUnavailable.Error()})
+		return
+	}
+	if err := s.xrayManager.DropConnectionsByIPs(body.IPs); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"ok": true})
 }
 
 // getLogs returns XRAY access logs from the node.
@@ -386,6 +541,11 @@ func (s *Server) getLogs(c *gin.Context) {
 
 	logs, err := s.xrayManager.GetLogs(count, filter)
 	if err != nil {
+		if errors.Is(err, xray.ErrXrayNotReady) {
+			logXrayNotReadyThrottled("logs")
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": errCodeXrayNotReady})
+			return
+		}
 		logger.Errorf("Failed to get logs: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
@@ -409,132 +569,6 @@ func (s *Server) getServiceLogs(c *gin.Context) {
 	// Get logs from logger buffer
 	logs := logger.GetLogs(count, level)
 	c.JSON(http.StatusOK, gin.H{"logs": logs})
-}
-
-// register handles node registration from the panel.
-// This endpoint receives an API key from the panel and saves it persistently.
-// No authentication required - this is the initial setup step.
-func (s *Server) register(c *gin.Context) {
-	type RegisterRequest struct {
-		ApiKey      string `json:"apiKey"`             // Legacy: API key from panel; optional when JWT pairing is active
-		PanelURL    string `json:"panelUrl,omitempty"` // Panel URL (optional)
-		NodeAddress string `json:"nodeAddress,omitempty"`
-	}
-
-	var req RegisterRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		logger.Errorf("Registration failed: invalid request: %v", err)
-		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request: " + err.Error()})
-		return
-	}
-
-	if s.pairing != nil {
-		authHeader := c.GetHeader("Authorization")
-		if err := verifyBearerJWT(authHeader, s.pairing.JWTPublicKey); err != nil {
-			logger.Warningf("Registration rejected: invalid JWT: %v", err)
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Registration requires valid Bearer JWT (RS256)"})
-			return
-		}
-	} else if req.ApiKey == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "apiKey is required"})
-		return
-	}
-
-	logger.Infof("Registration request received: API key length=%d, PanelURL=%s, NodeAddress=%s",
-		len(req.ApiKey), req.PanelURL, req.NodeAddress)
-
-	// Check if node is already registered
-	logger.Infof("Checking if node is already registered...")
-	existingConfig := nodeConfig.GetConfig()
-	logger.Infof("Existing config check complete. API key present: %v", existingConfig.ApiKey != "")
-	if s.pairing != nil {
-		if existingConfig.PanelURL != "" {
-			logger.Warningf("Node pairing already completed (panel URL set). Rejecting registration")
-			c.JSON(http.StatusConflict, gin.H{
-				"error":   "Node is already registered",
-				"message": "Remove node-config.json or clear panelUrl to re-register",
-			})
-			return
-		}
-	} else if existingConfig.ApiKey != "" {
-		logger.Warningf("Node is already registered. Rejecting registration attempt to prevent overwriting existing API key")
-		c.JSON(http.StatusConflict, gin.H{
-			"error":   "Node is already registered. API key cannot be overwritten",
-			"message": "This node has already been registered. If you need to re-register, please remove the node-config.json file first",
-		})
-		return
-	}
-
-	if req.ApiKey != "" {
-		logger.Infof("Saving API key to config file...")
-		if err := nodeConfig.SetApiKey(req.ApiKey, false); err != nil {
-			logger.Errorf("Failed to save API key: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save API key: " + err.Error()})
-			return
-		}
-		logger.Infof("API key saved to config file")
-		s.apiKey = req.ApiKey
-		logger.Infof("API key updated in server")
-	}
-
-	// Save panel URL to config if provided
-	if req.PanelURL != "" {
-		logger.Infof("Saving panel URL to config: %s", req.PanelURL)
-		if err := nodeConfig.SetPanelURL(req.PanelURL); err != nil {
-			logger.Warningf("Failed to save panel URL: %v", err)
-		} else {
-			logger.Infof("Panel URL saved to config file")
-		}
-	}
-
-	// Save node address if provided
-	if req.NodeAddress != "" {
-		logger.Infof("Saving node address to config: %s", req.NodeAddress)
-		if err := nodeConfig.SetNodeAddress(req.NodeAddress); err != nil {
-			logger.Warningf("Failed to save node address: %v", err)
-		} else {
-			logger.Infof("Node address saved to config file")
-		}
-	}
-
-	logger.Infof("All registration steps completed, preparing response...")
-	logger.Infof("Node registered successfully with API key (length: %d)", len(req.ApiKey))
-	
-	// Send response immediately (before initializing pusher to avoid any blocking)
-	response := gin.H{
-		"message": "Node registered successfully",
-	}
-	if req.ApiKey != "" {
-		response["apiKey"] = req.ApiKey
-	}
-	logger.Infof("Sending registration response: %+v", response)
-	
-	// Use c.JSON to send response
-	c.JSON(http.StatusOK, response)
-	
-	// Flush response to ensure it's sent
-	if flusher, ok := c.Writer.(http.Flusher); ok {
-		flusher.Flush()
-	}
-	
-	logger.Infof("Registration response sent successfully")
-	
-	// Initialize/update log pusher with API key and panel URL AFTER sending response
-	// This ensures response is sent immediately without any blocking
-	logger.Infof("Starting log pusher initialization in background...")
-	go try(func() {
-		if req.ApiKey != "" {
-			nodeLogs.UpdateApiKey(req.ApiKey)
-			logger.Infof("Log pusher API key updated")
-		}
-		if req.PanelURL != "" {
-			nodeLogs.SetPanelURL(req.PanelURL)
-			logger.Infof("Log pusher enabled: sending logs to %s", req.PanelURL)
-		} else if req.ApiKey != "" {
-			logger.Infof("Log pusher API key set (panel URL will be set when config is applied)")
-		}
-	})
-	logger.Infof("Log pusher initialization started (non-blocking)")
 }
 
 // installXray installs or updates Xray to the specified version.

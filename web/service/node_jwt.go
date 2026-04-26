@@ -58,11 +58,8 @@ func (s *NodeService) signNodeJWT(_ *model.Node) (string, error) {
 	return t.SignedString(priv)
 }
 
-// bearerTokenForNode returns the Bearer token value (JWT for pairing mode, or legacy API key).
+// bearerTokenForNode returns the Bearer JWT for panel → node requests (pairing-only).
 func (s *NodeService) bearerTokenForNode(node *model.Node) (string, error) {
-	if !node.IsPairingMode() {
-		return node.ApiKey, nil
-	}
 	if node.Id == 0 {
 		return s.signNodeJWT(node)
 	}

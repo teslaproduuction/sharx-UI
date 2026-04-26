@@ -1,6 +1,6 @@
 "use client";
 
-import { Lock, RefreshCw, Smartphone } from "lucide-react";
+import { Lock, Smartphone } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { IconTile, Switch } from "@/components/ui";
@@ -80,11 +80,6 @@ export function AppSettingsEditor({ config, onChange }: Props) {
       {GROUPS.map((group) => (
         <section key={group.titleKey} className="flex flex-col gap-2">
           <div className="flex items-center gap-2">
-            <RefreshCw
-              size={14}
-              className="hidden text-[var(--fg-subtle)] sm:block"
-              aria-hidden
-            />
             <h4 className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--fg-subtle)]">
               {t(group.titleKey, { defaultValue: group.titleDefault })}
             </h4>

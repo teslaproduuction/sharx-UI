@@ -427,6 +427,7 @@ var ignoredPanelSettings = map[string]bool{
 	"timeLocation":                 true,
 	"twoFactorEnable":              true,
 	"twoFactorToken":               true,
+	"twoFactorTelegram":            true,
 	"subEnable":                    true,
 	"subJsonEnable":                true,
 	"subTitle":                     true,

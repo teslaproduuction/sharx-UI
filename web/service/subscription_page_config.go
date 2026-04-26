@@ -177,6 +177,7 @@ func parseAsV2WithMigration(raw string) (*SharxSubpageConfigV2, error) {
 	out.Branding.BrandText = v1.Branding.BrandText
 	out.Branding.SupportURL = v1.Branding.SupportURL
 	out.Theme = v1.Theme
+	out.ColorPreset = "web"
 	out.ShowQrCodes = v1.ShowQrCodes
 	out.Locales = v1.Locales
 	return out, nil
@@ -206,6 +207,9 @@ func enrichV2FromLegacySettings(cfg *SharxSubpageConfigV2) {
 		if v, err := ss.GetSubPageTheme(); err == nil {
 			cfg.Theme = v
 		}
+	}
+	if strings.TrimSpace(cfg.ColorPreset) == "" {
+		cfg.ColorPreset = "web"
 	}
 
 	if cfg.ResponseRules == nil {

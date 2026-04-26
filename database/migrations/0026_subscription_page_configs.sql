@@ -1,4 +1,4 @@
--- Subscription page builder configs (Remnawave subscription-page SPA compatibility)
+-- Subscription page builder configs (builder-driven SPA; external client compatibility)
 CREATE TABLE IF NOT EXISTS subscription_page_configs (
     uuid VARCHAR(36) PRIMARY KEY,
     view_position INT NOT NULL DEFAULT 0,

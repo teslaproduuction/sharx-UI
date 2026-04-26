@@ -8,7 +8,6 @@ import remarkGfm from "remark-gfm";
 import { useTranslation } from "react-i18next";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
-import { Spinner } from "@/components/ui";
 
 type TocItem = { id: string; text: string; level: number };
 
@@ -122,8 +121,14 @@ export function ApiDocsPage() {
       />
       <Surface padding="md">
         {loading ? (
-          <div className="grid min-h-[40vh] place-items-center">
-            <Spinner size={40} />
+          <div className="space-y-3 py-2" aria-hidden>
+            {Array.from({ length: 10 }, (_, i) => (
+              <div
+                key={i}
+                className="h-3 max-w-full rounded bg-[var(--surface)]/70 animate-pulse"
+                style={{ maxWidth: `${55 + (i % 5) * 8}%` }}
+              />
+            ))}
           </div>
         ) : error ? (
           <p className="text-sm text-[var(--fg-muted)]">

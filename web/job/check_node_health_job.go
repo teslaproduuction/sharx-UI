@@ -46,6 +46,9 @@ func (j *CheckNodeHealthJob) Run() {
 	// Use a wait group to wait for all health checks to complete
 	var wg sync.WaitGroup
 	for _, node := range nodes {
+		if !node.Enable {
+			continue
+		}
 		n := node // Capture loop variable
 		wg.Add(1)
 		go func() {

@@ -4,10 +4,16 @@ import { AlertCircle, Braces, CheckCircle2 } from "lucide-react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  getJsonTemplateFieldPath,
+  getJsonTemplateMonacoSchemaBundle,
+} from "@/lib/jsonTemplateMonacoSchemas";
+import {
   defaultJsonTemplates,
   type JsonTemplates,
   type SharxSubpageConfigV2,
 } from "@/lib/sharxSubpageConfig";
+import { MonacoJsonEditor } from "@/components/ui/MonacoJsonEditor";
+import type { MonacoJsonSchemaEntry } from "@/lib/monacoJson";
 
 type Props = {
   config: SharxSubpageConfigV2;
@@ -69,16 +75,27 @@ export function JsonTemplatesEditor({ config, onChange }: Props) {
   const set = (patch: Partial<JsonTemplates>) =>
     onChange({ ...config, jsonTemplates: { ...templates, ...patch } });
 
+  const templateSchemaBundle = useMemo(
+    () =>
+      getJsonTemplateMonacoSchemaBundle((key: FieldKey) => {
+        const f = FIELDS.find((x) => x.key === key)!;
+        return t(f.hintKey, { defaultValue: f.hintDefault });
+      }),
+    [t],
+  );
+
   return (
     <div className="flex flex-col gap-4">
       {FIELDS.map((f) => (
         <JsonField
           key={f.key}
+          fieldKey={f.key}
           label={t(f.labelKey, { defaultValue: f.labelDefault })}
           hint={t(f.hintKey, { defaultValue: f.hintDefault })}
           placeholder={f.placeholder}
           value={templates[f.key]}
           onChange={(v) => set({ [f.key]: v } as Partial<JsonTemplates>)}
+          schemaBundle={templateSchemaBundle}
         />
       ))}
     </div>
@@ -86,17 +103,21 @@ export function JsonTemplatesEditor({ config, onChange }: Props) {
 }
 
 function JsonField({
+  fieldKey,
   label,
   hint,
   placeholder,
   value,
   onChange,
+  schemaBundle,
 }: {
+  fieldKey: FieldKey;
   label: string;
   hint?: string;
   placeholder?: string;
   value: string;
   onChange: (next: string) => void;
+  schemaBundle: MonacoJsonSchemaEntry[];
 }) {
   const { t } = useTranslation();
   const trimmed = value.trim();
@@ -146,19 +167,24 @@ function JsonField({
         )}
       </div>
       <div
-        className={`rounded-xl border bg-[var(--bg-elevated)] transition-colors ${borderClass}`}
+        className={`min-h-[140px] overflow-hidden rounded-xl border transition-colors ${borderClass}`}
       >
-        <textarea
+        <MonacoJsonEditor
+          path={getJsonTemplateFieldPath(fieldKey)}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={placeholder}
-          spellCheck={false}
-          rows={5}
-          className="block w-full resize-y rounded-xl bg-transparent px-3 py-2 font-mono text-[12.5px] text-[var(--fg)] outline-none placeholder:text-[var(--fg-subtle)]"
+          onChange={onChange}
+          height={140}
+          readOnly={false}
+          schemaBundle={schemaBundle}
         />
       </div>
       {hint ? (
         <p className="text-[11px] text-[var(--fg-subtle)]">{hint}</p>
+      ) : null}
+      {placeholder ? (
+        <p className="text-[10px] text-[var(--fg-subtle)]/90">
+          <span className="font-medium text-[var(--fg-muted)]">JSON example:</span> {placeholder}
+        </p>
       ) : null}
       {validity.state === "invalid" && validity.error ? (
         <p className="text-[11px] text-[var(--danger)]">{validity.error}</p>

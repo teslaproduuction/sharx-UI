@@ -1,4 +1,4 @@
-/* Remna subscription-page inspired shell — scoped to /panel/sub only.
+/* Subscription page shell — scoped to /panel/sub only.
  *
  * Theming: all visible colors are controlled by CSS variables on `.root`,
  * which admins can override at runtime from the subscription builder
@@ -26,15 +26,119 @@
   position: relative;
   min-height: 100vh;
   color: var(--sub-fg);
+  /* Opaque only when admin sets branding.bgColor (see SubPageShell data-has-custom-bg). */
   background-color: var(--sub-bg);
-  background-image:
-    linear-gradient(to right, rgba(128, 128, 128, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(128, 128, 128, 0.05) 1px, transparent 1px);
-  background-size: 60px 60px;
-  background-attachment: fixed;
 }
 
-/* Light theme override — activated via data-theme="light" on .root */
+.root:not([data-has-custom-bg="true"]):not([data-theme="light"]) {
+  background-color: transparent;
+}
+
+/* Panel-aligned palettes (see `lib/subPageColorPreset.ts`). Default in config: `web` = SharX Web. */
+.root[data-color-preset="default"] {
+  --sub-bg: #0d1117;
+  --sub-bg-elevated: #1c2128;
+  --sub-fg: #c9d1d9;
+  --sub-fg-strong: #f0f6fc;
+  --sub-fg-muted: #8b949e;
+  --sub-fg-subtle: rgba(201, 209, 217, 0.55);
+  --sub-border: rgba(139, 148, 158, 0.15);
+  --sub-border-soft: rgba(139, 148, 158, 0.08);
+  --sub-surface: rgba(36, 44, 56, 0.55);
+  --sub-surface-strong: rgba(36, 44, 56, 0.85);
+  --sub-accent: #22d3ee;
+  --sub-accent-ambient: #9775fa;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+.root[data-color-preset="midnight"] {
+  --sub-bg: #0a1628;
+  --sub-bg-elevated: #0f1f35;
+  --sub-fg: #e2e8f0;
+  --sub-fg-strong: #f8fafc;
+  --sub-fg-muted: #94a3b8;
+  --sub-fg-subtle: rgba(226, 232, 240, 0.52);
+  --sub-border: rgba(148, 163, 184, 0.14);
+  --sub-border-soft: rgba(148, 163, 184, 0.08);
+  --sub-surface: rgba(30, 41, 59, 0.5);
+  --sub-surface-strong: rgba(30, 41, 59, 0.82);
+  --sub-accent: #60a5fa;
+  --sub-accent-ambient: #818cf8;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+.root[data-color-preset="ember"] {
+  --sub-bg: #140f0c;
+  --sub-bg-elevated: #1f1814;
+  --sub-fg: #e8e0da;
+  --sub-fg-strong: #faf6f3;
+  --sub-fg-muted: #b9a99a;
+  --sub-fg-subtle: rgba(232, 224, 218, 0.52);
+  --sub-border: rgba(214, 180, 150, 0.12);
+  --sub-border-soft: rgba(214, 180, 150, 0.06);
+  --sub-surface: rgba(55, 42, 36, 0.55);
+  --sub-surface-strong: rgba(55, 42, 36, 0.85);
+  --sub-accent: #f59e0b;
+  --sub-accent-ambient: #f472b6;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+.root[data-color-preset="boreal"] {
+  --sub-bg: #0a1412;
+  --sub-bg-elevated: #122620;
+  --sub-fg: #d8ebe6;
+  --sub-fg-strong: #f0faf7;
+  --sub-fg-muted: #8eb5aa;
+  --sub-fg-subtle: rgba(216, 235, 230, 0.52);
+  --sub-border: rgba(134, 180, 168, 0.14);
+  --sub-border-soft: rgba(134, 180, 168, 0.07);
+  --sub-surface: rgba(32, 58, 52, 0.5);
+  --sub-surface-strong: rgba(32, 58, 52, 0.84);
+  --sub-accent: #14b8a6;
+  --sub-accent-ambient: #22c55e;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+.root[data-color-preset="web"] {
+  --sub-bg: #05060a;
+  --sub-bg-elevated: #0c0f18;
+  --sub-fg: #f5f7fb;
+  --sub-fg-strong: #ffffff;
+  --sub-fg-muted: rgba(245, 247, 251, 0.66);
+  --sub-fg-subtle: rgba(245, 247, 251, 0.44);
+  --sub-border: rgba(255, 255, 255, 0.1);
+  --sub-border-soft: rgba(255, 255, 255, 0.05);
+  --sub-surface: rgba(255, 255, 255, 0.04);
+  --sub-surface-strong: rgba(255, 255, 255, 0.08);
+  --sub-accent: #8577f2;
+  --sub-accent-ambient: #6c52c7;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+.root[data-color-preset="xuiClassic"] {
+  --sub-bg: #0a1222;
+  --sub-bg-elevated: #151f31;
+  --sub-fg: rgba(255, 255, 255, 0.88);
+  --sub-fg-strong: #ffffff;
+  --sub-fg-muted: #8b9cbb;
+  --sub-fg-subtle: rgba(255, 255, 255, 0.48);
+  --sub-border: rgba(44, 57, 80, 0.45);
+  --sub-border-soft: rgba(44, 57, 80, 0.22);
+  --sub-surface: rgba(34, 45, 66, 0.52);
+  --sub-surface-strong: rgba(34, 45, 66, 0.84);
+  --sub-accent: #008771;
+  --sub-accent-ambient: #3ad3ba;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 14%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent);
+}
+
+/* Light theme override — activated via data-theme="light" on .root
+ * Placed after color-preset rules so it wins same-specificity; replaces dark patterns. */
 .root[data-theme="light"] {
   --sub-bg: #f6f8fa;
   --sub-bg-elevated: #ffffff;
@@ -46,6 +150,11 @@
   --sub-border-soft: rgba(31, 35, 40, 0.08);
   --sub-surface: rgba(255, 255, 255, 0.85);
   --sub-surface-strong: rgba(246, 248, 250, 0.9);
+
+  background-color: var(--sub-bg);
+  background-image: linear-gradient(180deg, rgba(31, 35, 40, 0.06) 0%, transparent 38%);
+  background-size: 100% 100%;
+  background-attachment: fixed;
 }
 
 .animatedBg {
@@ -53,9 +162,58 @@
   inset: 0;
   pointer-events: none;
   z-index: 0;
+}
+
+/* Global `html` already paints palette + haze; skip duplicate orbs when shell is transparent. */
+.root:not([data-has-custom-bg="true"]):not([data-theme="light"]) .animatedBg {
+  display: none;
+}
+
+/* Atmosphere: default palette — matches global doc-style look */
+.root[data-color-preset="default"] .animatedBg {
   background:
     radial-gradient(ellipse 60% 40% at 25% 40%, var(--sub-accent-ambient-soft), transparent 50%),
     radial-gradient(ellipse 50% 50% at 85% 85%, var(--sub-accent-soft), transparent 50%);
+}
+
+.root[data-color-preset="midnight"] .animatedBg {
+  background:
+    radial-gradient(ellipse 70% 45% at 10% 25%, color-mix(in oklab, var(--sub-accent) 18%, transparent), transparent 48%),
+    radial-gradient(ellipse 55% 50% at 95% 15%, color-mix(in oklab, var(--sub-accent-ambient) 14%, transparent), transparent 50%),
+    radial-gradient(ellipse 45% 40% at 60% 95%, var(--sub-accent-soft), transparent 52%);
+}
+
+.root[data-color-preset="ember"] .animatedBg {
+  background:
+    radial-gradient(ellipse 80% 55% at 50% 100%, color-mix(in oklab, var(--sub-accent) 24%, transparent), transparent 50%),
+    radial-gradient(ellipse 50% 40% at 20% 30%, color-mix(in oklab, var(--sub-accent-ambient) 10%, transparent), transparent 50%),
+    radial-gradient(ellipse 40% 35% at 90% 60%, var(--sub-accent-ambient-soft), transparent 55%);
+}
+
+.root[data-color-preset="boreal"] .animatedBg {
+  background:
+    radial-gradient(ellipse 65% 50% at 15% 45%, color-mix(in oklab, var(--sub-accent) 16%, transparent), transparent 50%),
+    radial-gradient(ellipse 55% 45% at 85% 25%, color-mix(in oklab, var(--sub-accent-ambient) 12%, transparent), transparent 50%),
+    radial-gradient(ellipse 50% 50% at 50% 90%, var(--sub-accent-ambient-soft), transparent 48%);
+}
+
+.root[data-color-preset="web"] .animatedBg {
+  background:
+    radial-gradient(ellipse 55% 40% at 20% 35%, color-mix(in oklab, var(--sub-accent) 20%, transparent), transparent 50%),
+    radial-gradient(ellipse 70% 50% at 100% 50%, color-mix(in oklab, var(--sub-accent-ambient) 16%, transparent), transparent 50%),
+    radial-gradient(ellipse 45% 45% at 30% 90%, var(--sub-accent-soft), transparent 52%);
+}
+
+.root[data-color-preset="xuiClassic"] .animatedBg {
+  background:
+    radial-gradient(ellipse 58% 42% at 18% 32%, color-mix(in oklab, var(--sub-accent) 16%, transparent), transparent 48%),
+    radial-gradient(ellipse 52% 48% at 92% 22%, color-mix(in oklab, var(--sub-accent-ambient) 10%, transparent), transparent 50%),
+    radial-gradient(ellipse 46% 42% at 52% 91%, var(--sub-accent-soft), transparent 52%);
+}
+
+/* Light: soften ambient layer so dark-theme patterns do not fight the pale shell */
+.root[data-theme="light"] .animatedBg {
+  opacity: 0.38;
 }
 
 .content {
@@ -228,6 +386,115 @@
   background: linear-gradient(135deg, rgba(151, 117, 250, 0.15) 0%, rgba(132, 94, 247, 0.06) 100%);
   border: 1px solid rgba(151, 117, 250, 0.22);
   color: var(--sub-accent-ambient);
+}
+
+/* Metric badge nuance per palette (default + named: keep base classes above) */
+.root[data-color-preset="midnight"] .metricIconBlue {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent) 6%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 30%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="midnight"] .metricIconCyan {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 28%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="midnight"] .metricIconViolet {
+  background: linear-gradient(135deg, var(--sub-accent-ambient-soft) 0%, color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent-ambient) 28%, transparent);
+  color: var(--sub-accent-ambient);
+}
+
+.root[data-color-preset="midnight"] .metricIconGreen {
+  border: 1px solid color-mix(in oklab, var(--sub-success) 35%, transparent);
+}
+
+.root[data-color-preset="midnight"] .metricIconOrange {
+  border: 1px solid color-mix(in oklab, #fbbf24 35%, transparent);
+}
+
+.root[data-color-preset="midnight"] .metricIconRed {
+  border: 1px solid color-mix(in oklab, var(--sub-danger) 35%, transparent);
+}
+
+.root[data-color-preset="ember"] .metricIconCyan {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent) 10%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 32%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="ember"] .metricIconViolet {
+  background: linear-gradient(135deg, var(--sub-accent-ambient-soft) 0%, color-mix(in oklab, var(--sub-accent-ambient) 10%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent-ambient) 30%, transparent);
+  color: var(--sub-accent-ambient);
+}
+
+.root[data-color-preset="ember"] .metricIconBlue {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--sub-accent) 16%, transparent) 0%, color-mix(in oklab, var(--sub-accent) 5%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 26%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="ember"] .metricIconOrange {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--sub-accent) 22%, transparent) 0%, color-mix(in oklab, var(--sub-accent) 6%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 30%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="boreal"] .metricIconCyan {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 28%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="boreal"] .metricIconViolet {
+  background: linear-gradient(135deg, var(--sub-accent-ambient-soft) 0%, color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent-ambient) 28%, transparent);
+  color: var(--sub-accent-ambient);
+}
+
+.root[data-color-preset="boreal"] .metricIconGreen {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--sub-success) 22%, transparent) 0%, color-mix(in oklab, var(--sub-success) 6%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-success) 32%, transparent);
+  color: var(--sub-success);
+}
+
+.root[data-color-preset="web"] .metricIconCyan {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 30%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="web"] .metricIconViolet {
+  background: linear-gradient(135deg, var(--sub-accent-ambient-soft) 0%, color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent-ambient) 30%, transparent);
+  color: var(--sub-accent-ambient);
+}
+
+.root[data-color-preset="web"] .metricIconBlue {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--sub-accent) 18%, transparent) 0%, color-mix(in oklab, var(--sub-accent-ambient) 6%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 28%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="xuiClassic"] .metricIconCyan {
+  background: linear-gradient(135deg, var(--sub-accent-soft) 0%, color-mix(in oklab, var(--sub-accent-ambient) 8%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent-ambient) 28%, transparent);
+  color: var(--sub-accent-ambient);
+}
+
+.root[data-color-preset="xuiClassic"] .metricIconViolet {
+  background: linear-gradient(135deg, var(--sub-accent-ambient-soft) 0%, color-mix(in oklab, var(--sub-accent) 6%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 26%, transparent);
+  color: var(--sub-accent);
+}
+
+.root[data-color-preset="xuiClassic"] .metricIconBlue {
+  background: linear-gradient(135deg, color-mix(in oklab, var(--sub-accent) 16%, transparent) 0%, color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent) 100%);
+  border: 1px solid color-mix(in oklab, var(--sub-accent) 26%, transparent);
+  color: var(--sub-accent);
 }
 
 .metricLabel {

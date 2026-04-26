@@ -1,20 +1,24 @@
 "use client";
 
 import { KeyRound, Lock, Settings, User } from "lucide-react";
+import { motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { api, postJson } from "@/lib/api";
 import { changeLanguage, supported } from "@/lib/i18n";
+import { easeStandard, durations } from "@/lib/motion";
 import { p } from "@/lib/paths";
 import { Button, Input, SelectNative, Spinner, useToast } from "@/components/ui";
-import { Surface } from "@/components/panel";
+import { PanelHeaderAppMeta, PanelTelegramNavLink, Surface } from "@/components/panel";
 
 export default function LoginPage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
+  const reduceMotion = useReducedMotion();
   const [form, setForm] = useState({ username: "", password: "", twoFactorCode: "" });
   const [ready, setReady] = useState(false);
   const [two, setTwo] = useState(false);
+  const [awaiting2FA, setAwaiting2FA] = useState(false);
   const [loading, setLoading] = useState(false);
   const [langOpen, setLangOpen] = useState(false);
 
@@ -28,8 +32,16 @@ export default function LoginPage() {
     })().catch(() => setReady(true));
   }, []);
 
+  useEffect(() => {
+    setAwaiting2FA(false);
+  }, [form.username, form.password]);
+
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (two && awaiting2FA && !form.twoFactorCode.trim()) {
+      toast.error(t("pages.login.toasts.needTwoFactor"));
+      return;
+    }
     setLoading(true);
     try {
       const v = { ...form };
@@ -40,6 +52,16 @@ export default function LoginPage() {
           sessionStorage.setItem("showWhatsNew", "true");
           window.location.href = p("panel/");
         }
+        return;
+      }
+      const obj = res.obj as { needTwoFactor?: boolean; telegramSent?: boolean } | undefined;
+      if (obj?.needTwoFactor) {
+        if (obj.telegramSent) {
+          toast.success(t("pages.login.toasts.twoFactorTelegramSent"));
+        } else {
+          toast.info(res.msg || t("pages.login.toasts.needTwoFactor"));
+        }
+        setAwaiting2FA(true);
         return;
       }
       toast.error(res.msg || t("pages.login.toasts.wrongUsernameOrPassword"));
@@ -53,20 +75,24 @@ export default function LoginPage() {
   if (!ready) {
     return (
       <div
-        className="grid min-h-dvh place-items-center"
-        style={{ background: "var(--bg)" }}
+        className="relative grid min-h-dvh place-items-center overflow-hidden"
+        style={{ color: "var(--fg)" }}
       >
-        <Spinner size={40} />
+        <div className="login-backdrop" aria-hidden />
+        <div className="relative z-10">
+          <Spinner size={40} />
+        </div>
       </div>
     );
   }
 
   return (
     <div
-      className="flex min-h-dvh flex-col"
-      style={{ background: "var(--bg)", color: "var(--fg)" }}
+      className="relative flex min-h-dvh flex-col overflow-hidden"
+      style={{ color: "var(--fg)" }}
     >
-      <header className="panel-navbar">
+      <div className="login-backdrop" aria-hidden />
+      <header className="relative z-10 panel-navbar">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-3 px-4 py-3 sm:px-6 lg:px-8">
           <div className="panel-navbar-brand min-w-0">
             <span className="font-heading block text-base font-bold tracking-[-0.5px] text-white">SharX</span>
@@ -74,6 +100,9 @@ export default function LoginPage() {
               Panel
             </span>
           </div>
+          <div className="flex items-center gap-2 sm:gap-3">
+            <PanelTelegramNavLink />
+            <PanelHeaderAppMeta variant="login" />
           <div className="relative">
             <Button
               variant="ghost"
@@ -112,10 +141,19 @@ export default function LoginPage() {
               </>
             )}
           </div>
+          </div>
         </div>
       </header>
-      <div className="flex flex-1 items-center justify-center px-4 pb-20 sm:px-6 lg:px-8">
-        <div className="w-full max-w-md">
+      <div className="relative z-10 flex flex-1 items-center justify-center px-4 pb-20 sm:px-6 lg:px-8">
+        <motion.div
+          className="w-full max-w-md"
+          initial={reduceMotion ? false : { opacity: 0, y: 16 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{
+            duration: durations.slow,
+            ease: easeStandard,
+          }}
+        >
           <h1 className="font-heading mb-2 text-center text-3xl font-semibold tracking-tight text-[var(--fg)]">
             {t("pages.login.hello")}
           </h1>
@@ -167,7 +205,7 @@ export default function LoginPage() {
                   />
                 </div>
               </div>
-              {two && (
+              {two ? (
                 <div>
                   <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="t">
                     {t("twoFactorCode")}
@@ -186,11 +224,11 @@ export default function LoginPage() {
                       placeholder={t("twoFactorCode")}
                       value={form.twoFactorCode}
                       onChange={(e) => setForm((f) => ({ ...f, twoFactorCode: e.target.value }))}
-                      required
+                      required={awaiting2FA}
                     />
                   </div>
                 </div>
-              )}
+              ) : null}
               <Button
                 type="submit"
                 variant="primary"
@@ -201,7 +239,7 @@ export default function LoginPage() {
               </Button>
             </form>
           </Surface>
-        </div>
+        </motion.div>
       </div>
     </div>
   );

@@ -19,3 +19,4 @@ export { Skeleton } from "./skeleton";
 export { Reveal, Stagger, StaggerItem } from "./reveal";
 export { Switch } from "./switch";
 export { Collapsible } from "./collapsible";
+export { MonacoJsonEditor } from "./MonacoJsonEditor";

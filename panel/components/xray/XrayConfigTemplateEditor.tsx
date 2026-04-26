@@ -1,6 +1,5 @@
 "use client";
 
-import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
   forwardRef,
@@ -21,14 +20,18 @@ import {
   isTemplateJsonValid,
   mergeSectionIntoTemplate,
 } from "@/lib/xrayTemplateSlice";
-import { p } from "@/lib/paths";
+import { linkP } from "@/lib/paths";
+import {
+  buildXrayTemplateStepperItems,
+  getActiveStepId,
+  getNavIdForStep,
+} from "@/lib/xrayTemplateStepper";
 import { Surface } from "@/components/panel";
 import { XrayTemplateNav, type XrayTemplateNavId } from "@/components/XrayTemplateNav";
-import { Spinner, useToast } from "@/components/ui";
+import { Stepper, useToast } from "@/components/ui";
 import { sectionButtonLabel } from "@/components/xray/sectionButtonLabel";
 import { SimpleCoreForm } from "@/components/xray/SimpleCoreForm";
-
-const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
+import { XrayTemplateSectionContent } from "@/components/xray/XrayTemplateSectionContent";
 
 type SectionKey = "full" | string;
 
@@ -80,7 +83,7 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
         setSectionDraft("{}");
         setSectionParseError(t("pages.xrayCoreConfigProfiles.invalidJson"));
       }
-    }, [sectionKey, dataEpoch, loading, t]);
+    }, [sectionKey, dataEpoch, loading, t, template]);
 
     const templateOk = useMemo(() => isTemplateJsonValid(template), [template]);
 
@@ -96,6 +99,16 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
         return [];
       }
     }, [template]);
+
+    const { steps: xrayStepperItems, grouped: xrayGrouped, otherKeys: xrayOtherKeys } = useMemo(
+      () => buildXrayTemplateStepperItems(t, sectionKeys),
+      [t, sectionKeys],
+    );
+
+    const xrayActiveStepId = useMemo(
+      () => getActiveStepId(navId, xrayGrouped, xrayOtherKeys),
+      [navId, xrayGrouped, xrayOtherKeys],
+    );
 
     const navigateTemplateNav = useCallback(
       (next: XrayTemplateNavId) => {
@@ -151,6 +164,19 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
       [template, onTemplateChange, t, toast],
     );
 
+    const applySection = useCallback(
+      (sectionJson: string) => {
+        setSectionDraft(sectionJson);
+        try {
+          onTemplateChange(mergeSectionIntoTemplate(template, String(sectionKey), sectionJson));
+          setSectionParseError(null);
+        } catch {
+          setSectionParseError(t("pages.xrayCoreConfigProfiles.invalidJson"));
+        }
+      },
+      [sectionKey, template, onTemplateChange, t],
+    );
+
     const codeValue = useMemo(() => {
       if (sectionKey === "full") return template;
       return sectionDraft;
@@ -187,6 +213,20 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
       <>
         {!loading && !templateOk && navId !== "full" ? (
           <p className="text-sm text-rose-300">{t("pages.xrayCoreConfigProfiles.invalidJson")}</p>
+        ) : null}
+
+        {!loading ? (
+          <div className="mb-2 overflow-x-auto">
+            <Stepper
+              steps={xrayStepperItems}
+              activeId={xrayActiveStepId}
+              allowJump={!readOnly && templateOk}
+              onSelect={(id) => {
+                const nextNav = getNavIdForStep(id, xrayGrouped, xrayOtherKeys);
+                navigateTemplateNav(nextNav);
+              }}
+            />
+          </div>
         ) : null}
 
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start">
@@ -227,7 +267,7 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
                         "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound.",
                     })}{" "}
                     <Link
-                      href={p("panel/inbounds")}
+                      href={linkP("panel/inbounds")}
                       className="text-[var(--accent)] underline-offset-2 hover:underline"
                     >
                       {t("menu.inbounds", { defaultValue: "Inbounds" })}
@@ -245,33 +285,19 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
             ) : null}
 
             <Surface padding="sm" className="overflow-x-auto">
-              {loading ? (
-                <div className="grid min-h-[50vh] place-items-center">
-                  <Spinner size={40} />
-                </div>
-              ) : showGeneralUi ? (
-                <p className="px-1 py-2 text-xs text-[var(--fg-muted)]">
-                  {t("pages.xray.simpleJsonFooter", {
-                    defaultValue:
-                      "Use the menu to open routing (balancers), DNS, or the full JSON template.",
-                  })}
-                </p>
-              ) : (
-                <div className="min-h-[50vh] overflow-hidden rounded-xl border border-[var(--border)]">
-                  <Editor
-                    height="70vh"
-                    defaultLanguage="json"
-                    theme="vs-dark"
-                    value={codeValue}
-                    onChange={readOnly ? () => undefined : handleCodeChange}
-                    options={{
-                      readOnly,
-                      minimap: { enabled: false },
-                      scrollBeyondLastLine: false,
-                    }}
-                  />
-                </div>
-              )}
+              <XrayTemplateSectionContent
+                navId={navId}
+                sectionDraft={sectionDraft}
+                applySection={applySection}
+                handleCodeChange={handleCodeChange}
+                codeValue={codeValue}
+                templateOk={templateOk}
+                loading={loading}
+                readOnly={readOnly}
+                showGeneralUi={showGeneralUi}
+                syncKey={syncKey}
+                t={t}
+              />
             </Surface>
           </div>
         </div>

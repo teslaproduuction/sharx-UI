@@ -3,6 +3,10 @@
 import { useTranslation } from "react-i18next";
 import { Input, SelectNative } from "@/components/ui";
 import type { SharxBranding, SharxSubpageConfigV2 } from "@/lib/sharxSubpageConfig";
+import {
+  SUB_PAGE_COLOR_PRESET_IDS,
+  type SubPageColorPresetId,
+} from "@/lib/subPageColorPreset";
 
 type Props = {
   config: SharxSubpageConfigV2;
@@ -140,6 +144,29 @@ export function BrandingEditor({ config, onChange }: Props) {
             <option value="light">
               {t("subBuilder.branding.themeLight", { defaultValue: "Light" })}
             </option>
+          </SelectNative>
+        </Field>
+        <Field
+          label={t("subBuilder.branding.colorPreset", { defaultValue: "Color palette" })}
+          hint={t("subBuilder.branding.colorPresetHint", {
+            defaultValue:
+              "Same presets as the panel appearance. Applies to dark style; light mode keeps the standard light shell.",
+          })}
+        >
+          <SelectNative
+            value={config.colorPreset}
+            onChange={(e) =>
+              onChange({
+                ...config,
+                colorPreset: e.target.value as SubPageColorPresetId,
+              })
+            }
+          >
+            {SUB_PAGE_COLOR_PRESET_IDS.map((id) => (
+              <option key={id} value={id}>
+                {t(`pages.settings.panelThemePreset.${id}`)}
+              </option>
+            ))}
           </SelectNative>
         </Field>
       </div>

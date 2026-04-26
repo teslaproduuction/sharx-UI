@@ -49,24 +49,25 @@ func FirstPartySubPageURL(settingService SettingService, subID, requestHost stri
 	return scheme + "://" + hostPart + path
 }
 
-// SubscriptionURLsForClient builds plain and JSON subscription URLs for a client's subId.
-// Uses configured subURI / subJsonURI when set; otherwise derives host from requestHost
-// (panel Host header) and subPort/subPath from settings (same idea as SettingService all-settings).
-// The plain URL is always overridden to the first-party subscription page when it can be resolved.
-func SubscriptionURLsForClient(settingService SettingService, subID string, requestHost string, requestTLS bool) (plain string, jsonLink string) {
+// SubscriptionURLsForClient builds feed URL (raw subscription endpoint for VPN apps),
+// JSON subscription URL, and optional first-party HTML subscription page URL.
+//
+// feedURL must be used in clients (SharX Connect, Happ, etc.) that HTTP-fetch the subscription.
+// pageURL is the static /panel/sub/ page for browsers; when unset in config it equals feedURL.
+func SubscriptionURLsForClient(settingService SettingService, subID string, requestHost string, requestTLS bool) (feedURL string, jsonLink string, pageURL string) {
 	if subID == "" {
-		return "", ""
+		return "", "", ""
 	}
 	subURI, _ := settingService.GetSubURI()
 	subJsonURI, _ := settingService.GetSubJsonURI()
 	if subURI != "" {
-		plain = strings.TrimRight(subURI, "/") + "/" + subID
+		feedURL = strings.TrimRight(subURI, "/") + "/" + subID
 	}
 	if subJsonURI != "" {
 		jsonLink = strings.TrimRight(subJsonURI, "/") + "/" + subID
 	}
 
-	if plain == "" || jsonLink == "" {
+	if feedURL == "" || jsonLink == "" {
 		subPort, _ := settingService.GetSubPort()
 		subPath, _ := settingService.GetSubPath()
 		jsonPath, _ := settingService.GetSubJsonPath()
@@ -92,8 +93,8 @@ func SubscriptionURLsForClient(settingService SettingService, subID string, requ
 			} else {
 				base += fmt.Sprintf("%s:%d", host, subPort)
 			}
-			if plain == "" {
-				plain = strings.TrimRight(base+subPath, "/") + "/" + subID
+			if feedURL == "" {
+				feedURL = strings.TrimRight(base+subPath, "/") + "/" + subID
 			}
 			jsonEnable, _ := settingService.GetSubJsonEnable()
 			if jsonLink == "" && jsonEnable {
@@ -102,10 +103,11 @@ func SubscriptionURLsForClient(settingService SettingService, subID string, requ
 		}
 	}
 
+	pageURL = feedURL
 	if u := FirstPartySubPageURL(settingService, subID, requestHost, requestTLS); u != "" {
-		plain = u
+		pageURL = u
 	}
-	return plain, jsonLink
+	return feedURL, jsonLink, pageURL
 }
 
 // ClientToCardView maps a loaded ClientEntity (with InboundIds, HWIDs) to ClientCardView.
@@ -140,7 +142,12 @@ func (s *ClientService) ClientToCardView(client *model.ClientEntity, inboundServ
 	}
 	if fillSubscription && client.SubID != "" {
 		settingService := SettingService{}
-		view.SubscriptionURL, view.SubscriptionJsonURL = SubscriptionURLsForClient(settingService, client.SubID, requestHost, requestTLS)
+		feed, j, page := SubscriptionURLsForClient(settingService, client.SubID, requestHost, requestTLS)
+		view.SubscriptionURL = feed
+		view.SubscriptionJsonURL = j
+		if page != "" && page != feed {
+			view.SubscriptionPageURL = page
+		}
 	}
 	return view, nil
 }

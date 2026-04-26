@@ -67,6 +67,12 @@ func registerPublicSubscriptionRoutes(g *gin.RouterGroup, ss *service.SettingSer
 	pub := g.Group("/panel/api/public")
 	pub.Use(publicSubscriptionRateLimit())
 	pub.GET("/subscription", publicSubscriptionGet(ss))
+	pub.GET("/appMeta", publicAppMeta)
+}
+
+func publicAppMeta(c *gin.Context) {
+	meta := service.GetPublicAppMeta()
+	jsonObj(c, meta, nil)
 }
 
 func hostForSubsHook(reqHost string) string {
@@ -124,7 +130,7 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 			}
 		}
 		tls := scheme == "https"
-		plainURL, jsonURL := service.SubscriptionURLsForClient(*ss, subID, c.Request.Host, tls)
+		feedURL, jsonURL, pageURL := service.SubscriptionURLsForClient(*ss, subID, c.Request.Host, tls)
 
 		nowMs := time.Now().UnixMilli()
 		totalLimit := int64(client.TotalGB * 1024 * 1024 * 1024)
@@ -167,26 +173,39 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 			cfgParsed = cfgRow.ConfigJSON
 		}
 
+		var vpnOnline bool
+		inboundSvc := service.InboundService{}
+		for _, e := range inboundSvc.GetOnlineClients() {
+			if strings.EqualFold(strings.TrimSpace(e), client.Email) {
+				vpnOnline = true
+				break
+			}
+		}
+
 		out := gin.H{
 			"config":              cfgParsed,
 			"configUuid":          cfgRow.UUID,
-			"subscriptionUrl":     plainURL,
+			"subscriptionUrl":     feedURL,
 			"subscriptionJsonUrl": jsonURL,
 			"links":               subs,
 			"user": gin.H{
-				"shortUuid":           subID,
-				"username":            client.Email,
-				"daysLeft":            daysLeft,
-				"trafficUsed":         common.FormatTraffic(client.Up + client.Down),
-				"trafficLimit":        trafficLimitStr,
-				"lifetimeTrafficUsed": common.FormatTraffic(client.AllTime),
-				"trafficUsedBytes":    strconv.FormatInt(client.Up+client.Down, 10),
-				"trafficLimitBytes":   strconv.FormatInt(totalLimit, 10),
+				"shortUuid":                subID,
+				"username":                 client.Email,
+				"daysLeft":                 daysLeft,
+				"trafficUsed":              common.FormatTraffic(client.Up + client.Down),
+				"trafficLimit":             trafficLimitStr,
+				"lifetimeTrafficUsed":      common.FormatTraffic(client.AllTime),
+				"trafficUsedBytes":         strconv.FormatInt(client.Up+client.Down, 10),
+				"trafficLimitBytes":        strconv.FormatInt(totalLimit, 10),
 				"lifetimeTrafficUsedBytes": strconv.FormatInt(client.AllTime, 10),
-				"expiresAt":           expiresAt,
-				"isActive":            isActive,
-				"userStatus":          userStatus,
+				"expiresAt":                expiresAt,
+				"isActive":                 isActive,
+				"userStatus":               userStatus,
+				"isOnline":                 vpnOnline,
 			},
+		}
+		if pageURL != "" && pageURL != feedURL {
+			out["subscriptionPageUrl"] = pageURL
 		}
 
 		c.JSON(http.StatusOK, gin.H{"success": true, "obj": out})

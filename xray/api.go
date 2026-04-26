@@ -467,3 +467,34 @@ func mapToSlice[T any](m map[string]*T) []*T {
 	}
 	return result
 }
+
+// OnlineIPSession is one client IP tracked by Xray policy statsUserOnline (user>>>email>>>online).
+type OnlineIPSession struct {
+	IP       string `json:"ip"`
+	LastSeen int64  `json:"lastSeen"` // Unix seconds (from Xray online map)
+}
+
+// GetUserOnlineIPList returns IP -> last-seen unix time for the given client email via gRPC GetStatsOnlineIpList.
+func (x *XrayAPI) GetUserOnlineIPList(ctx context.Context, email string, reset bool) ([]OnlineIPSession, error) {
+	if x.grpcClient == nil || x.StatsServiceClient == nil {
+		return nil, common.NewError("xray api is not initialized")
+	}
+	statName := "user>>>" + email + ">>>online"
+	req := &statsService.GetStatsRequest{
+		Name:   statName,
+		Reset_: reset,
+	}
+	resp, err := (*x.StatsServiceClient).GetStatsOnlineIpList(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	ips := resp.GetIps()
+	if len(ips) == 0 {
+		return nil, nil
+	}
+	out := make([]OnlineIPSession, 0, len(ips))
+	for ip, ts := range ips {
+		out = append(out, OnlineIPSession{IP: ip, LastSeen: ts})
+	}
+	return out, nil
+}

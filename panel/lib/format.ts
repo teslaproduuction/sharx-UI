@@ -30,4 +30,15 @@ export function formatSecond(s: number): string {
   return parts.join(" ");
 }
 
+/**
+ * Go/GORM often serializes `createdAt` / `updatedAt` as Unix seconds; other fields may be ms.
+ * Values under 1e12 are treated as seconds and converted to ms for `Date`.
+ */
+export function panelTimestampToMs(t: number | undefined | null): number | undefined {
+  if (t == null || t === 0) return undefined;
+  if (!Number.isFinite(t)) return undefined;
+  if (t > 0 && t < 1_000_000_000_000) return Math.round(t * 1000);
+  return t;
+}
+
 export { ONE_GB };

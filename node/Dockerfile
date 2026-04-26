@@ -3,6 +3,8 @@ FROM golang:1.26-alpine AS builder
 
 WORKDIR /build
 ARG BUILDKIT_INLINE_CACHE=1
+# Set by `docker buildx build --platform` (do not use ARG TARGETARCH=amd64: it blocks the auto value).
+ARG TARGETARCH
 
 # Install build dependencies
 RUN apk --no-cache add curl unzip
@@ -20,73 +22,24 @@ COPY . .
 # Build node service with cache mounts
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o node-service ./node/main.go
+    CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o /build/node-service ./node/main.go
 
-# Download XRAY Core based on target architecture
-# TARGETARCH is automatically set by Docker BuildKit
-ARG TARGETARCH=amd64
-ARG TARGETOS=linux
-RUN mkdir -p bin && \
-    cd bin && \
-    case ${TARGETARCH} in \
-        amd64) \
-            ARCH="64" \
-            FNAME="amd64" \
-            ;; \
-        arm64) \
-            ARCH="arm64-v8a" \
-            FNAME="arm64" \
-            ;; \
-        arm) \
-            ARCH="arm32-v7a" \
-            FNAME="arm32" \
-            ;; \
-        armv6) \
-            ARCH="arm32-v6" \
-            FNAME="armv6" \
-            ;; \
-        386) \
-            ARCH="32" \
-            FNAME="i386" \
-            ;; \
-        *) \
-            ARCH="64" \
-            FNAME="amd64" \
-            ;; \
-    esac && \
-    echo "Downloading Xray for ${TARGETARCH} (ARCH=${ARCH}, FNAME=${FNAME})" && \
-    curl -sfLRO "https://github.com/XTLS/Xray-core/releases/download/v26.3.27/Xray-linux-${ARCH}.zip" && \
-    echo "Unzipping..." && \
-    unzip -q "Xray-linux-${ARCH}.zip" && \
-    echo "Files after unzip:" && \
-    ls -la && \
-    echo "Removing zip and old data files..." && \
-    rm -f "Xray-linux-${ARCH}.zip" geoip.dat geosite.dat && \
-    echo "Renaming xray to xray-linux-${FNAME}..." && \
-    mv xray "xray-linux-${FNAME}" && \
-    chmod +x "xray-linux-${FNAME}" && \
-    echo "Verifying xray binary:" && \
-    ls -lh "xray-linux-${FNAME}" && \
-    test -f "xray-linux-${FNAME}" && echo "✓ xray-linux-${FNAME} exists" && \
-    echo "Downloading geo files..." && \
-    curl -sfLRO https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geoip.dat && \
-    curl -sfLRO https://github.com/Loyalsoldier/v2ray-rules-dat/releases/latest/download/geosite.dat && \
-    curl -sfLRo geoip_IR.dat https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geoip.dat && \
-    curl -sfLRo geosite_IR.dat https://github.com/chocolate4u/Iran-v2ray-rules/releases/latest/download/geosite.dat && \
-    curl -sfLRo geoip_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geoip.dat && \
-    curl -sfLRo geosite_RU.dat https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat && \
-    echo "Final files in bin:" && \
-    ls -lah && \
-    echo "File sizes:" && \
-    du -h * && \
-    cd .. && \
-    echo "Verifying files in /build/bin:" && \
-    ls -lah /build/bin/
+# Same Xray + geo files as the panel image (DockerInit.sh, v26.3.27).
+# Run with WORKDIR / so the script’s mkdir -p build/bin creates /build/bin (matches panel layout under /app).
+COPY DockerInit.sh /docker-init.sh
+WORKDIR /
+# Re-state ARG for this RUN (BuildKit: TARGETARCH matches target platform of this stage)
+ARG TARGETARCH
+RUN sh /docker-init.sh "${TARGETARCH}" && \
+    f=$(ls /build/bin/xray-linux-* 2>/dev/null | head -1) && [ -f "$f" ] && \
+    echo "Xray+geo in /build/bin:" && ls -la /build/bin/
+WORKDIR /build
 
 # Runtime stage
 FROM alpine:latest
+ARG TARGETARCH
 
-RUN apk --no-cache add ca-certificates tzdata
+RUN apk --no-cache add ca-certificates tzdata conntrack-tools
 
 WORKDIR /app
 
@@ -96,23 +49,27 @@ COPY --from=builder /build/node-service .
 # Copy XRAY binary and data files
 # Use wildcard to copy all files from bin directory
 COPY --from=builder /build/bin/ ./bin/
+# Unmounted copy for /app/bin when a Docker volume is empty (see docker-entrypoint.sh)
+COPY --from=builder /build/bin/ /opt/sharx-node-embedded/bin/
 
-# Verify files were copied and make executable
-RUN echo "Contents of /app/bin after COPY:" && \
-    ls -la ./bin/ && \
-    echo "Looking for xray binary..." && \
-    if [ -f ./bin/xray-linux-amd64 ]; then \
-        chmod +x ./bin/xray-linux-amd64 && \
-        echo "✓ Found and made executable: xray-linux-amd64"; \
+# Optional rename path uses same TARGETARCH as build (for legacy layouts with plain `xray` only)
+# Verify: exactly one xray-linux-* from build; chmod. Do not hardcode amd64 only.
+RUN echo "Contents of /app/bin after COPY:" && ls -la ./bin/ && \
+    XRAY=$(find ./bin -maxdepth 1 -name 'xray-linux-*' -type f 2>/dev/null | head -1) && \
+    if [ -n "$XRAY" ] && [ -f "$XRAY" ]; then \
+        chmod +x "$XRAY" && \
+        echo "✓ xray: $XRAY"; \
     elif [ -f ./bin/xray ]; then \
-        chmod +x ./bin/xray && \
-        mv ./bin/xray ./bin/xray-linux-amd64 && \
-        echo "✓ Found xray, renamed to xray-linux-amd64"; \
+        case "${TARGETARCH}" in \
+            arm64) TGT=xray-linux-arm64 ;; \
+            arm)   TGT=xray-linux-arm32 ;; \
+            386)   TGT=xray-linux-386 ;; \
+            *)     TGT=xray-linux-amd64 ;; \
+        esac && \
+        chmod +x ./bin/xray && mv ./bin/xray "./bin/$TGT" && \
+        echo "✓ Renamed xray -> $TGT"; \
     else \
-        echo "✗ ERROR: No xray binary found!" && \
-        echo "All files in bin directory:" && \
-        find ./bin -type f -o -type l && \
-        exit 1; \
+        echo "✗ No xray binary in ./bin" && find ./bin -type f && exit 1; \
     fi
 
 # Create directories for config, logs, and data
@@ -126,6 +83,9 @@ ENV XUI_DATA_FOLDER=/app/data
 # Expose API port
 EXPOSE 8080
 
-# Run node service
-# The API key will be read from NODE_API_KEY environment variable
+COPY node/docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod +x /app/docker-entrypoint.sh
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
+# Pairing only: SECRET_KEY env; see panel "copy compose"
 CMD ["./node-service", "-port", "8080"]
