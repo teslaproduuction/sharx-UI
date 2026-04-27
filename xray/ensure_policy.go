@@ -6,8 +6,8 @@ import (
 	"github.com/konstpic/sharx-code/v2/util/json_util"
 )
 
-// EnsurePolicyStatsUserOnline merges policy.levels[0] so Xray records per-user online IP
-// maps (counter name user>>>email>>>online). Required for session list and connection drop.
+// EnsurePolicyStatsUserOnline forces statsUserUplink, statsUserDownlink, and statsUserOnline
+// on every policy level so Xray records per-user traffic and online (user>>>email>>>...).
 func EnsurePolicyStatsUserOnline(cfg *Config) {
 	if cfg == nil {
 		return
@@ -44,13 +44,18 @@ func EnsurePolicyStatsUserOnline(cfg *Config) {
 		l0 = make(map[string]interface{})
 		levels["0"] = l0
 	}
-	if _, ok := l0["statsUserUplink"]; !ok {
-		l0["statsUserUplink"] = true
+	// Per-user counters (user>>>email>>>traffic>>>uplink|downlink) and online maps require these
+	// flags on the client's policy level. Templates may set them to false — override so the panel
+	// always receives Hy2/VLESS/etc. stats via StatsService (see Xray dispatcher getLink/WrapLink).
+	for _, lv := range levels {
+		lm, ok := lv.(map[string]interface{})
+		if !ok || lm == nil {
+			continue
+		}
+		lm["statsUserUplink"] = true
+		lm["statsUserDownlink"] = true
+		lm["statsUserOnline"] = true
 	}
-	if _, ok := l0["statsUserDownlink"]; !ok {
-		l0["statsUserDownlink"] = true
-	}
-	l0["statsUserOnline"] = true
 	merged, err := json.Marshal(pol)
 	if err != nil {
 		return
