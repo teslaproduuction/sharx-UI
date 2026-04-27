@@ -391,6 +391,28 @@ func (s *XrayService) GetXrayTraffic() ([]*xray.Traffic, []*xray.ClientTraffic, 
 	return traffic, clientTraffic, nil
 }
 
+// GetXrayTrafficNoReset fetches cumulative traffic counters from Xray without reset.
+func (s *XrayService) GetXrayTrafficNoReset() ([]*xray.Traffic, []*xray.ClientTraffic, error) {
+	if !s.IsXrayRunning() {
+		err := errors.New("xray is not running")
+		logger.Debug("Attempted to fetch Xray traffic (no reset), but Xray is not running:", err)
+		return nil, nil, err
+	}
+	apiPort := p.GetAPIPort()
+	api, cleanup, err := s.GetOrCreateAPI(apiPort)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer cleanup()
+
+	traffic, clientTraffic, err := api.GetTraffic(false)
+	if err != nil {
+		logger.Debug("Failed to fetch Xray traffic (no reset):", err)
+		return nil, nil, err
+	}
+	return traffic, clientTraffic, nil
+}
+
 // RestartXray restarts the Xray process, optionally forcing a restart even if config unchanged.
 // In multi-node mode, it sends configurations to nodes instead of restarting local Xray.
 func (s *XrayService) RestartXray(isForce bool) error {

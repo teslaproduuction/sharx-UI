@@ -24,8 +24,13 @@ type clientTrafficState struct {
 var (
 	// trafficStateMap stores previous traffic states for speed calculation
 	// map[clientId]clientTrafficState
-	trafficStateMap = make(map[int]*clientTrafficState)
-	trafficStateMu  sync.RWMutex
+	trafficStateMap              = make(map[int]*clientTrafficState)
+	trafficStateMu               sync.RWMutex
+	hysteriaInboundCumulativeMap = make(map[string]struct {
+		up   int64
+		down int64
+	})
+	hysteriaInboundCumulativeMu sync.Mutex
 )
 
 // AddClientTraffic updates client traffic statistics and returns clients that need to be disabled.
@@ -480,6 +485,291 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	}
 
 	return clientsToDisable, affectedInboundIds, nil
+}
+
+// AddHysteriaInboundTrafficFallbackFromCumulative applies Hysteria traffic to clients using
+// cumulative (reset=false) inbound counters and local delta calculation.
+// Safety rule: apply only to inbounds that have exactly one enabled client assignment.
+func (s *ClientService) AddHysteriaInboundTrafficFallbackFromCumulative(tx *gorm.DB, inboundTraffics []*xray.Traffic) error {
+	if len(inboundTraffics) == 0 {
+		return nil
+	}
+
+	// Convert cumulative counters to per-tick deltas per inbound tag.
+	cumulative := make(map[string]struct {
+		up   int64
+		down int64
+	})
+	for _, t := range inboundTraffics {
+		if t == nil || !t.IsInbound || strings.TrimSpace(t.Tag) == "" || t.Tag == "api" {
+			continue
+		}
+		cumulative[t.Tag] = struct {
+			up   int64
+			down int64
+		}{up: t.Up, down: t.Down}
+	}
+	if len(cumulative) == 0 {
+		return nil
+	}
+
+	tagDelta := make(map[string]struct {
+		up   int64
+		down int64
+	})
+
+	hysteriaInboundCumulativeMu.Lock()
+	for tag, cur := range cumulative {
+		prev, ok := hysteriaInboundCumulativeMap[tag]
+		hysteriaInboundCumulativeMap[tag] = cur
+		if !ok {
+			continue
+		}
+		du := cur.up - prev.up
+		dd := cur.down - prev.down
+		// Counter reset / xray restart / wrap-around: skip negative jumps.
+		if du < 0 || dd < 0 {
+			continue
+		}
+		if du == 0 && dd == 0 {
+			continue
+		}
+		tagDelta[tag] = struct {
+			up   int64
+			down int64
+		}{up: du, down: dd}
+	}
+	hysteriaInboundCumulativeMu.Unlock()
+
+	if len(tagDelta) == 0 {
+		logger.Debug("Hy2 fallback: no positive inbound deltas in this tick")
+		return nil
+	}
+
+	tags := make([]string, 0, len(tagDelta))
+	for tag := range tagDelta {
+		tags = append(tags, tag)
+	}
+
+	var inbounds []*model.Inbound
+	if err := tx.Model(&model.Inbound{}).Where("tag IN (?)", tags).Find(&inbounds).Error; err != nil {
+		return err
+	}
+
+	inboundByID := make(map[int]*model.Inbound, len(inbounds))
+	hysteriaInboundIDs := make([]int, 0, len(inbounds))
+	for _, inb := range inbounds {
+		switch model.NormalizeProtocol(inb.Protocol) {
+		case model.Hysteria, model.Hysteria2:
+			hysteriaInboundIDs = append(hysteriaInboundIDs, inb.Id)
+			inboundByID[inb.Id] = inb
+		}
+	}
+	if len(hysteriaInboundIDs) == 0 {
+		return nil
+	}
+
+	var maps []*model.ClientInboundMapping
+	if err := tx.Model(&model.ClientInboundMapping{}).Where("inbound_id IN (?)", hysteriaInboundIDs).Find(&maps).Error; err != nil {
+		return err
+	}
+	if len(maps) == 0 {
+		return nil
+	}
+
+	clientIDsByInbound := make(map[int][]int)
+	clientIDSet := make(map[int]struct{})
+	for _, m := range maps {
+		clientIDsByInbound[m.InboundId] = append(clientIDsByInbound[m.InboundId], m.ClientId)
+		clientIDSet[m.ClientId] = struct{}{}
+	}
+
+	clientIDs := make([]int, 0, len(clientIDSet))
+	for id := range clientIDSet {
+		clientIDs = append(clientIDs, id)
+	}
+	var clients []*model.ClientEntity
+	if err := tx.Model(&model.ClientEntity{}).Where("id IN (?)", clientIDs).Find(&clients).Error; err != nil {
+		return err
+	}
+	clientByID := make(map[int]*model.ClientEntity, len(clients))
+	for _, c := range clients {
+		clientByID[c.Id] = c
+	}
+
+	nowMs := time.Now().UnixMilli()
+	onlineSet := make(map[string]struct{})
+	onlineList := make([]string, 0)
+	for inboundID, ids := range clientIDsByInbound {
+		inb := inboundByID[inboundID]
+		if inb == nil {
+			continue
+		}
+		d, ok := tagDelta[inb.Tag]
+		if !ok || (d.up == 0 && d.down == 0) {
+			continue
+		}
+
+		enabled := make([]*model.ClientEntity, 0, len(ids))
+		for _, id := range ids {
+			c := clientByID[id]
+			if c != nil && c.Enable {
+				enabled = append(enabled, c)
+			}
+		}
+		if len(enabled) != 1 {
+			// Ambiguous attribution for shared hysteria inbound: skip to avoid wrong billing.
+			logger.Debugf("Hy2 fallback: skip inbound %s (id=%d), enabled clients=%d", inb.Tag, inboundID, len(enabled))
+			continue
+		}
+
+		c := enabled[0]
+		logger.Debugf("Hy2 fallback: apply tag=%s delta(up=%d,down=%d) to client=%s",
+			inb.Tag, d.up, d.down, c.Email)
+		c.Up += d.down
+		c.Down += d.up
+		c.AllTime += d.up + d.down
+		c.LastOnline = nowMs
+		key := strings.ToLower(strings.TrimSpace(c.Email))
+		if key != "" {
+			if _, ok := onlineSet[key]; !ok {
+				onlineSet[key] = struct{}{}
+				onlineList = append(onlineList, c.Email)
+			}
+		}
+	}
+
+	if len(onlineList) > 0 {
+		setPanelOnlineClients(onlineList)
+	}
+
+	logger.Debugf("Hy2 fallback: saving %d clients, online=%d", len(clients), len(onlineList))
+	return s.applyHysteriaTagDeltas(tx, tagDelta)
+}
+
+// AddHysteriaInboundTrafficFallbackFromDeltas applies already-delta inbound traffic (reset=true path)
+// for Hysteria/Hysteria2 when user>>> stats are missing.
+func (s *ClientService) AddHysteriaInboundTrafficFallbackFromDeltas(tx *gorm.DB, inboundTraffics []*xray.Traffic) error {
+	if len(inboundTraffics) == 0 {
+		return nil
+	}
+	tagDelta := make(map[string]struct {
+		up   int64
+		down int64
+	})
+	for _, t := range inboundTraffics {
+		if t == nil || !t.IsInbound || strings.TrimSpace(t.Tag) == "" || t.Tag == "api" {
+			continue
+		}
+		if t.Up == 0 && t.Down == 0 {
+			continue
+		}
+		tagDelta[t.Tag] = struct {
+			up   int64
+			down int64
+		}{up: t.Up, down: t.Down}
+	}
+	if len(tagDelta) == 0 {
+		return nil
+	}
+	return s.applyHysteriaTagDeltas(tx, tagDelta)
+}
+
+func (s *ClientService) applyHysteriaTagDeltas(tx *gorm.DB, tagDelta map[string]struct {
+	up   int64
+	down int64
+}) error {
+	if len(tagDelta) == 0 {
+		return nil
+	}
+	tags := make([]string, 0, len(tagDelta))
+	for tag := range tagDelta {
+		tags = append(tags, tag)
+	}
+
+	var inbounds []*model.Inbound
+	if err := tx.Model(&model.Inbound{}).Where("tag IN (?)", tags).Find(&inbounds).Error; err != nil {
+		return err
+	}
+	inboundByID := make(map[int]*model.Inbound, len(inbounds))
+	hysteriaInboundIDs := make([]int, 0, len(inbounds))
+	for _, inb := range inbounds {
+		switch model.NormalizeProtocol(inb.Protocol) {
+		case model.Hysteria, model.Hysteria2:
+			hysteriaInboundIDs = append(hysteriaInboundIDs, inb.Id)
+			inboundByID[inb.Id] = inb
+		}
+	}
+	if len(hysteriaInboundIDs) == 0 {
+		return nil
+	}
+
+	var maps []*model.ClientInboundMapping
+	if err := tx.Model(&model.ClientInboundMapping{}).Where("inbound_id IN (?)", hysteriaInboundIDs).Find(&maps).Error; err != nil {
+		return err
+	}
+	if len(maps) == 0 {
+		return nil
+	}
+
+	clientIDsByInbound := make(map[int][]int)
+	clientIDSet := make(map[int]struct{})
+	for _, m := range maps {
+		clientIDsByInbound[m.InboundId] = append(clientIDsByInbound[m.InboundId], m.ClientId)
+		clientIDSet[m.ClientId] = struct{}{}
+	}
+	clientIDs := make([]int, 0, len(clientIDSet))
+	for id := range clientIDSet {
+		clientIDs = append(clientIDs, id)
+	}
+	var clients []*model.ClientEntity
+	if err := tx.Model(&model.ClientEntity{}).Where("id IN (?)", clientIDs).Find(&clients).Error; err != nil {
+		return err
+	}
+	clientByID := make(map[int]*model.ClientEntity, len(clients))
+	for _, c := range clients {
+		clientByID[c.Id] = c
+	}
+
+	nowMs := time.Now().UnixMilli()
+	onlineSet := make(map[string]struct{})
+	onlineList := make([]string, 0)
+	for inboundID, ids := range clientIDsByInbound {
+		inb := inboundByID[inboundID]
+		if inb == nil {
+			continue
+		}
+		d, ok := tagDelta[inb.Tag]
+		if !ok || (d.up == 0 && d.down == 0) {
+			continue
+		}
+		enabled := make([]*model.ClientEntity, 0, len(ids))
+		for _, id := range ids {
+			c := clientByID[id]
+			if c != nil && c.Enable {
+				enabled = append(enabled, c)
+			}
+		}
+		if len(enabled) != 1 {
+			continue
+		}
+		c := enabled[0]
+		c.Up += d.down
+		c.Down += d.up
+		c.AllTime += d.up + d.down
+		c.LastOnline = nowMs
+		key := strings.ToLower(strings.TrimSpace(c.Email))
+		if key != "" {
+			if _, ok := onlineSet[key]; !ok {
+				onlineSet[key] = struct{}{}
+				onlineList = append(onlineList, c.Email)
+			}
+		}
+	}
+	if len(onlineList) > 0 {
+		setPanelOnlineClients(onlineList)
+	}
+	return tx.Save(clients).Error
 }
 
 // syncInboundTrafficFromClients synchronizes inbound traffic as the sum of all its clients' traffic.
