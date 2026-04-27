@@ -1,7 +1,7 @@
 "use client";
 
 import { RefreshCw, Users } from "lucide-react";
-import { useCallback, useEffect, useId, useMemo, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Bar,
@@ -16,6 +16,7 @@ import {
 import type { TooltipProps } from "recharts";
 import { getJson } from "@/lib/api";
 import { sizeFormat } from "@/lib/format";
+import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import { Button, IconTile, Modal, PillTag, Spinner, useToast } from "@/components/ui";
@@ -42,6 +43,12 @@ type MatrixPayload = {
   nodes: Col[] | null;
   rows: Row[] | null;
 };
+
+function isClientTrafficPerNodeMatrix(p: unknown): p is MatrixPayload {
+  if (!p || typeof p !== "object") return false;
+  const o = p as Record<string, unknown>;
+  return typeof o.multiNode === "boolean";
+}
 
 type ClientNodeChartDatum = {
   label: string;
@@ -181,6 +188,7 @@ function ClientsTrafficByNodeChart({
               fill={`url(#${upId})`}
               radius={[5, 5, 0, 0]}
               maxBarSize={36}
+              isAnimationActive={false}
             />
             <Bar
               dataKey="download"
@@ -188,6 +196,7 @@ function ClientsTrafficByNodeChart({
               fill={`url(#${downId})`}
               radius={[5, 5, 0, 0]}
               maxBarSize={36}
+              isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>
@@ -215,6 +224,8 @@ function buildChartDataForRow(
 export function ClientsStatisticsPage() {
   const { t } = useTranslation();
   const toast = useToast();
+  const ws = usePanelWebSocket();
+  const resyncAfterDisconnect = useRef(false);
   const chartGradientPrefix = useId().replace(/:/g, "");
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<MatrixPayload | null>(null);
@@ -235,6 +246,32 @@ export function ClientsStatisticsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!ws) return;
+    const onMatrix = (p: unknown) => {
+      if (!isClientTrafficPerNodeMatrix(p)) return;
+      setData(p);
+      setLoading(false);
+    };
+    const onDisc = () => {
+      resyncAfterDisconnect.current = true;
+    };
+    const onConn = () => {
+      if (resyncAfterDisconnect.current) {
+        resyncAfterDisconnect.current = false;
+        void load();
+      }
+    };
+    ws.on("client_traffic_per_node", onMatrix);
+    ws.on("disconnected", onDisc);
+    ws.on("connected", onConn);
+    return () => {
+      ws.off("client_traffic_per_node", onMatrix);
+      ws.off("disconnected", onDisc);
+      ws.off("connected", onConn);
+    };
+  }, [ws, load]);
 
   const nodes = data?.nodes ?? [];
   const rows = data?.rows ?? [];
@@ -307,101 +344,101 @@ export function ClientsStatisticsPage() {
         <Surface padding="none" className="overflow-hidden">
           <div className="panel-data-table overflow-x-auto">
             <table className="w-full min-w-[640px] border-collapse text-left text-sm">
-              <thead>
-                <tr className="border-b border-[var(--border)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
-                  <th className="sticky left-0 z-10 bg-[var(--bg-elevated)] p-3 shadow-[1px_0_0_0_var(--border)]">
-                    {t("pages.clients.email")}
-                  </th>
-                  {nodes.map((c) => (
-                    <th key={c.id} className="min-w-[10rem] p-3 align-bottom">
-                      <div className="font-semibold text-[var(--fg)] normal-case">
-                        {colTitle(c)}
-                      </div>
-                      {c.id !== 0 ? (
-                        <div className="mt-0.5 text-[10px] font-normal normal-case text-[var(--fg-muted)]">
-                          {c.status}
-                        </div>
-                      ) : null}
-                      {c.fetch !== "ok" ? (
-                        <span
-                          className="inline-block max-w-full"
-                          title={c.fetchError || undefined}
-                        >
-                          <PillTag tone="rose" className="mt-1 !text-[10px]">
-                            {c.fetch === "skipped"
-                              ? t("pages.clients.statsNodeSkipped")
-                              : t("pages.clients.statsNodeError")}
-                          </PillTag>
-                        </span>
-                      ) : null}
+                <thead>
+                  <tr className="border-b border-[var(--border)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                    <th className="sticky left-0 z-10 bg-[var(--bg-elevated)] p-3 shadow-[1px_0_0_0_var(--border)]">
+                      {t("pages.clients.email")}
                     </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.length === 0 ? (
-                  <tr>
-                    <td
-                      colSpan={Math.max(1, nodes.length) + 1}
-                      className="p-6 text-center text-sm text-[var(--fg-muted)]"
-                    >
-                      {t("noData")}
-                    </td>
-                  </tr>
-                ) : null}
-                {rows.map((row) => (
-                  <tr
-                    key={row.email}
-                    className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
-                  >
-                    <td className="sticky left-0 z-10 bg-[var(--bg-elevated)] p-0 shadow-[1px_0_0_0_var(--border)]">
-                      <button
-                        type="button"
-                        className="w-full px-3 py-3 text-left font-medium text-[var(--fg)] underline-offset-2 hover:underline focus-visible:outline focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
-                        onClick={() => setChartEmail(row.email)}
-                      >
-                        {row.email}
-                      </button>
-                    </td>
-                    {row.values.map((v, i) => {
-                      const c = nodes[i];
-                      const key = `${row.email}-${c?.id ?? i}`;
-                      if (!v.ok) {
-                        return (
-                          <td
-                            key={key}
-                            className="p-3 font-mono text-xs"
-                            title={c?.fetchError || undefined}
+                    {nodes.map((c) => (
+                      <th key={c.id} className="min-w-[10rem] p-3 align-bottom">
+                        <div className="font-semibold text-[var(--fg)] normal-case">
+                          {colTitle(c)}
+                        </div>
+                        {c.id !== 0 ? (
+                          <div className="mt-0.5 text-[10px] font-normal normal-case text-[var(--fg-muted)]">
+                            {c.status}
+                          </div>
+                        ) : null}
+                        {c.fetch !== "ok" ? (
+                          <span
+                            className="inline-block max-w-full"
+                            title={c.fetchError || undefined}
                           >
-                            —
+                            <PillTag tone="rose" className="mt-1 !text-[10px]">
+                              {c.fetch === "skipped"
+                                ? t("pages.clients.statsNodeSkipped")
+                                : t("pages.clients.statsNodeError")}
+                            </PillTag>
+                          </span>
+                        ) : null}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.length === 0 ? (
+                    <tr>
+                      <td
+                        colSpan={Math.max(1, nodes.length) + 1}
+                        className="p-6 text-center text-sm text-[var(--fg-muted)]"
+                      >
+                        {t("noData")}
+                      </td>
+                    </tr>
+                  ) : null}
+                  {rows.map((row) => (
+                    <tr
+                      key={row.email}
+                      className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                    >
+                      <td className="sticky left-0 z-10 bg-[var(--bg-elevated)] p-0 shadow-[1px_0_0_0_var(--border)]">
+                        <button
+                          type="button"
+                          className="w-full px-3 py-3 text-left font-medium text-[var(--fg)] underline-offset-2 hover:underline focus-visible:outline focus-visible:ring-2 focus-visible:ring-[var(--accent)]"
+                          onClick={() => setChartEmail(row.email)}
+                        >
+                          {row.email}
+                        </button>
+                      </td>
+                      {row.values.map((v, i) => {
+                        const c = nodes[i];
+                        const key = `${row.email}-${c?.id ?? i}`;
+                        if (!v.ok) {
+                          return (
+                            <td
+                              key={key}
+                              className="p-3 font-mono text-xs"
+                              title={c?.fetchError || undefined}
+                            >
+                              —
+                            </td>
+                          );
+                        }
+                        return (
+                          <td key={key} className="p-3 align-top text-xs">
+                            <div className="font-mono text-[var(--fg)]">
+                              ↑ {sizeFormat(v.up)}
+                            </div>
+                            <div className="font-mono text-[var(--fg)]">
+                              ↓ {sizeFormat(v.down)}
+                            </div>
+                            <div className="mt-1">
+                              {v.online ? (
+                                <PillTag tone="green" className="!px-1.5 !py-0 !text-[10px]">
+                                  {t("pages.clients.statsOnlineShort")}
+                                </PillTag>
+                              ) : (
+                                <span className="text-[10px] text-[var(--fg-subtle)]">·</span>
+                              )}
+                            </div>
                           </td>
                         );
-                      }
-                      return (
-                        <td key={key} className="p-3 align-top text-xs">
-                          <div className="font-mono text-[var(--fg)]">
-                            ↑ {sizeFormat(v.up)}
-                          </div>
-                          <div className="font-mono text-[var(--fg)]">
-                            ↓ {sizeFormat(v.down)}
-                          </div>
-                          <div className="mt-1">
-                            {v.online ? (
-                              <PillTag tone="green" className="!px-1.5 !py-0 !text-[10px]">
-                                {t("pages.clients.statsOnlineShort")}
-                              </PillTag>
-                            ) : (
-                              <span className="text-[10px] text-[var(--fg-subtle)]">·</span>
-                            )}
-                          </div>
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
         </Surface>
       )}
 
@@ -421,7 +458,10 @@ export function ClientsStatisticsPage() {
         }
       >
         {modalChartData.length > 0 ? (
-          <ClientsTrafficByNodeChart data={modalChartData} gradientPrefix={chartGradientPrefix} />
+          <ClientsTrafficByNodeChart
+            data={modalChartData}
+            gradientPrefix={chartGradientPrefix}
+          />
         ) : (
           <p className="py-8 text-center text-sm text-[var(--fg-muted)]">{t("noData")}</p>
         )}

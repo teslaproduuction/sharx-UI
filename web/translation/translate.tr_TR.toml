@@ -286,6 +286,8 @@
 "IPLimitlogDesc" = "IP geçmiş günlüğü. (devre dışı bırakıldıktan sonra gelini etkinleştirmek için günlüğü temizleyin)"
 "IPLimitlogclear" = "Günlüğü Temizle"
 "setDefaultCert" = "Panelden Sertifikayı Ayarla"
+"generateSelfSignedTls" = "Generate self-signed (PEM)"
+"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "Lütfen Telegram Sohbet Kimliği sağlayın. (botta '/id' komutunu kullanın) veya (@userinfobot)"
 "subscriptionDesc" = "Abonelik URL'inizi bulmak için 'Detaylar'a gidin. Ayrıca, aynı adı birden fazla müşteri için kullanabilirsiniz."
 "info" = "Bilgi"
@@ -341,6 +343,7 @@
 "getNewX25519CertError" = "X25519 sertifikası alınırken hata oluştu."
 "getNewmldsa65Error" = "mldsa65 sertifikası alınırken hata oluştu."
 "getNewVlessEncError" = "VlessEnc sertifikası alınırken hata oluştu."
+"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "İstek"
