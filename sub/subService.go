@@ -2,6 +2,7 @@ package sub
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -153,6 +154,13 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 		
 		// Note: We don't block subscription even if client has expired status
 		// Subscription provides traffic information, and client blocking is handled in Xray config
+	}
+
+	if c != nil && clientEntity != nil {
+		sb := service.ClientSessionBlockService{}
+		if err := sb.CheckSessionIPAllowed(clientEntity.Id, c.ClientIP()); err != nil {
+			return nil, 0, xray.ClientTraffic{}, err
+		}
 	}
 	
 	// Register HWID from headers if context is provided and client is found
@@ -3156,6 +3164,11 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 	hwidService := service.ClientHWIDService{}
 	hwidRecord, err := hwidService.RegisterHWIDFromHeaders(clientEntity.Id, hwid, deviceOS, deviceModel, osVersion, ipAddress, userAgent)
 	if err != nil {
+		if errors.Is(err, service.ErrHWIDAdminBlocked) {
+			logger.Errorf("HWID blocked for client %d (subId: %s, email: %s): %v - BLOCKING subscription",
+				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
+			return fmt.Errorf("HWID limit exceeded: %w", err)
+		}
 		// Check if error is HWID limit exceeded
 		if strings.Contains(err.Error(), "HWID limit exceeded") {
 			// Log as error - this should block subscription access

@@ -11,7 +11,8 @@
     "services": [
       "HandlerService",
       "LoggerService",
-      "StatsService"
+      "StatsService",
+      "RoutingService"
     ]
   },
   "inbounds": [

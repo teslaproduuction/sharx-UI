@@ -38,7 +38,7 @@ import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { copyTextToClipboard } from "@/lib/copyToClipboard";
-import { panelTimestampToMs, sizeFormat } from "@/lib/format";
+import { panelTimestampToMs, sizeFormat, speedMbpsFormat } from "@/lib/format";
 import { panel } from "@/lib/paths";
 import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
@@ -54,6 +54,7 @@ import {
   Reveal,
   SelectNative,
   Spinner,
+  Switch,
   useToast,
 } from "@/components/ui";
 
@@ -183,11 +184,19 @@ type ClientsConfirmAction =
 
 /** How long a client can disappear from the online batch before the UI flips to offline (avoids flicker on sparse WS ticks). */
 const OFFLINE_STATUS_DELAY_MS = 5_000;
-/** Consider client "recently online" for UI status when live online bit is stale. */
-const ONLINE_RECENT_WINDOW_MS = 2 * 60_000;
 
 function normEmail(s: string) {
   return s.trim().toLowerCase();
+}
+
+function normalizePanelIp(s: string): string {
+  let t = String(s).trim();
+  if (t.startsWith("[") && t.includes("]")) {
+    const end = t.indexOf("]");
+    t = t.slice(1, end);
+  }
+  const lower = t.toLowerCase();
+  return lower.includes(":") ? lower : t;
 }
 
 function countActiveHwidsFromPayload(hw: unknown): number {
@@ -196,7 +205,8 @@ function countActiveHwidsFromPayload(hw: unknown): number {
     (h) =>
       h &&
       typeof h === "object" &&
-      (h as { isActive?: boolean }).isActive !== false,
+      (h as { isActive?: boolean }).isActive !== false &&
+      (h as { blocked?: boolean }).blocked !== true,
   ).length;
 }
 
@@ -253,11 +263,13 @@ function ReadonlyConnectionState({
   label,
   groupName,
   activityText,
+  isOnline,
 }: {
   legend: string;
   label: string;
   groupName: string;
   activityText?: string;
+  isOnline: boolean;
 }) {
   return (
     <div className="min-w-0 space-y-1.5">
@@ -268,10 +280,18 @@ function ReadonlyConnectionState({
         <span
           role="radio"
           aria-checked
-          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
+          className={
+            isOnline
+              ? "inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
+              : "inline-flex max-w-full items-center gap-1.5 rounded-full border border-rose-500/35 bg-rose-500/10 px-2.5 py-1.5 text-xs font-medium text-rose-700 shadow-[0_0_0_1px] shadow-rose-500/15 dark:text-rose-200 dark:shadow-rose-500/20"
+          }
         >
           <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--accent)]"
+            className={
+              isOnline
+                ? "h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--accent)]"
+                : "h-2.5 w-2.5 shrink-0 rounded-full border-2 border-rose-500 bg-rose-500 shadow-[0_0_0_2px] shadow-rose-500/25 dark:border-rose-400 dark:bg-rose-400"
+            }
             aria-hidden
           />
           {label}
@@ -332,7 +352,7 @@ function ClientConnectionStatus({
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${
             isOnline
               ? "bg-emerald-400 shadow-[0_0_0_2px] shadow-emerald-500/30"
-              : "bg-zinc-500/40 dark:bg-zinc-500/30"
+              : "bg-rose-500 shadow-[0_0_0_2px] shadow-rose-500/25 dark:bg-rose-400 dark:shadow-rose-400/30"
           }`}
           aria-hidden
         />
@@ -340,7 +360,7 @@ function ClientConnectionStatus({
           className={
             isOnline
               ? "text-emerald-600 dark:text-emerald-300"
-              : "text-[var(--fg-subtle)]"
+              : "text-rose-700 dark:text-rose-300"
           }
         >
           {isOnline ? t("online") : t("offline")}
@@ -353,11 +373,13 @@ function ClientConnectionStatus({
   );
 }
 
+/**
+ * Live Xray session online. List + WS traffic handler set `isOnline`; the handler keeps
+ * true for OFFLINE_STATUS_DELAY_MS after the client drops from the online batch to avoid flicker.
+ * "Last seen" wording stays in {@link connectionActivityText} (was-online) without stretching Online.
+ */
 function clientIsOnlineConsideringLastSeen(r: ClientCard): boolean {
-  if (r.isOnline === true) return true;
-  const lastSeenMs = panelTimestampToMs(r.lastOnline);
-  if (lastSeenMs == null || lastSeenMs <= 0) return false;
-  return Date.now() - lastSeenMs <= ONLINE_RECENT_WINDOW_MS;
+  return r.isOnline === true;
 }
 
 function connectionActivityText(
@@ -476,7 +498,7 @@ function getDataColumnLabel(col: DataColumnId, t: TFunction): string {
     lastOnline: { key: "pages.clients.cardLastOnline", defaultValue: "Last online" },
     createdAt: { key: "pages.clients.colCreated", defaultValue: "Created" },
     updatedAt: { key: "pages.clients.colUpdated", defaultValue: "Updated" },
-    speed: { key: "pages.clients.colSpeed", defaultValue: "Speed (b/s)" },
+    speed: { key: "pages.clients.colSpeed", defaultValue: "Speed (Mbps)" },
     inbounds: { key: "pages.clients.inbounds", defaultValue: "Inbounds" },
     group: { key: "pages.clients.group", defaultValue: "Group" },
     uuid: { key: "pages.clients.colUuid", defaultValue: "UUID" },
@@ -1019,7 +1041,7 @@ function ClientDataCell({
       }
       return (
         <span className="text-[10px] leading-tight tabular-nums text-[var(--fg-muted)]">
-          {u} ↑ · {d} ↓
+          {speedMbpsFormat(u)} ↑ · {speedMbpsFormat(d)} ↓
         </span>
       );
     }
@@ -1200,6 +1222,8 @@ type HwidRow = {
   deviceOs?: string;
   userAgent?: string;
   isActive?: boolean;
+  /** Admin block (subscription/HWID checks deny this device). */
+  blocked?: boolean;
 };
 
 type InboundOption = { id: number; remark: string; protocol: string; port: number };
@@ -1216,6 +1240,7 @@ type ClientSheetMode = "create" | "edit";
 
 type ClientSessionsResponse = {
   email: string;
+  blockedSessionIps?: string[];
   results: {
     nodeId?: number;
     nodeName: string;
@@ -1455,6 +1480,7 @@ function ClientUnifiedCard({
                       defaultValue: "Connection",
                     })}
                     activityText={connectionActivityText(r.lastOnline, t)}
+                    isOnline={clientIsOnlineConsideringLastSeen(r)}
                   />
                 </div>
               ) : (
@@ -1808,7 +1834,7 @@ function ClientUnifiedCard({
                       <span className="text-[var(--fg-muted)]">
                         {t("pages.clients.cardUpSpeed", { defaultValue: "Upload speed" })}
                       </span>
-                      <span className="text-[var(--fg)]">{r.upSpeed} b/s</span>
+                      <span className="text-[var(--fg)]">{speedMbpsFormat(r.upSpeed)}</span>
                     </li>
                   ) : null}
                   {r.downSpeed != null && r.downSpeed > 0 ? (
@@ -1816,7 +1842,7 @@ function ClientUnifiedCard({
                       <span className="text-[var(--fg-muted)]">
                         {t("pages.clients.cardDownSpeed", { defaultValue: "Download speed" })}
                       </span>
-                      <span className="text-[var(--fg)]">{r.downSpeed} b/s</span>
+                      <span className="text-[var(--fg)]">{speedMbpsFormat(r.downSpeed)}</span>
                     </li>
                   ) : null}
                 </ul>
@@ -2114,11 +2140,13 @@ export function ClientsPage() {
   const [hwidRows, setHwidRows] = useState<HwidRow[]>([]);
   const [hwidDeleteRow, setHwidDeleteRow] = useState<HwidRow | null>(null);
   const [hwidDeleteBusy, setHwidDeleteBusy] = useState(false);
+  const [hwidBlockBusyId, setHwidBlockBusyId] = useState<number | null>(null);
 
   const [sessionsModalClientId, setSessionsModalClientId] = useState<number | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [sessionsData, setSessionsData] = useState<ClientSessionsResponse | null>(null);
   const [sessionsDropBusy, setSessionsDropBusy] = useState(false);
+  const [sessionIpBlockBusy, setSessionIpBlockBusy] = useState<string | null>(null);
 
   const [sheetInlineBusy, setSheetInlineBusy] = useState<"reset" | "clearHwid" | null>(null);
   const [bulkMode, setBulkMode] = useState(false);
@@ -2405,6 +2433,55 @@ export function ClientsPage() {
       toast.error(t("fail"));
     } finally {
       setSessionsDropBusy(false);
+    }
+  };
+
+  const isSessionIpBlocked = (ip: string, blocked?: string[]) => {
+    const n = normalizePanelIp(ip);
+    if (!blocked?.length) return false;
+    return blocked.some((b) => normalizePanelIp(b) === n);
+  };
+
+  const toggleSessionIpBlocked = async (ip: string, blocked: boolean) => {
+    if (sessionsModalClientId == null) return;
+    setSessionIpBlockBusy(ip);
+    try {
+      const r = await postJson(
+        panel(`client/sessions/block/${sessionsModalClientId}`),
+        { ip, blocked },
+        true,
+      );
+      if (r.success) {
+        await refreshSessionsModal();
+        void load();
+      } else {
+        toast.error((r as { msg?: string }).msg || t("fail"));
+      }
+    } catch {
+      toast.error(t("fail"));
+    } finally {
+      setSessionIpBlockBusy(null);
+    }
+  };
+
+  const toggleHwidBlocked = async (h: HwidRow) => {
+    if (hwidModalClientId == null) return;
+    const next = !h.blocked;
+    setHwidBlockBusyId(h.id);
+    try {
+      const r = await postJson(panel(`client/hwid/block/${h.id}`), { blocked: next }, true);
+      if (r.success) {
+        setHwidRows((rows) =>
+          rows.map((x) => (x.id === h.id ? { ...x, blocked: next } : x)),
+        );
+        void load();
+      } else {
+        toast.error((r as { msg?: string }).msg || t("fail"));
+      }
+    } catch {
+      toast.error(t("fail"));
+    } finally {
+      setHwidBlockBusyId(null);
     }
   };
 
@@ -4195,12 +4272,15 @@ export function ClientsPage() {
                     <thead>
                       <tr className="border-b border-[var(--border)] text-[var(--fg-subtle)]">
                         <th className="p-2">IP</th>
+                        <th className="p-2 whitespace-nowrap text-center">
+                          {t("pages.clients.blockToggle", { defaultValue: "Block" })}
+                        </th>
                         <th className="p-2">
                           {t("pages.clients.sessions.lastSeen", {
                             defaultValue: "Last seen",
                           })}
                         </th>
-                        <th className="p-2 w-24" />
+                        <th className="p-2 w-28" />
                       </tr>
                     </thead>
                     <tbody>
@@ -4210,6 +4290,21 @@ export function ClientsPage() {
                           className="border-b border-[var(--border)] text-[var(--fg-muted)]"
                         >
                           <td className="p-2 font-mono text-[11px]">{s.ip}</td>
+                          <td className="p-2 text-center align-middle">
+                            <Switch
+                              size="sm"
+                              checked={isSessionIpBlocked(s.ip, sessionsData.blockedSessionIps)}
+                              disabled={
+                                sessionIpBlockBusy === s.ip ||
+                                sessionsDropBusy ||
+                                sessionsLoading
+                              }
+                              ariaLabel={t("pages.clients.sessions.blockIpToggle", {
+                                defaultValue: "Block subscription from this IP",
+                              })}
+                              onChange={(next) => void toggleSessionIpBlocked(s.ip, next)}
+                            />
+                          </td>
                           <td className="p-2">
                             {s.lastSeen > 0
                               ? new Date(s.lastSeen * 1000).toLocaleString()
@@ -4284,6 +4379,9 @@ export function ClientsPage() {
                   <th className="p-2 align-bottom min-w-[8rem]">
                     {t("pages.clients.hwidUserAgent", { defaultValue: "User-Agent" })}
                   </th>
+                  <th className="p-2 align-bottom whitespace-nowrap text-center">
+                    {t("pages.clients.blockToggle", { defaultValue: "Block" })}
+                  </th>
                   <th className="p-2 align-bottom whitespace-nowrap">{t("status")}</th>
                   <th className="p-2 align-bottom w-12" aria-label={t("delete")} />
                 </tr>
@@ -4298,8 +4396,23 @@ export function ClientsPage() {
                     <td className="p-2 align-top font-mono text-[10px] leading-snug break-all text-[var(--fg-muted)]">
                       {h.userAgent?.trim() ? h.userAgent.trim() : "—"}
                     </td>
+                    <td className="p-2 align-middle text-center">
+                      <Switch
+                        size="sm"
+                        checked={!!h.blocked}
+                        disabled={hwidBlockBusyId === h.id}
+                        ariaLabel={t("pages.clients.hwidBlockToggle", {
+                          defaultValue: "Block this device",
+                        })}
+                        onChange={() => void toggleHwidBlocked(h)}
+                      />
+                    </td>
                     <td className="p-2 align-top whitespace-nowrap">
-                      {h.isActive ? t("enabled") : t("disabled")}
+                      {h.blocked
+                        ? t("pages.clients.hwidBlockedStatus", { defaultValue: "Blocked" })
+                        : h.isActive
+                          ? t("enabled")
+                          : t("disabled")}
                     </td>
                     <td className="p-2 align-top text-right">
                       <IconButton

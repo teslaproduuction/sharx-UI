@@ -206,6 +206,9 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 				}()
 			}
 			
+			for _, c := range allClients {
+				service.MergePanelClientLiveSpeedInto(c)
+			}
 			logger.Debugf("Broadcasting %d clients via WebSocket for real-time updates", len(allClients))
 			websocket.BroadcastClients(allClients)
 		} else {

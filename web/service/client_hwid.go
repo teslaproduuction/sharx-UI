@@ -6,6 +6,7 @@ package service
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,9 @@ import (
 
 // ClientHWIDService provides business logic for managing client HWIDs.
 type ClientHWIDService struct{}
+
+// ErrHWIDAdminBlocked is returned when a HWID row is blocked in the panel (subscription/HWID checks should deny).
+var ErrHWIDAdminBlocked = errors.New("HWID is blocked for this client")
 
 // getMoscowTime returns current time in Moscow timezone (UTC+3)
 func (s *ClientHWIDService) getMoscowTime() time.Time {
@@ -36,7 +40,16 @@ func (s *ClientHWIDService) GetHWIDsForClient(clientId int) ([]*model.ClientHWID
 	db := database.GetDB()
 	var hwids []*model.ClientHWID
 	err := db.Where("client_id = ?", clientId).Order("last_seen_at DESC").Find(&hwids).Error
-	return hwids, err
+	if err != nil {
+		return nil, err
+	}
+	for _, h := range hwids {
+		if h == nil {
+			continue
+		}
+		h.Blocked = h.BlockedAt != nil && *h.BlockedAt > 0
+	}
+	return hwids, nil
 }
 
 // AddHWIDForClient adds a new HWID for a client with device metadata.
@@ -73,6 +86,9 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 	var existingHWID model.ClientHWID
 	err = tx.Where("client_id = ? AND hwid = ?", clientId, hwid).First(&existingHWID).Error
 	if err == nil {
+		if existingHWID.BlockedAt != nil && *existingHWID.BlockedAt > 0 {
+			return nil, fmt.Errorf("%w", ErrHWIDAdminBlocked)
+		}
 		// HWID exists - update last seen and IP with Moscow time
 		now := s.getMoscowTime().Unix()
 		// Fix timestamps if they're incorrect (less than year 2000, which is 946684800)
@@ -118,8 +134,8 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 	// HWID doesn't exist - check if we can add it
 	var activeHWIDCount int64
 	if client.HWIDEnabled {
-		// Count active HWIDs for this client
-		err = tx.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ?", clientId, true).Count(&activeHWIDCount).Error
+		// Count active HWIDs for this client (exclude admin-blocked devices)
+		err = tx.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ? AND blocked_at IS NULL", clientId, true).Count(&activeHWIDCount).Error
 		if err != nil {
 			return nil, fmt.Errorf("failed to count active HWIDs: %w", err)
 		}
@@ -130,7 +146,7 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 		}
 	} else {
 		// Count all HWIDs for device naming even if restriction is disabled
-		err = tx.Model(&model.ClientHWID{}).Where("client_id = ?", clientId).Count(&activeHWIDCount).Error
+		err = tx.Model(&model.ClientHWID{}).Where("client_id = ? AND blocked_at IS NULL", clientId).Count(&activeHWIDCount).Error
 		if err != nil {
 			return nil, fmt.Errorf("failed to count HWIDs: %w", err)
 		}
@@ -233,13 +249,16 @@ func (s *ClientHWIDService) CheckHWIDAllowed(clientId int, hwid string) (bool, e
 		var hwidRecord model.ClientHWID
 		err = db.Where("client_id = ? AND hwid = ? AND is_active = ?", clientId, hwid, true).First(&hwidRecord).Error
 		if err == nil {
+			if hwidRecord.BlockedAt != nil && *hwidRecord.BlockedAt > 0 {
+				return false, fmt.Errorf("%w", ErrHWIDAdminBlocked)
+			}
 			// HWID exists and is active - update last seen with Moscow time
 			db.Model(&hwidRecord).Update("last_seen_at", s.getMoscowTime().Unix())
 			return true, nil
 		} else if err == gorm.ErrRecordNotFound {
 			// HWID not found - check if we're under limit (allows registration)
 			var activeHWIDCount int64
-			err = db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ?", clientId, true).Count(&activeHWIDCount).Error
+			err = db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ? AND blocked_at IS NULL", clientId, true).Count(&activeHWIDCount).Error
 			if err != nil {
 				return false, fmt.Errorf("failed to count active HWIDs: %w", err)
 			}
@@ -264,13 +283,16 @@ func (s *ClientHWIDService) CheckHWIDAllowed(clientId int, hwid string) (bool, e
 		var hwidRecord model.ClientHWID
 		err = db.Where("client_id = ? AND hwid = ? AND is_active = ?", clientId, hwid, true).First(&hwidRecord).Error
 		if err == nil {
+			if hwidRecord.BlockedAt != nil && *hwidRecord.BlockedAt > 0 {
+				return false, fmt.Errorf("%w", ErrHWIDAdminBlocked)
+			}
 			// HWID exists and is active - update last seen with Moscow time
 			db.Model(&hwidRecord).Update("last_seen_at", s.getMoscowTime().Unix())
 			return true, nil
 		} else if err == gorm.ErrRecordNotFound {
 			// HWID not found - check limit
 			var activeHWIDCount int64
-			err = db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ?", clientId, true).Count(&activeHWIDCount).Error
+			err = db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ? AND blocked_at IS NULL", clientId, true).Count(&activeHWIDCount).Error
 			if err != nil {
 				return false, fmt.Errorf("failed to count active HWIDs: %w", err)
 			}
@@ -481,6 +503,35 @@ func (s *ClientHWIDService) SetHWIDLimitForAllClients(userId int, maxHwid int, e
 func (s *ClientHWIDService) GetHWIDCountForClient(clientId int) (int64, error) {
 	db := database.GetDB()
 	var count int64
-	err := db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ?", clientId, true).Count(&count).Error
+	err := db.Model(&model.ClientHWID{}).Where("client_id = ? AND is_active = ? AND blocked_at IS NULL", clientId, true).Count(&count).Error
 	return count, err
+}
+
+// SetHWIDBlocked sets or clears admin block on a HWID row. Verifies the HWID belongs to a client owned by userId.
+func (s *ClientHWIDService) SetHWIDBlocked(userId int, hwidRowId int, blocked bool) error {
+	db := database.GetDB()
+	var row model.ClientHWID
+	if err := db.First(&row, hwidRowId).Error; err != nil {
+		return fmt.Errorf("HWID record not found")
+	}
+	var cl model.ClientEntity
+	if err := db.Select("user_id").First(&cl, row.ClientId).Error; err != nil {
+		return fmt.Errorf("client not found")
+	}
+	if cl.UserId != userId {
+		return fmt.Errorf("access denied")
+	}
+	now := s.getMoscowTime().Unix()
+	if blocked {
+		return db.Model(&model.ClientHWID{}).Where("id = ?", hwidRowId).Updates(map[string]interface{}{
+			"blocked_at":   now,
+			"block_reason": "admin",
+		}).Error
+	}
+	return db.Model(&model.ClientHWID{}).Where("id = ?", hwidRowId).
+		Select("blocked_at", "block_reason").
+		Updates(map[string]interface{}{
+			"blocked_at":   gorm.Expr("NULL"),
+			"block_reason": "",
+		}).Error
 }

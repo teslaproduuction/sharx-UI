@@ -451,6 +451,8 @@ type ClientHWID struct {
 	UserAgent   string `json:"userAgent" form:"userAgent" gorm:"column:user_agent"`                    // User agent or client identifier (if available)
 	BlockedAt   *int64 `json:"blockedAt,omitempty" form:"blockedAt" gorm:"column:blocked_at"`          // Timestamp when HWID was blocked (null if not blocked)
 	BlockReason string `json:"blockReason,omitempty" form:"blockReason" gorm:"column:block_reason"`    // Reason for blocking (e.g., "HWID limit exceeded")
+	// Blocked is true when BlockedAt is set (panel UX); not a DB column.
+	Blocked bool `json:"blocked" form:"blocked" gorm:"-"`
 
 	// Legacy fields (deprecated, kept for backward compatibility)
 	FirstSeen int64 `json:"firstSeen,omitempty" gorm:"-"` // Deprecated: use FirstSeenAt
@@ -461,6 +463,18 @@ type ClientHWID struct {
 // GORM by default would use "client_hwids" but the actual table is "client_hw_ids"
 func (ClientHWID) TableName() string {
 	return "client_hw_ids"
+}
+
+// ClientBlockedSessionIP is a client-scoped block on subscription traffic from a source IP (session).
+type ClientBlockedSessionIP struct {
+	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	ClientId  int    `json:"clientId" gorm:"column:client_id;index"`
+	IP        string `json:"ip" gorm:"column:ip"`
+	CreatedAt int64  `json:"createdAt" gorm:"column:created_at"`
+}
+
+func (ClientBlockedSessionIP) TableName() string {
+	return "client_blocked_session_ips"
 }
 
 // ClientGroup represents a group of clients for organization and bulk operations.

@@ -1888,6 +1888,43 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte) err
 	return nil
 }
 
+// ApplySessionIPBlockRoutingToNode updates one session-IP routing rule on a worker via RoutingService (no full apply-config).
+func (s *NodeService) ApplySessionIPBlockRoutingToNode(node *model.Node, blocked bool, ruleTag, email, cidr string) error {
+	client, err := s.createHTTPClient(node, 15*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	body := map[string]interface{}{
+		"blocked": blocked,
+		"ruleTag": ruleTag,
+		"email":   email,
+		"cidr":    cidr,
+	}
+	requestJSON, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+	url := fmt.Sprintf("%s/api/v1/session-ip-block-routing", nodeRequestBaseURL(node))
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestJSON))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("node returned status %d: %s", resp.StatusCode, string(respBody))
+	}
+	return nil
+}
+
 // AddUserToNode adds a user to an inbound on a node via Xray API (instant, no restart).
 func (s *NodeService) AddUserToNode(node *model.Node, protocol, inboundTag string, user map[string]interface{}) error {
 	client, err := s.createHTTPClient(node, 10*time.Second)

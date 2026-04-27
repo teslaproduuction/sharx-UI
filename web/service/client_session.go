@@ -22,8 +22,9 @@ type ClientSessionNodeResult struct {
 
 // ClientOnlineSessionsResponse aggregates results from local Xray and/or worker nodes.
 type ClientOnlineSessionsResponse struct {
-	Email   string                    `json:"email"`
-	Results []ClientSessionNodeResult `json:"results"`
+	Email               string                    `json:"email"`
+	Results             []ClientSessionNodeResult `json:"results"`
+	BlockedSessionIPs   []string                  `json:"blockedSessionIps,omitempty"`
 }
 
 // ClientSessionService lists and drops per-IP client sessions (Xray user>>>email>>>online + conntrack).
@@ -44,10 +45,13 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 		return &ClientOnlineSessionsResponse{Email: email, Results: nil}, nil
 	}
 
+	blockSvc := ClientSessionBlockService{}
+	blockedIPs, _ := blockSvc.ListBlockedSessionIPs(clientId)
+
 	ss := SettingService{}
 	multi, _ := ss.GetMultiNodeMode()
 
-	out := &ClientOnlineSessionsResponse{Email: email}
+	out := &ClientOnlineSessionsResponse{Email: email, BlockedSessionIPs: blockedIPs}
 
 	if !multi {
 		xs := XrayService{}

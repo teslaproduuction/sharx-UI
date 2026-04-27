@@ -12,6 +12,13 @@ export function sizeFormat(bytes: number): string {
   return `${b.toFixed(i === 0 ? 0 : 2)} ${u[i]}`;
 }
 
+export function speedMbpsFormat(bitsPerSecond: number): string {
+  if (!Number.isFinite(bitsPerSecond) || bitsPerSecond <= 0) return "0 Mbps";
+  const mbps = bitsPerSecond / (1024 * 1024);
+  const digits = mbps >= 100 ? 0 : mbps >= 10 ? 1 : 2;
+  return `${mbps.toFixed(digits)} Mbps`;
+}
+
 export function toFixed(n: number, d: number) {
   return Number(n).toFixed(d);
 }
