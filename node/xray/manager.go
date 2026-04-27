@@ -264,6 +264,7 @@ func (m *Manager) ApplyConfig(configJSON []byte) error {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
 	xray.EnsureAPIServicesRoutingService(&newConfig)
+	xray.EnsureAPIRoutingOutbound(&newConfig)
 
 	// If XRAY is running and config is the same, skip restart
 	if m.process != nil && m.process.IsRunning() {
