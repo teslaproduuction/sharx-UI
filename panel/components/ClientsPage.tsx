@@ -1244,6 +1244,8 @@ type ClientSessionsResponse = {
   results: {
     nodeId?: number;
     nodeName: string;
+    /** IPs on blocklist but missing from live Xray stats — unblock toggle still works */
+    isOfflineBlockedGroup?: boolean;
     sessions: { ip: string; lastSeen: number }[];
     dropAvailable: boolean;
     error?: string;
@@ -4244,12 +4246,20 @@ export function ClientsPage() {
           <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
             {sessionsData.results.map((block) => (
               <div
-                key={`${block.nodeId ?? "local"}-${block.nodeName}`}
+                key={
+                  block.isOfflineBlockedGroup
+                    ? "offline-blocked-session-ips"
+                    : `${block.nodeId ?? "local"}-${block.nodeName}`
+                }
                 className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
               >
                 <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-[var(--fg)]">
-                    {block.nodeName}
+                    {block.isOfflineBlockedGroup
+                      ? t("pages.clients.sessions.offlineBlockedGroup", {
+                          defaultValue: "Blocked IPs (not in live stats)",
+                        })
+                      : block.nodeName}
                   </span>
                   {!block.error && !block.dropAvailable ? (
                     <span className="text-[10px] text-amber-600 dark:text-amber-400">

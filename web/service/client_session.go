@@ -13,11 +13,49 @@ import (
 
 // ClientSessionNodeResult is online IP sessions for one panel Xray (local) or one worker.
 type ClientSessionNodeResult struct {
-	NodeID        *int                   `json:"nodeId,omitempty"`
-	NodeName      string                 `json:"nodeName"`
-	Sessions      []xray.OnlineIPSession `json:"sessions"`
-	DropAvailable bool                   `json:"dropAvailable"`
-	Error         string                 `json:"error,omitempty"`
+	NodeID                *int                   `json:"nodeId,omitempty"`
+	NodeName              string                 `json:"nodeName"`
+	IsOfflineBlockedGroup bool                   `json:"isOfflineBlockedGroup,omitempty"`
+	Sessions              []xray.OnlineIPSession `json:"sessions"`
+	DropAvailable         bool                   `json:"dropAvailable"`
+	Error                 string                 `json:"error,omitempty"`
+}
+
+// mergeOfflineBlockedSessionRows appends a synthetic group for IPs on the session blocklist that no
+// longer appear in Xray user-online stats (e.g. after IP routing block), so the UI can still unblock.
+func mergeOfflineBlockedSessionRows(results []ClientSessionNodeResult, blockedIPs []string) []ClientSessionNodeResult {
+	if len(blockedIPs) == 0 {
+		return results
+	}
+	seen := make(map[string]struct{})
+	for _, block := range results {
+		for _, s := range block.Sessions {
+			if n := NormalizeClientIP(s.IP); n != "" {
+				seen[n] = struct{}{}
+			}
+		}
+	}
+	var extra []xray.OnlineIPSession
+	for _, bip := range blockedIPs {
+		n := NormalizeClientIP(bip)
+		if n == "" {
+			continue
+		}
+		if _, ok := seen[n]; ok {
+			continue
+		}
+		seen[n] = struct{}{}
+		extra = append(extra, xray.OnlineIPSession{IP: n, LastSeen: 0})
+	}
+	if len(extra) == 0 {
+		return results
+	}
+	return append(results, ClientSessionNodeResult{
+		NodeName:              "",
+		IsOfflineBlockedGroup: true,
+		Sessions:              extra,
+		DropAvailable:         false,
+	})
 }
 
 // ClientOnlineSessionsResponse aggregates results from local Xray and/or worker nodes.
@@ -62,6 +100,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 				DropAvailable: conndrop.Available(),
 				Error:         "",
 			})
+			out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
 			return out, nil
 		}
 		apiPort := xs.GetAPIPort()
@@ -81,6 +120,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 				DropAvailable: conndrop.Available(),
 				Error:         err.Error(),
 			})
+			out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
 			return out, nil
 		}
 		out.Results = append(out.Results, ClientSessionNodeResult{
@@ -88,6 +128,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 			Sessions:      sessions,
 			DropAvailable: conndrop.Available(),
 		})
+		out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
 		return out, nil
 	}
 
@@ -130,6 +171,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 			})
 		}
 	}
+	out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
 	return out, nil
 }
 
