@@ -3,6 +3,7 @@ package service
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 	"time"
 
@@ -255,6 +256,28 @@ func (s *ClientService) GetInboundIdsForClient(clientId int) ([]int, error) {
 	return inboundIds, nil
 }
 
+// vlessFlowFromAssignedInboundList returns VLESS flow from the first assigned VLESS inbound (lowest
+// inbound id first). Flow is read only from that inbound's settings JSON.
+func (s *ClientService) vlessFlowFromAssignedInboundList(inboundIds []int) string {
+	if len(inboundIds) == 0 {
+		return ""
+	}
+	ids := append([]int(nil), inboundIds...)
+	sort.Ints(ids)
+	is := InboundService{}
+	for _, id := range ids {
+		in, err := is.GetInbound(id)
+		if err != nil {
+			continue
+		}
+		if model.NormalizeProtocol(in.Protocol) != model.VLESS {
+			continue
+		}
+		return VLESSFlowFromInboundSettings(in.Settings)
+	}
+	return ""
+}
+
 // AddClient creates a new client.
 // Returns whether Xray needs restart and any error.
 func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool, error) {
@@ -342,6 +365,9 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	if client.GroupId != nil && *client.GroupId <= 0 {
 		client.GroupId = nil
 	}
+
+	// VLESS flow comes only from assigned inbound(s), not the client form
+	client.Flow = s.vlessFlowFromAssignedInboundList(client.InboundIds)
 
 	// Use Select to explicitly control which fields are inserted
 	// This ensures that nil GroupId is properly handled as NULL
@@ -547,7 +573,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	updates["sub_id"] = client.SubID
 	updates["comment"] = client.Comment
 	updates["announce"] = client.Announce
-	updates["flow"] = client.Flow
+	// flow is set from assigned VLESS inbounds after mapping (see below), not from the request
 	updates["reset"] = client.Reset
 	// Update group_id - can be nil (no group)
 	// Only update if it's different from existing value
@@ -630,6 +656,18 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	} else {
 		logger.Debugf("UpdateClient: inboundIds is nil for client %d, keeping existing assignments", client.Id)
 	}
+
+	var mappingRows []model.ClientInboundMapping
+	tx.Where("client_id = ?", client.Id).Find(&mappingRows)
+	assignedInboundIds := make([]int, 0, len(mappingRows))
+	for _, m := range mappingRows {
+		assignedInboundIds = append(assignedInboundIds, m.InboundId)
+	}
+	syncedFlow := s.vlessFlowFromAssignedInboundList(assignedInboundIds)
+	if err = tx.Model(&model.ClientEntity{}).Where("id = ? AND user_id = ?", client.Id, userId).Update("flow", syncedFlow).Error; err != nil {
+		return false, err
+	}
+	client.Flow = syncedFlow
 	
 	// Traffic statistics are now stored directly in ClientEntity table
 	// No need to sync with client_traffics - all fields (TotalGB, ExpiryTime, Enable, Email) are in ClientEntity
@@ -767,8 +805,10 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 								if inbound.Protocol == model.VMESS && finalClient.Security != "" {
 									clientData["security"] = finalClient.Security
 								}
-								if inbound.Protocol == model.VLESS && finalClient.Flow != "" {
-									clientData["flow"] = finalClient.Flow
+								if inbound.Protocol == model.VLESS {
+									if f := VLESSFlowFromInboundSettings(inbound.Settings); f != "" {
+										clientData["flow"] = f
+									}
 								}
 							}
 							
@@ -1421,8 +1461,10 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 						if inbound.Protocol == model.VMESS && client.Security != "" {
 							clientData["security"] = client.Security
 						}
-						if inbound.Protocol == model.VLESS && client.Flow != "" {
-							clientData["flow"] = client.Flow
+						if inbound.Protocol == model.VLESS {
+							if f := VLESSFlowFromInboundSettings(inbound.Settings); f != "" {
+								clientData["flow"] = f
+							}
 						}
 					}
 					
@@ -1561,8 +1603,10 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 						if inbound.Protocol == model.VMESS && client.Security != "" {
 							clientData["security"] = client.Security
 						}
-						if inbound.Protocol == model.VLESS && client.Flow != "" {
-							clientData["flow"] = client.Flow
+						if inbound.Protocol == model.VLESS {
+							if f := VLESSFlowFromInboundSettings(inbound.Settings); f != "" {
+								clientData["flow"] = f
+							}
 						}
 					}
 					
@@ -1927,8 +1971,10 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 						if inbound.Protocol == model.VMESS && client.Security != "" {
 							clientData["security"] = client.Security
 						}
-						if inbound.Protocol == model.VLESS && client.Flow != "" {
-							clientData["flow"] = client.Flow
+						if inbound.Protocol == model.VLESS {
+							if f := VLESSFlowFromInboundSettings(inbound.Settings); f != "" {
+								clientData["flow"] = f
+							}
 						}
 					}
 
@@ -2211,8 +2257,10 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 							if inbound.Protocol == model.VMESS && client.Security != "" {
 								clientData["security"] = client.Security
 							}
-							if inbound.Protocol == model.VLESS && client.Flow != "" {
-								clientData["flow"] = client.Flow
+							if inbound.Protocol == model.VLESS {
+								if f := VLESSFlowFromInboundSettings(inbound.Settings); f != "" {
+									clientData["flow"] = f
+								}
 							}
 						}
 
@@ -2366,10 +2414,10 @@ func (s *ClientService) BulkAssignInbounds(userId int, clientIds []int, inboundI
 	for _, inboundId := range inboundIds {
 		inbound, err := inboundService.GetInbound(inboundId)
 		if err != nil {
-			return false, common.NewError("Inbound not found: %d", inboundId)
+			return false, common.NewErrorf("Inbound not found: %d", inboundId)
 		}
 		if inbound.UserId != userId {
-			return false, common.NewError("Inbound access denied: %d", inboundId)
+			return false, common.NewErrorf("Inbound access denied: %d", inboundId)
 		}
 	}
 

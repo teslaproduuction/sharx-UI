@@ -304,6 +304,43 @@ func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, err
 	return clients, nil
 }
 
+// VLESSFlowFromInboundSettings returns VLESS flow only from the inbound's settings JSON
+// (settings.clients[0].flow, else the first non-empty flow in settings.clients). Per-client
+// flow on ClientEntity is not a source; it is kept in sync from assigned inbounds in ClientService.
+func VLESSFlowFromInboundSettings(inboundSettings string) string {
+	if strings.TrimSpace(inboundSettings) == "" {
+		return ""
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(inboundSettings), &root); err != nil {
+		return ""
+	}
+	clients, _ := root["clients"].([]any)
+	if len(clients) > 0 {
+		if cm, ok := clients[0].(map[string]any); ok {
+			if f, ok := cm["flow"].(string); ok {
+				if t := strings.TrimSpace(f); t != "" {
+					return t
+				}
+			}
+		}
+	}
+	for _, c := range clients {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		f, ok := cm["flow"].(string)
+		if !ok {
+			continue
+		}
+		if t := strings.TrimSpace(f); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
 // BuildSettingsFromClientEntities builds Settings JSON for Xray from ClientEntity.
 // This method creates a minimal Settings structure with only fields needed by Xray.
 func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound, clientEntities []*model.ClientEntity) (string, error) {
@@ -378,6 +415,12 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		return string(settingsJSON), nil
 	}
 
+	// VLESS: flow is defined only on the inbound; same value for every client on this connection.
+	vlessFromInbound := ""
+	if proto == model.VLESS {
+		vlessFromInbound = VLESSFlowFromInboundSettings(inbound.Settings)
+	}
+
 	// Build clients array for Xray (only minimal fields)
 	var xrayClients []map[string]any
 	for _, entity := range clientEntities {
@@ -407,8 +450,8 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 					client["security"] = entity.Security
 				}
 			}
-			if proto == model.VLESS && entity.Flow != "" {
-				client["flow"] = entity.Flow
+			if proto == model.VLESS && vlessFromInbound != "" {
+				client["flow"] = vlessFromInbound
 			}
 		}
 
@@ -2152,11 +2195,15 @@ func (s *InboundService) ResetClientTraffic(id int, clientEmail string) (bool, e
 							}
 							cipher = oldSettings["method"].(string)
 						}
+						flowVal := client.Flow
+						if model.NormalizeProtocol(inbound.Protocol) == model.VLESS {
+							flowVal = VLESSFlowFromInboundSettings(inbound.Settings)
+						}
 						user := map[string]any{
 							"email":    client.Email,
 							"id":       client.ID,
 							"security": client.Security,
-							"flow":     client.Flow,
+							"flow":     flowVal,
 							"password": client.Password,
 							"cipher":   cipher,
 						}
