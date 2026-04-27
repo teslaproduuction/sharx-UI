@@ -153,6 +153,7 @@ func (s *Server) Start() error {
 		api.POST("/remove-user", s.removeUser)
 		api.POST("/update-inbound", s.updateInbound)
 		api.POST("/remove-inbound", s.removeInbound)
+		api.POST("/session-ip-block-routing", s.sessionIPBlockRouting)
 	}
 
 	s.httpServer = &http.Server{
@@ -595,6 +596,45 @@ func (s *Server) installXray(c *gin.Context) {
 		"message": fmt.Sprintf("Xray version %s installed successfully", version),
 		"version": version,
 	})
+}
+
+// sessionIPBlockRouting adds or removes one session-IP routing rule via Xray RoutingService (no core restart).
+func (s *Server) sessionIPBlockRouting(c *gin.Context) {
+	var req struct {
+		Blocked bool   `json:"blocked"`
+		RuleTag string `json:"ruleTag"`
+		Email   string `json:"email"`
+		Cidr    string `json:"cidr"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if req.Blocked {
+		if strings.TrimSpace(req.RuleTag) == "" || strings.TrimSpace(req.Email) == "" || strings.TrimSpace(req.Cidr) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "blocked=true requires ruleTag, email, and cidr"})
+			return
+		}
+	} else if strings.TrimSpace(req.RuleTag) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "blocked=false requires ruleTag"})
+		return
+	}
+
+	if !s.xrayManager.IsRunning() {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"code": errCodeXrayNotReady, "error": "XRAY is not running"})
+		return
+	}
+
+	if err := s.xrayManager.ApplySessionIPBlockRoutingHot(req.Blocked, req.RuleTag, req.Email, req.Cidr); err != nil {
+		if errors.Is(err, xray.ErrXrayNotReady) {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"code": errCodeXrayNotReady, "error": err.Error()})
+			return
+		}
+		logger.Errorf("session-ip-block-routing: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "routing updated"})
 }
 
 // addUser adds a user to an inbound via Xray API (instant, no restart).

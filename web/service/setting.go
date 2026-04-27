@@ -163,6 +163,31 @@ func (s *SettingService) EnsureXrayTemplateConfigValid() error {
 		return s.saveSetting("xrayTemplateConfig", defaultXrayTemplateConfig)
 	}
 
+	// Persist RoutingService in api.services when missing (hot routing + node workers).
+	var raw map[string]interface{}
+	if err := json.Unmarshal([]byte(value), &raw); err == nil {
+		if api, ok := raw["api"].(map[string]interface{}); ok {
+			svcs, _ := api["services"].([]interface{})
+			hasRouting := false
+			for _, x := range svcs {
+				if str, ok := x.(string); ok && str == "RoutingService" {
+					hasRouting = true
+					break
+				}
+			}
+			if !hasRouting {
+				xray.EnsureAPIServicesRoutingService(cfg)
+				updated, mErr := json.Marshal(cfg)
+				if mErr != nil {
+					logger.Warningf("xrayTemplateConfig: marshal after RoutingService inject: %v", mErr)
+					return nil
+				}
+				logger.Info("xrayTemplateConfig: appended RoutingService to api.services (saved to DB)")
+				return s.saveSetting("xrayTemplateConfig", string(updated))
+			}
+		}
+	}
+
 	return nil
 }
 

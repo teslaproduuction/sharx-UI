@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"regexp"
 	"strings"
 	"time"
@@ -16,6 +17,8 @@ import (
 	"github.com/konstpic/sharx-code/v2/util/common"
 
 	"github.com/xtls/xray-core/app/proxyman/command"
+	routerpb "github.com/xtls/xray-core/app/router"
+	routercmd "github.com/xtls/xray-core/app/router/command"
 	statsService "github.com/xtls/xray-core/app/stats/command"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
@@ -34,6 +37,7 @@ import (
 type XrayAPI struct {
 	HandlerServiceClient *command.HandlerServiceClient
 	StatsServiceClient   *statsService.StatsServiceClient
+	RoutingServiceClient routercmd.RoutingServiceClient
 	grpcClient           *grpc.ClientConn
 	isConnected          bool
 }
@@ -55,9 +59,11 @@ func (x *XrayAPI) Init(apiPort int) error {
 
 	hsClient := command.NewHandlerServiceClient(conn)
 	ssClient := statsService.NewStatsServiceClient(conn)
+	rsClient := routercmd.NewRoutingServiceClient(conn)
 
 	x.HandlerServiceClient = &hsClient
 	x.StatsServiceClient = &ssClient
+	x.RoutingServiceClient = rsClient
 
 	return nil
 }
@@ -74,6 +80,7 @@ func (x *XrayAPI) Close() {
 	}
 	x.HandlerServiceClient = nil
 	x.StatsServiceClient = nil
+	x.RoutingServiceClient = nil
 	x.isConnected = false
 }
 
@@ -497,4 +504,57 @@ func (x *XrayAPI) GetUserOnlineIPList(ctx context.Context, email string, reset b
 		out = append(out, OnlineIPSession{IP: ip, LastSeen: ts})
 	}
 	return out, nil
+}
+
+func parseRoutingCIDR(cidr string) (*routerpb.CIDR, error) {
+	ip, ipNet, err := net.ParseCIDR(strings.TrimSpace(cidr))
+	if err != nil {
+		return nil, err
+	}
+	ones, bits := ipNet.Mask.Size()
+	if bits != 32 && bits != 128 {
+		return nil, fmt.Errorf("unexpected mask bits: %d", bits)
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return &routerpb.CIDR{Ip: []byte(v4), Prefix: uint32(ones)}, nil
+	}
+	return &routerpb.CIDR{Ip: []byte(ip.To16()), Prefix: uint32(ones)}, nil
+}
+
+// AddSessionIPBlockRule adds one dynamic routing rule (user + source -> blocked) via RoutingService.
+func (x *XrayAPI) AddSessionIPBlockRule(ctx context.Context, ruleTag, email, cidr string) error {
+	if x.RoutingServiceClient == nil {
+		return fmt.Errorf("routing service client not initialized")
+	}
+	cidrPB, err := parseRoutingCIDR(cidr)
+	if err != nil {
+		return err
+	}
+	rule := &routerpb.RoutingRule{
+		RuleTag:   ruleTag,
+		UserEmail: []string{strings.TrimSpace(email)},
+		SourceGeoip: []*routerpb.GeoIP{{
+			Cidr: []*routerpb.CIDR{cidrPB},
+		}},
+		TargetTag: &routerpb.RoutingRule_Tag{Tag: "blocked"},
+	}
+	cfg := &routerpb.Config{Rule: []*routerpb.RoutingRule{rule}}
+	tmsg := serial.ToTypedMessage(cfg)
+	if tmsg == nil {
+		return fmt.Errorf("serial.ToTypedMessage returned nil")
+	}
+	_, err = x.RoutingServiceClient.AddRule(ctx, &routercmd.AddRuleRequest{
+		Config:        tmsg,
+		ShouldAppend:  true,
+	})
+	return err
+}
+
+// RemoveSessionIPBlockRule removes a routing rule by ruleTag via RoutingService.
+func (x *XrayAPI) RemoveSessionIPBlockRule(ctx context.Context, ruleTag string) error {
+	if x.RoutingServiceClient == nil {
+		return fmt.Errorf("routing service client not initialized")
+	}
+	_, err := x.RoutingServiceClient.RemoveRule(ctx, &routercmd.RemoveRuleRequest{RuleTag: ruleTag})
+	return err
 }

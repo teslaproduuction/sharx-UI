@@ -1,12 +1,14 @@
 package service
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
@@ -346,6 +348,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		logger.Debugf("[DEBUG-AGENT] GetXrayConfig: failed to unmarshal template JSON: %v", err)
 		return nil, err
 	}
+	xray.EnsureAPIServicesRoutingService(xrayConfig)
 	xray.EnsurePolicyStatsUserOnline(xrayConfig)
 
 	s.inboundService.AddTraffic(nil, nil)
@@ -365,6 +368,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		}
 		inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
 		xrayConfig.InboundConfigs = append(xrayConfig.InboundConfigs, *inboundConfig)
+	}
+	if err := MergeSessionIPBlockRoutingIntoConfig(xrayConfig, nil); err != nil {
+		logger.Warningf("session IP block routing merge (local config): %v", err)
 	}
 	return xrayConfig, nil
 }
@@ -470,6 +476,104 @@ func (s *XrayService) RestartXrayAsync(isForce bool) {
 	}()
 }
 
+// ApplySessionIPBlockHotAfterDB writes merged routing to disk (reboot-safe), then applies RoutingService AddRule/RemoveRule
+// on the local core (single-node) or on each worker (multi-node) without a full restart when possible.
+func (s *XrayService) ApplySessionIPBlockHotAfterDB(clientId int, email, normalizedIP string, blocked bool) {
+	go func() {
+		if err := s.EnsureXrayConfigFile(); err != nil {
+			logger.Warningf("session IP block: ensure xray config file: %v", err)
+		}
+
+		normalizedIP = NormalizeClientIP(normalizedIP)
+		if normalizedIP == "" {
+			return
+		}
+		cidr := ipToRoutingCIDR(normalizedIP)
+		tag := xray.SessionIPBlockRuleTag(clientId, normalizedIP)
+		email = strings.TrimSpace(email)
+
+		multiMode, err := s.settingService.GetMultiNodeMode()
+		if err != nil {
+			logger.Warningf("session IP block: multi-node check: %v", err)
+			multiMode = false
+		}
+		if multiMode {
+			ns := NodeService{}
+			nodes, err := ns.GetAllNodes()
+			if err != nil {
+				logger.Warningf("session IP block: list nodes: %v", err)
+				s.RestartXrayAsync(false)
+				return
+			}
+			if len(nodes) == 0 {
+				return
+			}
+			var failed []*model.Node
+			for _, n := range nodes {
+				if n == nil {
+					continue
+				}
+				if err := ns.ApplySessionIPBlockRoutingToNode(n, blocked, tag, email, cidr); err != nil {
+					logger.Warningf("session IP block: hot push node %q: %v", n.Name, err)
+					failed = append(failed, n)
+				}
+			}
+			if len(failed) == len(nodes) {
+				s.RestartXrayAsync(false)
+				return
+			}
+			for _, n := range failed {
+				cfgJSON, err := s.BuildWorkerXrayConfigForNode(n)
+				if err != nil {
+					logger.Warningf("session IP block: build config for node %q: %v", n.Name, err)
+					continue
+				}
+				if err := ns.ApplyConfigToNode(n, cfgJSON); err != nil {
+					logger.Warningf("session IP block: apply-config fallback node %q: %v", n.Name, err)
+				}
+			}
+			return
+		}
+
+		if !s.IsXrayRunning() {
+			return
+		}
+
+		apiPort := s.GetAPIPort()
+		if apiPort <= 0 {
+			s.RestartXrayAsync(false)
+			return
+		}
+
+		apiInst, cleanup, err := s.GetOrCreateAPI(apiPort)
+		if err != nil || apiInst == nil {
+			if err != nil {
+				logger.Warningf("session IP block: xray API: %v", err)
+			}
+			s.RestartXrayAsync(false)
+			return
+		}
+		defer cleanup()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+
+		var apiErr error
+		if blocked {
+			if email == "" || cidr == "" {
+				return
+			}
+			apiErr = apiInst.AddSessionIPBlockRule(ctx, tag, email, cidr)
+		} else {
+			apiErr = apiInst.RemoveSessionIPBlockRule(ctx, tag)
+		}
+		if apiErr != nil {
+			logger.Warningf("session IP block: routing API failed (%v), restarting Xray", apiErr)
+			s.RestartXrayAsync(false)
+		}
+	}()
+}
+
 // buildNodeWorkerConfigJSON builds the same Xray JSON that ApplyConfigToNode sends for one node.
 func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*model.Inbound, baseConfig *xray.Config, hyCert, hyKey string) ([]byte, error) {
 	// Determine which core config profile to use
@@ -513,6 +617,7 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 	}
 
 	nodeConfig := *configToUse
+	xray.EnsureAPIServicesRoutingService(&nodeConfig)
 	xray.EnsurePolicyStatsUserOnline(&nodeConfig)
 	apiInbound := xray.InboundConfig{}
 	hasAPIInbound := false
@@ -593,6 +698,23 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 
 		inboundConfig := BuildInboundXrayConfig(inbound, hyCert, hyKey)
 		nodeConfig.InboundConfigs = append(nodeConfig.InboundConfigs, *inboundConfig)
+	}
+
+	clientIDSet := make(map[int]struct{})
+	cs := ClientService{}
+	for _, ib := range inbounds {
+		list, err := cs.GetClientsForInbound(ib.Id)
+		if err != nil {
+			continue
+		}
+		for _, c := range list {
+			if c != nil && c.Id > 0 {
+				clientIDSet[c.Id] = struct{}{}
+			}
+		}
+	}
+	if err := MergeSessionIPBlockRoutingIntoConfig(&nodeConfig, clientIDSet); err != nil {
+		logger.Warningf("session IP block routing merge (node worker): %v", err)
 	}
 
 	return json.MarshalIndent(&nodeConfig, "", "  ")

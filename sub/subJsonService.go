@@ -89,6 +89,10 @@ func (s *SubJsonService) GetJson(subId string, host string, c *gin.Context) (str
 		var clientEntity *model.ClientEntity
 		err := db.Where("sub_id = ? AND enable = ?", subId, true).First(&clientEntity).Error
 		if err == nil && clientEntity != nil {
+			sb := service.ClientSessionBlockService{}
+			if err := sb.CheckSessionIPAllowed(clientEntity.Id, c.ClientIP()); err != nil {
+				return "", "", err
+			}
 			err := s.SubService.registerHWIDFromRequest(c, clientEntity)
 			if err != nil {
 				// HWID limit exceeded - block subscription

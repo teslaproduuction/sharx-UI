@@ -29,6 +29,8 @@ import (
 // ErrXrayNotReady is returned when Xray is not running; callers may map it to HTTP 503.
 var ErrXrayNotReady = errors.New("XRAY is not running")
 
+const sessionIPBlockRoutingOutboundTag = "blocked"
+
 // NodeStats represents traffic and online clients statistics from a node.
 type NodeStats struct {
 	Traffic       []*xray.Traffic       `json:"traffic"`
@@ -261,6 +263,7 @@ func (m *Manager) ApplyConfig(configJSON []byte) error {
 	if err := json.Unmarshal(configJSON, &newConfig); err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
+	xray.EnsureAPIServicesRoutingService(&newConfig)
 
 	// If XRAY is running and config is the same, skip restart
 	if m.process != nil && m.process.IsRunning() {
@@ -629,6 +632,139 @@ func (m *Manager) GetProcess() *xray.Process {
 	m.lock.Lock()
 	defer m.lock.Unlock()
 	return m.process
+}
+
+func (m *Manager) persistSessionIPBlockRuleToSavedConfig(ruleTag, email, cidr string) error {
+	if m.config == nil {
+		return errors.New("no config available to update")
+	}
+	xray.EnsureAPIServicesRoutingService(m.config)
+	var routing map[string]any
+	if len(m.config.RouterConfig) > 0 {
+		if err := json.Unmarshal(m.config.RouterConfig, &routing); err != nil {
+			return fmt.Errorf("routing json: %w", err)
+		}
+	} else {
+		routing = map[string]any{"domainStrategy": "AsIs"}
+	}
+	existing, _ := routing["rules"].([]any)
+	if existing == nil {
+		existing = []any{}
+	}
+	filtered := make([]any, 0, len(existing))
+	for _, r := range existing {
+		rm, ok := r.(map[string]any)
+		if ok {
+			if tag, _ := rm["ruleTag"].(string); tag == ruleTag {
+				continue
+			}
+		}
+		filtered = append(filtered, r)
+	}
+	newRule := map[string]any{
+		"type":         "field",
+		"ruleTag":      ruleTag,
+		"user":         []string{email},
+		"source":       []string{cidr},
+		"outboundTag":  sessionIPBlockRoutingOutboundTag,
+	}
+	combined := append([]any{newRule}, filtered...)
+	routing["rules"] = combined
+	b, err := json.Marshal(routing)
+	if err != nil {
+		return err
+	}
+	m.config.RouterConfig = json_util.RawMessage(b)
+	return m.saveConfigToFile()
+}
+
+func (m *Manager) removeSessionIPBlockRuleFromSavedConfig(ruleTag string) error {
+	if m.config == nil {
+		return errors.New("no config available to update")
+	}
+	xray.EnsureAPIServicesRoutingService(m.config)
+	if len(m.config.RouterConfig) == 0 {
+		return nil
+	}
+	var routing map[string]any
+	if err := json.Unmarshal(m.config.RouterConfig, &routing); err != nil {
+		return fmt.Errorf("routing json: %w", err)
+	}
+	existing, _ := routing["rules"].([]any)
+	if existing == nil {
+		return nil
+	}
+	filtered := make([]any, 0, len(existing))
+	for _, r := range existing {
+		rm, ok := r.(map[string]any)
+		if ok {
+			if tag, _ := rm["ruleTag"].(string); tag == ruleTag {
+				continue
+			}
+		}
+		filtered = append(filtered, r)
+	}
+	routing["rules"] = filtered
+	b, err := json.Marshal(routing)
+	if err != nil {
+		return err
+	}
+	m.config.RouterConfig = json_util.RawMessage(b)
+	return m.saveConfigToFile()
+}
+
+// ApplySessionIPBlockRoutingHot adds or removes one session-IP routing rule via Xray RoutingService without restarting the core.
+func (m *Manager) ApplySessionIPBlockRoutingHot(blocked bool, ruleTag, email, cidr string) error {
+	m.lock.Lock()
+	defer m.lock.Unlock()
+
+	if m.process == nil || !m.process.IsRunning() {
+		return ErrXrayNotReady
+	}
+	apiPort := m.process.GetAPIPort()
+	if apiPort == 0 {
+		return errors.New("XRAY API port is not available")
+	}
+
+	xrayAPI := &xray.XrayAPI{}
+	if err := xrayAPI.Init(apiPort); err != nil {
+		return fmt.Errorf("failed to init XrayAPI: %w", err)
+	}
+	defer xrayAPI.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if blocked {
+		email = strings.TrimSpace(email)
+		cidr = strings.TrimSpace(cidr)
+		ruleTag = strings.TrimSpace(ruleTag)
+		if email == "" || cidr == "" || ruleTag == "" {
+			return errors.New("email, cidr, and ruleTag are required for add")
+		}
+		if err := xrayAPI.AddSessionIPBlockRule(ctx, ruleTag, email, cidr); err != nil {
+			return err
+		}
+		if err := m.persistSessionIPBlockRuleToSavedConfig(ruleTag, email, cidr); err != nil {
+			logger.Warningf("session IP block: persist routing after add: %v", err)
+		}
+		return nil
+	}
+	ruleTag = strings.TrimSpace(ruleTag)
+	if ruleTag == "" {
+		return errors.New("ruleTag is required for remove")
+	}
+	err := xrayAPI.RemoveSessionIPBlockRule(ctx, ruleTag)
+	if err != nil {
+		low := strings.ToLower(err.Error())
+		if !strings.Contains(low, "not found") && !strings.Contains(low, "not exist") {
+			return err
+		}
+	}
+	if err := m.removeSessionIPBlockRuleFromSavedConfig(ruleTag); err != nil {
+		logger.Warningf("session IP block: persist routing after remove: %v", err)
+	}
+	return nil
 }
 
 // AddUser adds a user to an inbound via Xray API (instant, no restart).

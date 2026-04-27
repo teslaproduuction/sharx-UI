@@ -21,7 +21,19 @@ type clientTrafficState struct {
 	mu          sync.RWMutex
 }
 
+// bpsPair holds last computed upload/download speeds (bits per second) for panel display.
+// Speed is derived in AddClientTraffic and is not stored in the database (ClientEntity gorm:"-").
+type bpsPair struct {
+	up   int64
+	down int64
+}
+
 var (
+	// panelLiveSpeed is the latest per-client speeds from the traffic collector (replaced each tick).
+	// Merged into HTTP list/get and WebSocket client payloads so the Speed column is not always empty.
+	panelLiveSpeedMu sync.RWMutex
+	panelLiveSpeed   map[int]bpsPair
+
 	// trafficStateMap stores previous traffic states for speed calculation
 	// map[clientId]clientTrafficState
 	trafficStateMap              = make(map[int]*clientTrafficState)
@@ -32,6 +44,44 @@ var (
 	})
 	hysteriaInboundCumulativeMu sync.Mutex
 )
+
+func setPanelClientLiveSpeeds(m map[int]bpsPair) {
+	panelLiveSpeedMu.Lock()
+	defer panelLiveSpeedMu.Unlock()
+	if len(m) == 0 {
+		panelLiveSpeed = nil
+		return
+	}
+	panelLiveSpeed = make(map[int]bpsPair, len(m))
+	for id, v := range m {
+		panelLiveSpeed[id] = v
+	}
+}
+
+func panelClientLiveSpeedFor(clientID int) (up, down int64, ok bool) {
+	panelLiveSpeedMu.RLock()
+	defer panelLiveSpeedMu.RUnlock()
+	if panelLiveSpeed == nil {
+		return 0, 0, false
+	}
+	v, ok := panelLiveSpeed[clientID]
+	if !ok {
+		return 0, 0, false
+	}
+	return v.up, v.down, true
+}
+
+// MergePanelClientLiveSpeedInto overlays last computed traffic speeds (bps) from the stats collector
+// into the client struct for API/WebSocket responses. Speed is not persisted in the database.
+func MergePanelClientLiveSpeedInto(c *model.ClientEntity) {
+	if c == nil {
+		return
+	}
+	if up, down, ok := panelClientLiveSpeedFor(c.Id); ok {
+		c.UpSpeed = up
+		c.DownSpeed = down
+	}
+}
 
 // AddClientTraffic updates client traffic statistics and returns clients that need to be disabled.
 // This method handles traffic tracking for clients in the new architecture (ClientEntity).
@@ -45,6 +95,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	// "online" forever after disconnect; the UI debounces brief gaps via OFFLINE_STATUS_DELAY.
 	if len(traffics) == 0 {
 		setPanelOnlineClients(nil)
+		setPanelClientLiveSpeeds(nil)
 		return clientsToDisable, affectedInboundIds, nil
 	}
 
@@ -201,7 +252,9 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	}
 
 	now := time.Now().Unix() * 1000
-	
+
+	liveSpeeds := make(map[int]bpsPair, len(clientEntities))
+
 	// Update traffic for each client
 	for _, client := range clientEntities {
 		email := strings.ToLower(client.Email)
@@ -357,6 +410,8 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 		state.prevTime = currentTime
 		state.mu.Unlock()
 
+		liveSpeeds[client.Id] = bpsPair{up: client.UpSpeed, down: client.DownSpeed}
+
 		// Check final state after adding traffic
 		finalUsed := client.Up + client.Down
 		finalTrafficExceeded := client.TotalGB > 0 && finalUsed >= trafficLimit
@@ -423,6 +478,8 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			addOnline(client.Email)
 		}
 	}
+
+	setPanelClientLiveSpeeds(liveSpeeds)
 
 	// Set online list for the panel (works with or without local *Process: multi-node has p==nil)
 	setPanelOnlineClients(onlineList)
@@ -709,6 +766,7 @@ func (s *ClientService) applyHysteriaTagDeltas(tx *gorm.DB, tagDelta map[string]
 	nowMs := time.Now().UnixMilli()
 	onlineSet := make(map[string]struct{})
 	onlineList := make([]string, 0)
+	liveSpeeds := make(map[int]bpsPair)
 	for inboundID, ids := range clientIDsByInbound {
 		inb := inboundByID[inboundID]
 		if inb == nil {
@@ -729,10 +787,54 @@ func (s *ClientService) applyHysteriaTagDeltas(tx *gorm.DB, tagDelta map[string]
 			continue
 		}
 		c := enabled[0]
+
+		// Fallback path also needs speed calculation, otherwise clients table Speed column
+		// remains empty when traffic is attributed only via hysteria inbound deltas.
+		currentTime := time.Now().Unix()
+		prevUp := c.Up
+		prevDown := c.Down
+
+		trafficStateMu.Lock()
+		state, exists := trafficStateMap[c.Id]
+		if !exists {
+			state = &clientTrafficState{
+				prevUp:   prevUp,
+				prevDown: prevDown,
+				prevTime: currentTime,
+			}
+			trafficStateMap[c.Id] = state
+		}
+		trafficStateMu.Unlock()
+
+		state.mu.Lock()
+		timeDiff := currentTime - state.prevTime
+		if timeDiff > 0 && timeDiff <= 5 {
+			futureUp := prevUp + d.down
+			futureDown := prevDown + d.up
+			upDiff := futureUp - state.prevUp
+			downDiff := futureDown - state.prevDown
+			c.UpSpeed = int64(float64(upDiff) / float64(timeDiff) * 8)
+			c.DownSpeed = int64(float64(downDiff) / float64(timeDiff) * 8)
+			if c.UpSpeed < 0 {
+				c.UpSpeed = 0
+			}
+			if c.DownSpeed < 0 {
+				c.DownSpeed = 0
+			}
+		} else {
+			c.UpSpeed = 0
+			c.DownSpeed = 0
+		}
+
 		c.Up += d.down
 		c.Down += d.up
 		c.AllTime += d.up + d.down
 		c.LastOnline = nowMs
+		state.prevUp = c.Up
+		state.prevDown = c.Down
+		state.prevTime = currentTime
+		state.mu.Unlock()
+		liveSpeeds[c.Id] = bpsPair{up: c.UpSpeed, down: c.DownSpeed}
 		key := strings.ToLower(strings.TrimSpace(c.Email))
 		if key != "" {
 			if _, ok := onlineSet[key]; !ok {
@@ -744,6 +846,7 @@ func (s *ClientService) applyHysteriaTagDeltas(tx *gorm.DB, tagDelta map[string]
 	if len(onlineList) > 0 {
 		setPanelOnlineClients(onlineList)
 	}
+	setPanelClientLiveSpeeds(liveSpeeds)
 	return tx.Save(clients).Error
 }
 

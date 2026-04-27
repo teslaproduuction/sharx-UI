@@ -2,6 +2,7 @@ package sub
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -368,6 +369,9 @@ func (a *SUBController) writeSubscriptionFailure(c *gin.Context, op, subId strin
 
 func subscriptionFailureStatus(err error, empty bool) (int, string) {
 	if err != nil {
+		if errors.Is(err, service.ErrSessionIPBlocked) {
+			return http.StatusForbidden, "Forbidden"
+		}
 		msg := err.Error()
 		if strings.Contains(msg, "HWID limit exceeded") {
 			return http.StatusForbidden, "Forbidden"

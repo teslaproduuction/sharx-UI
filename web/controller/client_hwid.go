@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/konstpic/sharx-code/v2/web/service"
+	"github.com/konstpic/sharx-code/v2/web/session"
 )
 
 // ClientHWIDController handles HTTP requests for client HWID management.
@@ -35,6 +36,7 @@ func (a *ClientHWIDController) initRouter(g *gin.RouterGroup) {
 		g.POST("/add", a.addHWID)
 		g.POST("/del/:id", a.removeHWID) // Changed to /del/:id to match API style
 		g.POST("/deactivate/:id", a.deactivateHWID)
+		g.POST("/block/:id", a.setHWIDBlocked)
 		g.POST("/check", a.checkHWID)
 		g.POST("/register", a.registerHWID)
 		g.POST("/fix-timestamps", a.fixAllTimestamps) // Fix all incorrect timestamps
@@ -49,6 +51,12 @@ func (a *ClientHWIDController) getHWIDs(c *gin.Context) {
 		jsonMsg(c, "Invalid client ID", nil)
 		return
 	}
+	user := session.GetLoginUser(c)
+	cl, err := a.clientService.GetClient(clientId)
+	if err != nil || cl == nil || cl.UserId != user.Id {
+		jsonMsg(c, "Client not found or access denied", nil)
+		return
+	}
 
 	hwids, err := a.clientHWIDService.GetHWIDsForClient(clientId)
 	if err != nil {
@@ -57,6 +65,28 @@ func (a *ClientHWIDController) getHWIDs(c *gin.Context) {
 	}
 
 	jsonObj(c, hwids, nil)
+}
+
+// setHWIDBlocked toggles admin block on a HWID row (blocked_at).
+func (a *ClientHWIDController) setHWIDBlocked(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid HWID ID", nil)
+		return
+	}
+	user := session.GetLoginUser(c)
+	var body struct {
+		Blocked bool `json:"blocked"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		jsonMsg(c, "Invalid request", err)
+		return
+	}
+	if err := a.clientHWIDService.SetHWIDBlocked(user.Id, id, body.Blocked); err != nil {
+		jsonMsg(c, err.Error(), err)
+		return
+	}
+	jsonMsg(c, "OK", nil)
 }
 
 // addHWID adds a new HWID for a client (manual addition by admin).

@@ -67,6 +67,7 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	// Per-client online sessions (Xray + conntrack on workers)
 	g.GET("/sessions/:id", a.getClientSessions)
 	g.POST("/sessions/drop/:id", a.dropClientSessions)
+	g.POST("/sessions/block/:id", a.setSessionIPBlocked)
 }
 
 // onlineClientEmailSet returns lowercase trimmed emails currently reported as online by Xray.
@@ -992,4 +993,28 @@ func (a *ClientController) dropClientSessions(c *gin.Context) {
 		return
 	}
 	jsonMsg(c, I18nWeb(c, "pages.clients.sessions.dropSuccess"), nil)
+}
+
+// setSessionIPBlocked adds or removes an IP from the client's subscription session blocklist.
+func (a *ClientController) setSessionIPBlocked(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid client ID", err)
+		return
+	}
+	user := session.GetLoginUser(c)
+	var body struct {
+		IP      string `json:"ip"`
+		Blocked bool   `json:"blocked"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		jsonMsg(c, "Invalid request data", err)
+		return
+	}
+	svc := service.ClientSessionBlockService{}
+	if err := svc.SetSessionIPBlocked(user.Id, id, body.IP, body.Blocked); err != nil {
+		jsonMsg(c, err.Error(), err)
+		return
+	}
+	jsonMsg(c, "OK", nil)
 }
