@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
@@ -209,6 +210,25 @@ func RemoveIndex(s []any, index int) []any {
 	return append(s[:index], s[index+1:]...)
 }
 
+// normalizeHysteriaClientAuth maps legacy settings.clients[].password to auth (Xray Hysteria inbound
+// only accepts auth per Project X docs) and drops password so the core never sees the wrong key.
+func normalizeHysteriaClientAuth(c map[string]any) {
+	if c == nil {
+		return
+	}
+	auth := ""
+	if s, ok := c["auth"].(string); ok {
+		auth = strings.TrimSpace(s)
+	}
+	if s, ok := c["password"].(string); ok && auth == "" {
+		auth = strings.TrimSpace(s)
+	}
+	if auth != "" {
+		c["auth"] = auth
+	}
+	delete(c, "password")
+}
+
 // ApplyPanelInboundTransformsForXray applies the same settings/stream mutations as
 // GetXrayConfig for one inbound before BuildInboundXrayConfig. Mutates inbound in place.
 func ApplyPanelInboundTransformsForXray(inbound *model.Inbound) error {
@@ -243,12 +263,15 @@ func ApplyPanelInboundTransformsForXray(inbound *model.Inbound) error {
 				}
 			}
 			for key := range c {
-				if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" {
+				if key != "email" && key != "id" && key != "password" && key != "auth" && key != "flow" && key != "method" {
 					delete(c, key)
 				}
 				if c["flow"] == "xtls-rprx-vision-udp443" {
 					c["flow"] = "xtls-rprx-vision"
 				}
+			}
+			if model.IsHysteria(inbound.Protocol) {
+				normalizeHysteriaClientAuth(c)
 			}
 			finalClients = append(finalClients, any(c))
 		}
@@ -511,12 +534,15 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 					}
 				}
 				for key := range c {
-					if key != "email" && key != "id" && key != "password" && key != "flow" && key != "method" {
+					if key != "email" && key != "id" && key != "password" && key != "auth" && key != "flow" && key != "method" {
 						delete(c, key)
 					}
 					if c["flow"] == "xtls-rprx-vision-udp443" {
 						c["flow"] = "xtls-rprx-vision"
 					}
+				}
+				if model.IsHysteria(inbound.Protocol) {
+					normalizeHysteriaClientAuth(c)
 				}
 				final_clients = append(final_clients, any(c))
 			}

@@ -1,0 +1,109 @@
+{
+  "listen": "0.0.0.0",
+  "port": 35982,
+  "protocol": "hysteria",
+  "settings": {
+    "clients": [
+      {
+        "auth": "KTMFc4s5AlYID3Cr4IsyBOxUkBxnOc5O",
+        "email": "yugouyfyuf"
+      }
+    ],
+    "version": 2
+  },
+  "streamSettings": {
+    "hysteriaSettings": {
+      "auth": "",
+      "udpIdleTimeout": 60,
+      "version": 2
+    },
+    "network": "hysteria",
+    "security": "tls",
+    "tlsSettings": {
+      "allowInsecure": true,
+      "alpn": [
+        "h3"
+      ],
+      "certificates": [
+        {
+          "buildChain": false,
+          "certificate": [
+            "-----BEGIN CERTIFICATE-----",
+            "MIIDFzCCAf+gAwIBAgIQLsKfz4tJIweBDHUY+vDT9jANBgkqhkiG9w0BAQsFADAh",
+            "MQ4wDAYDVQQKEwVTaGFyWDEPMA0GA1UEAxMGdmsuY29tMB4XDTI2MDQyNzEzNDUy",
+            "M1oXDTI3MDQyNzE0NDUyM1owITEOMAwGA1UEChMFU2hhclgxDzANBgNVBAMTBnZr",
+            "LmNvbTCCASIwDQYJKoZIhvcNAQEBBQADggEPADCCAQoCggEBAMBJt7mdlS3hXqbU",
+            "iT2SUl6P06mT8Q51nXg48wMCgFAAQ0WjAoWyGNYhwMHIVpn+CveI+6q/+AUMZwZw",
+            "8xyzzsKCDaWeqk5bnI9nKYGG6BxiEizjmHZDKAYTKLHOLnuKxZWPCH5TJI7lfaF9",
+            "yjn0CPWkrX6zr7qZGJ921jiOlZaz45IyEkXT7PgBFi0qN3GOjmH8kSNXQFB3ark3",
+            "3rYbcHlOE5dTJKOTh/JZnUnTd1Vlv2c3AvpaGZlm28OeauYIT2vGKO203BNQ6A53",
+            "acCiGzEfj/6+Pjb5U0FuOm00cFcQlJ4pxC6spUkW8nXeMWq368QZ5Tt6JyqjIyNX",
+            "C+hep7ECAwEAAaNLMEkwDgYDVR0PAQH/BAQDAgWgMBMGA1UdJQQMMAoGCCsGAQUF",
+            "BwMBMCIGA1UdEQQbMBmCBnZrLmNvbYIJbG9jYWxob3N0hwR/AAABMA0GCSqGSIb3",
+            "DQEBCwUAA4IBAQAwVjKCmpTZVrCPQt7rW7001DWeCBbBP2FdqSyZuX/lUg1QOWLE",
+            "QF67i1V8MJtDJ2AR5+GcEP/Ql46ZW67mRhjMqLJAdEF7B93pJtJV396jeDEe99DN",
+            "VS/BCvpYu6JOIFzF2xPaWNWNtblpcYOlNrYsUT53U3/4AFGNDMHqnIsCU8u51C77",
+            "uXX7AxWFgoKB5TYWEpRXaGr2kyAbzI4OtyzyMwnkLtrmrvWGcigeyaza/ZLKASpo",
+            "vL4X1nkOmJn5spQaDfGHdyA2JIYy8X+XlpmVmm9eBvls/xvIUWosZQbHyn3cd1Jj",
+            "sNM1UVf3wc1dS00+rimLle9/J6DfMhpjKtIn",
+            "-----END CERTIFICATE-----"
+          ],
+          "key": [
+            "-----BEGIN RSA PRIVATE KEY-----",
+            "MIIEowIBAAKCAQEAwEm3uZ2VLeFeptSJPZJSXo/TqZPxDnWdeDjzAwKAUABDRaMC",
+            "hbIY1iHAwchWmf4K94j7qr/4BQxnBnDzHLPOwoINpZ6qTlucj2cpgYboHGISLOOY",
+            "dkMoBhMosc4ue4rFlY8IflMkjuV9oX3KOfQI9aStfrOvupkYn3bWOI6VlrPjkjIS",
+            "RdPs+AEWLSo3cY6OYfyRI1dAUHdquTfethtweU4Tl1Mko5OH8lmdSdN3VWW/ZzcC",
+            "+loZmWbbw55q5ghPa8Yo7bTcE1DoDndpwKIbMR+P/r4+NvlTQW46bTRwVxCUninE",
+            "LqylSRbydd4xarfrxBnlO3onKqMjI1cL6F6nsQIDAQABAoIBAAoIzsmk65AFXscd",
+            "+Dt6U0oT/1uuGLpEcP9BGY1iqAeEu/36T7tiW+FwyXpTVhGbLD9WqqtycSLyTr4L",
+            "TuSEjZmg581oxkJojXb+TzAvNhWlGIW3KtGhF4mZnloJBGv2BfGUEUFmXVYHq9Kt",
+            "mcwEbCNFgLhH8DewnZRUw0EYT74ZddD1kCPeTUpW4us7w/BPLSBnKF0/rEVk0+jj",
+            "iRwufdOrWbkQYCHqRVczExjIwSyk2ktL+acDb4Wn2IhFsz4OCmz4/MQqMlQoR7xi",
+            "9IxW4sxGcwVX9eSEgnVy64duw+ATZkg3eLEUy8ELhnDBLIVIVlU7Pq5XDXRtfDwV",
+            "MGm4P7ECgYEAx22e7vANR4E00vawlExOlLBn/f6XomD4b6RFUuNHUed/yj4M/q1X",
+            "pYPKMwmM353d8vCgRUOVxz5mapq/qItWLXEA2g+84pfCUXvb2gwMcn66fCJRg2Ae",
+            "fbSMJd1Z+/ODHq1bXfmwlm0RBXrQH4TNnA0xQEaNZPnudbyv4SJTImsCgYEA9tWT",
+            "WutM/z2Yq0AnqNQstI9s/ppqeCEd32g59PCAIgAzrx5uetMFvv2mTFHzzrRic4aW",
+            "XuABNm2c31XqLF2YDDI03BrT26oSChjX+ScA6gg7z5wgb6Z4GpGSEDGqTPPszDNx",
+            "z9vyagsV1U5SPbpvlHZqmNyK3XnXqMrZuyxlPVMCgYB9qP4fUpUbfDebwqNrHlXZ",
+            "bPpp2hUT1QRV3G1uGBXlbvhfqA+qHfF/MnajCB6C/MdQf/yNCFQFMrV38MBZZErN",
+            "4UmHHamIIdXoYCIc18C0GFRLSZiRLmyoCq7QYRSFJGB3YQaURXPWpSy3hjZD1ft0",
+            "m/9vn8USXkW6XEV6l5VItwKBgQCGOIsBVJQw8xiyfpdSSdXpdVhqdiNRIYjx8+YY",
+            "GDNEyeFQ53ZiGZ+1RI6KT8II87PZaCUagCqIo0A7fadx6o8EisSNr5TmjOt0TCAc",
+            "3qWznTiQ4zAMJnSG1gOcBLW7VKS+QXcw9UQzf8WmkQlNgbStAVtjtgFY/6lSosOU",
+            "8UY3+wKBgDy/Sf6lZPGXHld06wCTx4PrmmeOAiQN/vQARWQcZ5hpNLsWLklCWGer",
+            "xVNd3AGE6mgP/nfucjmFT7Jjq+yRSfXRr19iranjOGK/kEMUeXgoh1dFUxCfWB0T",
+            "2obzWmHJfKQItA0wNcVjN513glozKiSNi2ccW3g5sG2GhMspHJ8F",
+            "-----END RSA PRIVATE KEY-----"
+          ],
+          "oneTimeLoading": false,
+          "usage": "encipherment"
+        }
+      ],
+      "cipherSuites": "",
+      "disableSystemRoot": false,
+      "echForceQuery": "none",
+      "echServerKeys": "",
+      "enableSessionResumption": false,
+      "maxVersion": "1.3",
+      "minVersion": "1.2",
+      "rejectUnknownSni": false,
+      "serverName": "vk.com",
+      "settings": {
+        "fingerprint": "chrome"
+      }
+    }
+  },
+  "tag": "inbound-35982",
+  "sniffing": {
+    "enabled": true,
+    "destOverride": [
+      "http",
+      "tls",
+      "quic"
+    ],
+    "metadataOnly": false,
+    "routeOnly": false
+  }
+}

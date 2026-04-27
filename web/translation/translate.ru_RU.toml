@@ -298,6 +298,8 @@
 "IPLimitlogDesc" = "Лог IP-адресов (перед включением лога IP-адресов, вы должны очистить лог)"
 "IPLimitlogclear" = "Очистить лог"
 "setDefaultCert" = "Установить сертификат панели"
+"generateSelfSignedTls" = "Сгенерировать самоподписанный (PEM)"
+"generateSelfSignedTlsHint" = "Использует имя сервера (SNI) как CN, если задано, и добавляет его в SAN. Очищает пути к файлам сертификата и заполняет поля PEM ниже. Клиенты должны доверять сертификату или использовать «разрешить небезопасное»."
 "telegramDesc" = "Пожалуйста, укажите Chat ID Telegram. (используйте команду '/id' в боте) или (@userinfobot)"
 "subscriptionDesc" = "Вы можете найти свою ссылку подписки в разделе 'Подробнее'"
 "info" = "Информация"
@@ -395,6 +397,7 @@
 "getNewX25519CertError" = "Ошибка при получении сертификата X25519."
 "getNewmldsa65Error" = "Ошибка при получении сертификата mldsa65."
 "getNewVlessEncError" = "Ошибка при получении сертификата VlessEnc."
+"generateSelfSignedSuccess" = "Самоподписанный сертификат сгенерирован."
 
 [pages.inbounds.stream.general]
 "request" = "Запрос"
