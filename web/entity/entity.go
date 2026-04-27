@@ -108,7 +108,11 @@ type AllSetting struct {
 	
 	// Multi-node mode setting
 	MultiNodeMode bool `json:"multiNodeMode" form:"multiNodeMode"` // Enable multi-node architecture mode
-	
+	// Multi-node worker polling (seconds). Adaptive health uses DegradedIntervalSec when status != online.
+	NodeStatsCollectionIntervalSec       int `json:"nodeStatsCollectionIntervalSec" form:"nodeStatsCollectionIntervalSec"`
+	NodeHealthCheckIntervalSec          int `json:"nodeHealthCheckIntervalSec" form:"nodeHealthCheckIntervalSec"`                   // When node status is online
+	NodeHealthCheckDegradedIntervalSec int `json:"nodeHealthCheckDegradedIntervalSec" form:"nodeHealthCheckDegradedIntervalSec"` // When node is offline/error/unknown (faster until recovery)
+
 	// HWID tracking mode
 	// "off" = HWID tracking disabled
 	// "client_header" = HWID provided by client via x-hwid header (default, recommended)
@@ -216,6 +220,21 @@ func (s *AllSetting) CheckValid() error {
 	}
 	if s.HwidMode != "" && !validHwidModes[s.HwidMode] {
 		return common.NewErrorf("invalid hwidMode: %s (must be one of: off, client_header, legacy_fingerprint)", s.HwidMode)
+	}
+
+	const maxNodePollSec = 600
+	if s.NodeStatsCollectionIntervalSec != 0 && (s.NodeStatsCollectionIntervalSec < 1 || s.NodeStatsCollectionIntervalSec > maxNodePollSec) {
+		return common.NewErrorf("nodeStatsCollectionIntervalSec must be between 1 and %d seconds", maxNodePollSec)
+	}
+	if s.NodeHealthCheckIntervalSec != 0 && (s.NodeHealthCheckIntervalSec < 1 || s.NodeHealthCheckIntervalSec > maxNodePollSec) {
+		return common.NewErrorf("nodeHealthCheckIntervalSec must be between 1 and %d seconds", maxNodePollSec)
+	}
+	if s.NodeHealthCheckDegradedIntervalSec != 0 && (s.NodeHealthCheckDegradedIntervalSec < 1 || s.NodeHealthCheckDegradedIntervalSec > maxNodePollSec) {
+		return common.NewErrorf("nodeHealthCheckDegradedIntervalSec must be between 1 and %d seconds", maxNodePollSec)
+	}
+	if s.NodeHealthCheckIntervalSec != 0 && s.NodeHealthCheckDegradedIntervalSec != 0 &&
+		s.NodeHealthCheckIntervalSec < s.NodeHealthCheckDegradedIntervalSec {
+		return common.NewError("nodeHealthCheckIntervalSec must be >= nodeHealthCheckDegradedIntervalSec (online polling interval should not be shorter than degraded)")
 	}
 
 	return nil

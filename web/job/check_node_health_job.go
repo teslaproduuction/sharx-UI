@@ -3,6 +3,7 @@ package job
 
 import (
 	"sync"
+	"time"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
@@ -13,6 +14,7 @@ import (
 // CheckNodeHealthJob periodically checks the health of all nodes in multi-node mode.
 type CheckNodeHealthJob struct {
 	nodeService service.NodeService
+	runMu       sync.Mutex
 }
 
 // NewCheckNodeHealthJob creates a new job for checking node health.
@@ -24,6 +26,12 @@ func NewCheckNodeHealthJob() *CheckNodeHealthJob {
 
 // Run executes the health check for all nodes.
 func (j *CheckNodeHealthJob) Run() {
+	if !j.runMu.TryLock() {
+		logger.Debug("CheckNodeHealthJob: skip tick, previous run still in progress")
+		return
+	}
+	defer j.runMu.Unlock()
+
 	// Check if multi-node mode is enabled
 	settingService := service.SettingService{}
 	multiMode, err := settingService.GetMultiNodeMode()
@@ -41,28 +49,43 @@ func (j *CheckNodeHealthJob) Run() {
 		return // No nodes to check
 	}
 
-	logger.Debugf("Checking health of %d nodes", len(nodes))
-	
-	// Use a wait group to wait for all health checks to complete
+	normalSec, err := settingService.GetNodeHealthCheckIntervalSec()
+	if err != nil {
+		normalSec = 15
+	}
+	degradedSec, err := settingService.GetNodeHealthCheckDegradedIntervalSec()
+	if err != nil {
+		degradedSec = 5
+	}
+
+	now := time.Now().Unix()
 	var wg sync.WaitGroup
+	checked := 0
 	for _, node := range nodes {
 		if !node.Enable {
 			continue
 		}
-		n := node // Capture loop variable
+		intervalSec := HealthPollIntervalSec(node.Status, normalSec, degradedSec)
+		if node.LastCheck > 0 && now-node.LastCheck < int64(intervalSec) {
+			continue
+		}
+		n := node
+		checked++
 		wg.Add(1)
-		go func() {
+		go func(np *model.Node) {
 			defer wg.Done()
-			if err := j.nodeService.CheckNodeHealth(n); err != nil {
-				logger.Debugf("[Node: %s] Health check failed: %v", n.Name, err)
+			if hErr := j.nodeService.CheckNodeHealth(np); hErr != nil {
+				logger.Debugf("[Node: %s] Health check failed: %v", np.Name, hErr)
 			} else {
-				logger.Debugf("[Node: %s] Status: %s, ResponseTime: %d ms", n.Name, n.Status, n.ResponseTime)
+				logger.Debugf("[Node: %s] Status: %s, ResponseTime: %d ms", np.Name, np.Status, np.ResponseTime)
 			}
-		}()
+		}(n)
 	}
-	
-	// Wait for all checks to complete, then broadcast update inline (not in detached goroutine)
+
 	wg.Wait()
+	if checked == 0 {
+		return
+	}
 	
 	// Get updated nodes with response times
 	updatedNodes, err := j.nodeService.GetAllNodes()

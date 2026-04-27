@@ -117,6 +117,9 @@ var defaultValueMap = map[string]string{
 	"ldapDefaultLimitIP":    "0",
 	// Multi-node mode
 	"multiNodeMode": "false", // "true" for multi-mode, "false" for single-mode
+	"nodeStatsCollectionIntervalSec":       "3",
+	"nodeHealthCheckIntervalSec":           "15",
+	"nodeHealthCheckDegradedIntervalSec":   "5",
 	// HWID tracking mode
 	"hwidMode": "client_header", // "off" = disabled, "client_header" = use x-hwid header (default), "legacy_fingerprint" = deprecated fingerprint-based (deprecated)
 	// Grafana integration
@@ -992,6 +995,48 @@ func (s *SettingService) GetMultiNodeMode() (bool, error) {
 // SetMultiNodeMode sets the multi-node mode setting.
 func (s *SettingService) SetMultiNodeMode(enabled bool) error {
 	return s.setBool("multiNodeMode", enabled)
+}
+
+const (
+	nodePollSecMin = 1
+	nodePollSecMax = 600
+)
+
+func clampNodePollSec(n int) int {
+	if n < nodePollSecMin {
+		return nodePollSecMin
+	}
+	if n > nodePollSecMax {
+		return nodePollSecMax
+	}
+	return n
+}
+
+// GetNodeStatsCollectionIntervalSec returns how often CollectNodeStats runs against workers (multi-node).
+func (s *SettingService) GetNodeStatsCollectionIntervalSec() (int, error) {
+	n, err := s.getInt("nodeStatsCollectionIntervalSec")
+	if err != nil {
+		return 3, err
+	}
+	return clampNodePollSec(n), nil
+}
+
+// GetNodeHealthCheckIntervalSec returns liveness interval when the node status is online.
+func (s *SettingService) GetNodeHealthCheckIntervalSec() (int, error) {
+	n, err := s.getInt("nodeHealthCheckIntervalSec")
+	if err != nil {
+		return 15, err
+	}
+	return clampNodePollSec(n), nil
+}
+
+// GetNodeHealthCheckDegradedIntervalSec returns liveness interval when the node is not online (error/offline/unknown).
+func (s *SettingService) GetNodeHealthCheckDegradedIntervalSec() (int, error) {
+	n, err := s.getInt("nodeHealthCheckDegradedIntervalSec")
+	if err != nil {
+		return 5, err
+	}
+	return clampNodePollSec(n), nil
 }
 
 // GetHwidMode returns the HWID tracking mode.

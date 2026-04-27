@@ -747,14 +747,18 @@ func (s *NodeService) GetNodeStats(node *model.Node, reset bool) (*NodeStatsResp
 		resp, err := client.Do(req)
 		if err != nil {
 			lastErr = err
-			// Check if error is retryable (timeout, network errors)
+			// Check if error is retryable (timeout, network errors, transient close/reset)
 			errMsg := err.Error()
-			isRetryable := strings.Contains(errMsg, "context deadline exceeded") ||
+			isRetryable := errors.Is(err, io.EOF) ||
+				strings.Contains(errMsg, "context deadline exceeded") ||
 				strings.Contains(errMsg, "timeout") ||
 				strings.Contains(errMsg, "Client.Timeout") ||
 				strings.Contains(errMsg, "connection refused") ||
 				strings.Contains(errMsg, "no such host") ||
-				strings.Contains(errMsg, "network is unreachable")
+				strings.Contains(errMsg, "network is unreachable") ||
+				strings.Contains(errMsg, "connection reset") ||
+				strings.Contains(errMsg, "broken pipe") ||
+				strings.Contains(errMsg, "use of closed network connection")
 
 			if !isRetryable || attempt == maxRetries-1 {
 				// Non-retryable error or last attempt

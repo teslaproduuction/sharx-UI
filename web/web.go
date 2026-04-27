@@ -351,10 +351,9 @@ func (s *Server) startTask() {
 		s.cron.AddJob(runtime, j)
 	}
 
-	// Node health check job (every 1 second for real-time updates)
-	s.cron.AddJob("@every 1s", job.NewCheckNodeHealthJob())
-	// Collect node statistics (traffic and online clients) every 1 second for real-time updates
-	s.cron.AddJob("@every 1s", job.NewCollectNodeStatsJob())
+	// Multi-node: jobs tick every second; interval comes from settings (see CheckNodeHealthJob / CollectNodeStatsJob).
+	s.cron.AddJob(job.NodeJobTickSchedule, job.NewCheckNodeHealthJob())
+	s.cron.AddJob(job.NodeJobTickSchedule, job.NewCollectNodeStatsJob())
 
 	// Make a traffic condition every day, 8:30
 	var entry cron.EntryID

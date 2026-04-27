@@ -20,7 +20,10 @@ var (
 
 // CollectNodeStatsJob collects traffic and online clients statistics from all nodes.
 type CollectNodeStatsJob struct {
-	nodeService service.NodeService
+	nodeService      service.NodeService
+	runMu            sync.Mutex
+	statsThrottleMu  sync.Mutex
+	lastStatsRunAt   time.Time
 }
 
 // NewCollectNodeStatsJob creates a new CollectNodeStatsJob instance.
@@ -32,6 +35,31 @@ func NewCollectNodeStatsJob() *CollectNodeStatsJob {
 
 // Run executes the job to collect statistics from all nodes.
 func (j *CollectNodeStatsJob) Run() {
+	settingService := service.SettingService{}
+	intervalSec, err := settingService.GetNodeStatsCollectionIntervalSec()
+	if err != nil || intervalSec < 1 {
+		intervalSec = 3
+	}
+	minD := time.Duration(intervalSec) * time.Second
+	j.statsThrottleMu.Lock()
+	if !j.lastStatsRunAt.IsZero() && time.Since(j.lastStatsRunAt) < minD {
+		j.statsThrottleMu.Unlock()
+		return
+	}
+	j.statsThrottleMu.Unlock()
+
+	if !j.runMu.TryLock() {
+		logger.Debug("CollectNodeStatsJob: skip tick, previous run still in progress")
+		return
+	}
+	defer j.runMu.Unlock()
+
+	defer func() {
+		j.statsThrottleMu.Lock()
+		j.lastStatsRunAt = time.Now()
+		j.statsThrottleMu.Unlock()
+	}()
+
 	logger.Debug("Starting node stats collection job")
 
 	if err := j.nodeService.CollectNodeStats(); err != nil {
