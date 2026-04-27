@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	githubReleasesLatestAPI = "https://api.github.com/repos/konstpic/sharx-code/releases/latest"
+	githubReleasesLatestAPI = "https://api.github.com/repos/konstpic/SharX/releases/latest"
 	appMetaCacheTTL         = 15 * time.Minute
 	maxReleaseNotesBytes    = 196608 // ~192 KiB raw UTF-8 from GitHub release body
 )
