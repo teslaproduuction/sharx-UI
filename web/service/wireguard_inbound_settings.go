@@ -16,6 +16,8 @@ type WireGuardInboundRequest struct {
 	Peers       []WireGuardPeerRequest `json:"peers"`
 	NoKernelTun *bool                  `json:"noKernelTun"`
 	Workers     *int                   `json:"workers"`
+	// ClientDNS is written to settings as `clientDns` (not used by Xray) and shown in user WireGuard [Interface] as `DNS = …`.
+	ClientDNS []string `json:"clientDns"`
 }
 
 // WireGuardPeerRequest is one Xray `peers` entry (no panel-managed inbounds; keys are public only).
@@ -23,11 +25,14 @@ type WireGuardPeerRequest struct {
 	PublicKey    string   `json:"publicKey"`
 	PreSharedKey string   `json:"preSharedKey"`
 	AllowedIPs   []string `json:"allowedIPs"`
+	// KeepAlive is PersistentKeepalive seconds (Xray `keepAlive`); 0 or omitted → defaultWireGuardPeerKeepAlive.
+	KeepAlive int `json:"keepAlive"`
 }
 
 const (
-	defaultWireGuardMTU  = 1420
-	defaultWireGuardCIDR = "10.8.0.1/32"
+	defaultWireGuardMTU           = 1420
+	defaultWireGuardCIDR          = "10.8.0.1/32"
+	defaultWireGuardPeerKeepAlive = 25
 )
 
 // normalizeWireGuardInterfaceAddress forces Xray-required masks: /32 (IPv4) and /128 (IPv6).
@@ -49,6 +54,22 @@ func normalizeWireGuardInterfaceAddress(s string) string {
 		return ip4.String() + "/32"
 	}
 	return ip.String() + "/128"
+}
+
+// normalizeWireGuardClientDNSList trims and drops empty entries (order preserved).
+func normalizeWireGuardClientDNSList(in []string) []string {
+	if len(in) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		t := strings.TrimSpace(s)
+		if t == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // applyWireGuardSettingsAddressForXray rewrites `address` to /32 and /128 so Xray 26+ accepts configs
@@ -110,12 +131,15 @@ type wireGuardSettingsOut struct {
 	Peers       []wireGuardPeerOut `json:"peers"`
 	NoKernelTun bool               `json:"noKernelTun"`
 	Workers     *int               `json:"workers,omitempty"`
+	// Always emitted (may be empty) so panel round-trips explicit client DNS list.
+	ClientDNS []string `json:"clientDns"`
 }
 
 type wireGuardPeerOut struct {
 	PublicKey    string   `json:"publicKey"`
 	PreSharedKey string   `json:"preSharedKey,omitempty"`
 	AllowedIPs   []string `json:"allowedIPs,omitempty"`
+	KeepAlive    int      `json:"keepAlive,omitempty"`
 }
 
 // BuildWireGuardInboundSettingsJSON builds Xray inbound `settings` JSON for protocol wireguard.
@@ -174,14 +198,21 @@ func BuildWireGuardInboundSettingsJSON(r *WireGuardInboundRequest) (string, erro
 				outP.AllowedIPs = ips
 			}
 		}
+		ka := p.KeepAlive
+		if ka <= 0 {
+			ka = defaultWireGuardPeerKeepAlive
+		}
+		outP.KeepAlive = ka
 		peers = append(peers, outP)
 	}
+	dns := normalizeWireGuardClientDNSList(r.ClientDNS)
 	out := wireGuardSettingsOut{
 		Mtu:         mtu,
 		SecretKey:   sk,
 		Address:     addrs,
 		Peers:       peers,
 		NoKernelTun: nokt,
+		ClientDNS:   dns,
 	}
 	if r.Workers != nil && *r.Workers > 0 {
 		w := *r.Workers
@@ -190,6 +221,38 @@ func BuildWireGuardInboundSettingsJSON(r *WireGuardInboundRequest) (string, erro
 	b, err := json.Marshal(out)
 	if err != nil {
 		return "", err
+	}
+	return string(b), nil
+}
+
+// PreserveWireGuardPeersOnInboundUpdate copies `peers` from the previous inbound `settings` when
+// the new payload has no peer rows. The panel only edits the server block (mtu, secretKey, address, …);
+// peers are maintained by client ↔ inbound assignment, so saves must not replace them with [].
+func PreserveWireGuardPeersOnInboundUpdate(newSettingsJSON, oldSettingsJSON string) (string, error) {
+	newSettingsJSON = strings.TrimSpace(newSettingsJSON)
+	oldSettingsJSON = strings.TrimSpace(oldSettingsJSON)
+	if oldSettingsJSON == "" {
+		return newSettingsJSON, nil
+	}
+	var newM map[string]any
+	if err := json.Unmarshal([]byte(newSettingsJSON), &newM); err != nil || newM == nil {
+		newM = make(map[string]any)
+	}
+	if pNew, _ := newM["peers"].([]any); len(pNew) > 0 {
+		return newSettingsJSON, nil
+	}
+	var oldM map[string]any
+	if err := json.Unmarshal([]byte(oldSettingsJSON), &oldM); err != nil || oldM == nil {
+		return newSettingsJSON, nil
+	}
+	pOld, _ := oldM["peers"].([]any)
+	if len(pOld) == 0 {
+		return newSettingsJSON, nil
+	}
+	newM["peers"] = pOld
+	b, err := json.MarshalIndent(newM, "", "  ")
+	if err != nil {
+		return newSettingsJSON, err
 	}
 	return string(b), nil
 }

@@ -28,6 +28,30 @@ func TestBuildWireGuardInboundSettingsJSON_defaults(t *testing.T) {
 	if len(addrs) != 1 || addrs[0] != "10.8.0.1/32" {
 		t.Fatalf("address: %v", m["address"])
 	}
+	dns, _ := m["clientDns"].([]interface{})
+	if dns == nil {
+		t.Fatalf("clientDns: %v", m["clientDns"])
+	}
+	if len(dns) != 0 {
+		t.Fatalf("clientDns: %v", m["clientDns"])
+	}
+}
+
+func TestBuildWireGuardInboundSettingsJSON_clientDns(t *testing.T) {
+	s, err := BuildWireGuardInboundSettingsJSON(&WireGuardInboundRequest{
+		ClientDNS: []string{" 1.1.1.1 ", "", "2606:4700:4700::1111"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		t.Fatal(err)
+	}
+	dns, _ := m["clientDns"].([]interface{})
+	if len(dns) != 2 {
+		t.Fatalf("got %v", m["clientDns"])
+	}
 }
 
 func TestApplyWireGuardSettingsAddressForXray_json(t *testing.T) {
@@ -79,3 +103,26 @@ func TestBuildWireGuardInboundSettingsJSON_peer(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func TestPreserveWireGuardPeersOnInboundUpdate(t *testing.T) {
+	const old = `{"mtu":1420,"secretKey":"old","address":["10.8.0.1/32"],"peers":[{"publicKey":"abc","email":"a@b.c"}],"noKernelTun":true}`
+	const newNoPeers = `{"mtu":1500,"secretKey":"new","address":["10.8.0.1/32"],"peers":[],"noKernelTun":false}`
+	out, err := PreserveWireGuardPeersOnInboundUpdate(newNoPeers, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "publicKey") || !strings.Contains(out, "abc") {
+		t.Fatalf("expected peer preserved: %s", out)
+	}
+	if !strings.Contains(out, "1500") {
+		t.Fatal(out)
+	}
+	// already has peers -> no merge
+	keep, err := PreserveWireGuardPeersOnInboundUpdate(`{"peers":[{"publicKey":"x"}]}`, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if keep != `{"peers":[{"publicKey":"x"}]}` {
+		t.Fatalf("got %q", keep)
+	}
+}

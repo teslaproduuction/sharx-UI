@@ -2111,6 +2111,8 @@ export function ClientsPage() {
   const [sortDir, setSortDir] = useState<SortDir>(initialTablePrefs.sortDir);
   const headerSelectRef = useRef<HTMLInputElement>(null);
   const [subscriptionQrUrl, setSubscriptionQrUrl] = useState<string | null>(null);
+  /** Full connection key / share link text to show as QR (same as copy). */
+  const [connectionKeyQrText, setConnectionKeyQrText] = useState<string | null>(null);
   const [clientsConfirmAction, setClientsConfirmAction] = useState<ClientsConfirmAction>(null);
   const [clientsConfirmBusy, setClientsConfirmBusy] = useState(false);
   const sheetClient =
@@ -2797,20 +2799,20 @@ export function ClientsPage() {
     }
   }, [sheetMode, loadModalData]);
 
-  const resetModal = () => {
+  const resetModal = useCallback(() => {
     setForm({ ...FORM_DEFAULT });
     setInboundIds({});
     setEditingId(null);
     setFetchingClient(false);
-  };
+  }, []);
 
-  const closeSheet = () => {
+  const closeSheet = useCallback(() => {
     setSheetMode(null);
     setSheetClientId(null);
     setSheetInlineBusy(null);
     setSubscriptionQrUrl(null);
     resetModal();
-  };
+  }, [resetModal]);
 
   const executeClientsConfirm = useCallback(async () => {
     if (!clientsConfirmAction) return;
@@ -3855,6 +3857,51 @@ export function ClientsPage() {
       </Modal>
 
       <Modal
+        open={connectionKeyQrText != null}
+        onClose={() => setConnectionKeyQrText(null)}
+        title={t("pages.clients.connectionKeyQrTitle", {
+          defaultValue: "Connection key QR",
+        })}
+        width={400}
+        footer={
+          <div className="flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={() => setConnectionKeyQrText(null)}
+            >
+              {t("close", { defaultValue: "Close" })}
+            </Button>
+            {connectionKeyQrText ? (
+              <Button
+                type="button"
+                variant="primary"
+                onClick={() => copyText(connectionKeyQrText)}
+              >
+                <Copy size={14} className="mr-1 inline" />
+                {t("copy")}
+              </Button>
+            ) : null}
+          </div>
+        }
+      >
+        {connectionKeyQrText ? (
+          <div className="flex flex-col items-center gap-4 py-2">
+            <div className="rounded-xl border border-[var(--border)] bg-white p-3 dark:bg-[var(--bg-elevated)]">
+              <QRCodeSVG
+                value={connectionKeyQrText}
+                size={220}
+                level="M"
+              />
+            </div>
+            <p className="max-h-24 max-w-full overflow-y-auto break-all text-center font-mono text-[11px] text-[var(--fg-muted)]">
+              {connectionKeyQrText}
+            </p>
+          </div>
+        ) : null}
+      </Modal>
+
+      <Modal
         open={keysModalClientId != null}
         onClose={() => {
           setKeysModalClientId(null);
@@ -3897,7 +3944,9 @@ export function ClientsPage() {
           </div>
         ) : (
           <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
-            {keysRows.map((row) => (
+            {keysRows.map((row) => {
+              const keyQrTooLong = row.link.length > 2500;
+              return (
               <div
                 key={`${row.inboundId}-${row.protocol}`}
                 className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
@@ -3921,19 +3970,42 @@ export function ClientsPage() {
                 >
                   {row.link}
                 </pre>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  className="mt-2 !h-8 !text-xs"
-                  onClick={() => copyText(row.link)}
-                >
-                  <Copy size={12} className="mr-1 inline" />
-                  {row.protocol === "wireguard"
-                    ? t("pages.clients.copyWireGuardDetails", { defaultValue: "Copy" })
-                    : t("copy")}
-                </Button>
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!h-8 !text-xs"
+                    onClick={() => copyText(row.link)}
+                  >
+                    <Copy size={12} className="mr-1 inline" />
+                    {row.protocol === "wireguard"
+                      ? t("pages.clients.copyWireGuardDetails", { defaultValue: "Copy" })
+                      : t("copy")}
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    className="!h-8 !text-xs"
+                    disabled={keyQrTooLong}
+                    title={
+                      keyQrTooLong
+                        ? t("pages.clients.keyQrTooLong", {
+                            defaultValue:
+                              "Text is too long for a QR code. Use copy, or open on a device with a smaller key.",
+                          })
+                        : t("pages.clients.keyQrButtonTitle", {
+                            defaultValue: "Show QR code for this connection string",
+                          })
+                    }
+                    onClick={() => setConnectionKeyQrText(row.link)}
+                  >
+                    <QrCode size={12} className="mr-1 inline" />
+                    {t("qrCode")}
+                  </Button>
+                </div>
               </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </Modal>

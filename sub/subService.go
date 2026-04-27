@@ -766,7 +766,10 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 			headers, _ := xhttp["headers"].(map[string]any)
 			baseObj["host"] = searchHost(headers)
 		}
-		baseObj["mode"] = xhttp["mode"].(string)
+		if m, ok := xhttp["mode"].(string); ok {
+			baseObj["mode"] = m
+		}
+		applyXhttpPaddingToVmessObj(xhttp, baseObj)
 	}
 	security, _ := stream["security"].(string)
 	baseObj["tls"] = security
@@ -935,7 +938,10 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 			headers, _ := xhttp["headers"].(map[string]any)
 			baseObj["host"] = searchHost(headers)
 		}
-		baseObj["mode"] = xhttp["mode"].(string)
+		if m, ok := xhttp["mode"].(string); ok {
+			baseObj["mode"] = m
+		}
+		applyXhttpPaddingToVmessObj(xhttp, baseObj)
 	}
 	security, _ := stream["security"].(string)
 	baseObj["tls"] = security
@@ -1026,6 +1032,83 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	return links
 }
 
+// vlessFlowForShareLink returns per-client VLESS flow for share links, or the first non-empty
+// flow from inbound settings JSON (settings.clients[].flow) when the client row has none.
+// The panel stores the form "default" on clients[0] when editing the inbound.
+func vlessFlowForShareLink(clientFlow string, inboundSettings string) string {
+	if t := strings.TrimSpace(clientFlow); t != "" {
+		return t
+	}
+	if inboundSettings == "" {
+		return ""
+	}
+	var root map[string]any
+	if err := json.Unmarshal([]byte(inboundSettings), &root); err != nil {
+		return ""
+	}
+	clients, _ := root["clients"].([]any)
+	for _, c := range clients {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		f, ok := cm["flow"].(string)
+		if !ok {
+			continue
+		}
+		if t := strings.TrimSpace(f); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// applyXhttpPaddingParams copies xPadding* fields from xhttpSettings into vless:// / trojan:// / ss://
+// query params (aligned with 3x-ui): x_padding_bytes, extra=<json> for Xray/sing-box clients.
+func applyXhttpPaddingParams(xhttp map[string]any, params map[string]string) {
+	if xhttp == nil {
+		return
+	}
+	if xpb, ok := xhttp["xPaddingBytes"].(string); ok && len(xpb) > 0 {
+		params["x_padding_bytes"] = xpb
+	}
+	extra := map[string]any{}
+	if xpb, ok := xhttp["xPaddingBytes"].(string); ok && len(xpb) > 0 {
+		extra["xPaddingBytes"] = xpb
+	}
+	if obfs, ok := xhttp["xPaddingObfsMode"].(bool); ok && obfs {
+		extra["xPaddingObfsMode"] = true
+		for _, field := range []string{"xPaddingKey", "xPaddingHeader", "xPaddingPlacement", "xPaddingMethod"} {
+			if v, ok := xhttp[field].(string); ok && len(v) > 0 {
+				extra[field] = v
+			}
+		}
+	}
+	if len(extra) > 0 {
+		if b, err := json.Marshal(extra); err == nil {
+			params["extra"] = string(b)
+		}
+	}
+}
+
+// applyXhttpPaddingToVmessObj copies xhttp padding into the VMess base64 share JSON (aligned with 3x-ui).
+func applyXhttpPaddingToVmessObj(xhttp map[string]any, obj map[string]any) {
+	if xhttp == nil || obj == nil {
+		return
+	}
+	if xpb, ok := xhttp["xPaddingBytes"].(string); ok && len(xpb) > 0 {
+		obj["x_padding_bytes"] = xpb
+	}
+	if obfs, ok := xhttp["xPaddingObfsMode"].(bool); ok && obfs {
+		obj["xPaddingObfsMode"] = true
+		for _, field := range []string{"xPaddingKey", "xPaddingHeader", "xPaddingPlacement", "xPaddingMethod"} {
+			if v, ok := xhttp[field].(string); ok && len(v) > 0 {
+				obj[field] = v
+			}
+		}
+	}
+}
+
 // genVlessLinkWithClient generates VLESS link using ClientEntity data (new architecture)
 func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
 	if inbound.Protocol != model.VLESS || client == nil {
@@ -1042,6 +1125,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 	if streamNetwork == "" {
 		streamNetwork = "tcp"
 	}
+	vlessFlow := vlessFlowForShareLink(client.Flow, inbound.Settings)
 	params := make(map[string]string)
 	params["type"] = streamNetwork
 
@@ -1099,6 +1183,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 			params["host"] = searchHost(headers)
 		}
 		params["mode"] = xhttp["mode"].(string)
+		applyXhttpPaddingParams(xhttp, params)
 	}
 	security, _ := stream["security"].(string)
 	if security == "tls" {
@@ -1128,8 +1213,8 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 			}
 		}
 
-		if streamNetwork == "tcp" && len(client.Flow) > 0 {
-			params["flow"] = client.Flow
+		if streamNetwork == "tcp" && len(vlessFlow) > 0 {
+			params["flow"] = vlessFlow
 		}
 	}
 
@@ -1170,8 +1255,8 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 			params["spx"] = "/" + random.Seq(15)
 		}
 
-		if streamNetwork == "tcp" && len(client.Flow) > 0 {
-			params["flow"] = client.Flow
+		if streamNetwork == "tcp" && len(vlessFlow) > 0 {
+			params["flow"] = vlessFlow
 		}
 	}
 
@@ -1260,6 +1345,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		}
 	}
 	uuid := clients[clientIndex].ID
+	vlessFlow := vlessFlowForShareLink(clients[clientIndex].Flow, inbound.Settings)
 	port := inbound.Port
 	streamNetwork := stream["network"].(string)
 	params := make(map[string]string)
@@ -1319,6 +1405,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 			params["host"] = searchHost(headers)
 		}
 		params["mode"] = xhttp["mode"].(string)
+		applyXhttpPaddingParams(xhttp, params)
 	}
 	security, _ := stream["security"].(string)
 	if security == "tls" {
@@ -1348,8 +1435,8 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 			}
 		}
 
-		if streamNetwork == "tcp" && len(clients[clientIndex].Flow) > 0 {
-			params["flow"] = clients[clientIndex].Flow
+		if streamNetwork == "tcp" && len(vlessFlow) > 0 {
+			params["flow"] = vlessFlow
 		}
 	}
 
@@ -1382,8 +1469,8 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 			params["spx"] = "/" + random.Seq(15)
 		}
 
-		if streamNetwork == "tcp" && len(clients[clientIndex].Flow) > 0 {
-			params["flow"] = clients[clientIndex].Flow
+		if streamNetwork == "tcp" && len(vlessFlow) > 0 {
+			params["flow"] = vlessFlow
 		}
 	}
 
@@ -1525,6 +1612,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 			params["host"] = searchHost(headers)
 		}
 		params["mode"] = xhttp["mode"].(string)
+		applyXhttpPaddingParams(xhttp, params)
 	}
 	security, _ := stream["security"].(string)
 	if security == "tls" {
@@ -1728,6 +1816,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 			params["host"] = searchHost(headers)
 		}
 		params["mode"] = xhttp["mode"].(string)
+		applyXhttpPaddingParams(xhttp, params)
 	}
 	security, _ := stream["security"].(string)
 	if security == "tls" {
@@ -1994,6 +2083,7 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 				params["host"] = searchHost(headers)
 			}
 			params["mode"] = mapGetString(xhttp, "mode")
+			applyXhttpPaddingParams(xhttp, params)
 		}
 	}
 
@@ -2198,6 +2288,7 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 				params["host"] = searchHost(headers)
 			}
 			params["mode"] = mapGetString(xhttp, "mode")
+			applyXhttpPaddingParams(xhttp, params)
 		}
 	}
 

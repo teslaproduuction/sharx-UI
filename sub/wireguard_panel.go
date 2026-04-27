@@ -37,6 +37,58 @@ func wireguardPublicKeyFromPrivateB64(b64 string) (string, error) {
 	return base64.StdEncoding.EncodeToString(pk[:]), nil
 }
 
+func anyInt64(v any) int64 {
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int32:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		return int64(n)
+	default:
+		return 0
+	}
+}
+
+// wireguardClientDNSFromSettings returns DNS entries for the user [Interface] (from `clientDns` in inbound settings).
+func wireguardClientDNSFromSettings(settings map[string]any) []string {
+	if settings == nil {
+		return nil
+	}
+	raw, ok := settings["clientDns"]
+	if !ok || raw == nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, x := range v {
+			s, ok := x.(string)
+			if !ok {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	case []string:
+		out := make([]string, 0, len(v))
+		for _, s := range v {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
 func findWireguardPeerForClient(peers []any, clientEmail string) map[string]any {
 	el := strings.ToLower(strings.TrimSpace(clientEmail))
 	if el == "" {
@@ -115,6 +167,9 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 		b.WriteString(strings.Join(parts, ", "))
 		b.WriteString("\n")
 	}
+	if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
+		b.WriteString("Client DNS (for [Interface]): " + strings.Join(dns, ", ") + "\n")
+	}
 
 	secret, _ := settings["secretKey"].(string)
 	var serverPub string
@@ -134,10 +189,7 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 	b.WriteString("\n---\n")
 	b.WriteString("Peers on the server (Xray `settings.peers`)\n")
 	if len(peers) == 0 {
-		b.WriteString("None yet — this is expected until you add clients by public key in the panel:\n")
-		b.WriteString("  Inbounds → this inbound → WireGuard section → add a row in Peers (device public key, AllowedIPs).\n")
-		b.WriteString("  The panel does not create WireGuard keys from “clients” automatically.\n")
-		b.WriteString("  To show one peer block below for *this* user, add a field email (or clientEmail) on that peer, same as this client’s email in the panel.\n")
+		b.WriteString("No peers in settings yet. Assign a client to this inbound in “Clients” to auto-create a peer, or add peers manually in Inbounds → WireGuard.\n")
 	} else {
 		b.WriteString(fmt.Sprintf("Configured: %d peer(s).\n", len(peers)))
 		if m := findWireguardPeerForClient(peers, clientEmail); m != nil {
@@ -155,6 +207,12 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 			if psk, _ := m["preSharedKey"].(string); strings.TrimSpace(psk) != "" {
 				b.WriteString("Pre-shared key: " + strings.TrimSpace(psk) + "\n")
 			}
+			if ka := anyInt64(m["keepAlive"]); ka > 0 {
+				b.WriteString(fmt.Sprintf("PersistentKeepalive: %d\n", ka))
+			}
+			if priv, _ := m["privateKey"].(string); strings.TrimSpace(priv) != "" {
+				b.WriteString("Client private key (Interface): " + strings.TrimSpace(priv) + "\n")
+			}
 		} else if clientEmail != "" {
 			b.WriteString("\nNo peer row is tagged for this client. Add \"email\" (or clientEmail) on a peer, equal to: " + clientEmail + "\n")
 		} else {
@@ -164,16 +222,56 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 
 	if serverPub != "" {
 		b.WriteString("\n---\n")
-		b.WriteString("Example: paste into a WireGuard app (or .conf). Replace Interface Address with an IP you allowed for this device.\n\n")
+		peerMatch := findWireguardPeerForClient(peers, clientEmail)
+		b.WriteString("Example: paste into a WireGuard app (or .conf).\n\n")
 		b.WriteString("[Interface]\n")
-		b.WriteString("# PrivateKey = <your device: generate in the app, then put the public key on the server peer row>\n")
-		b.WriteString("# Address = <e.g. 10.8.0.2/32 — from AllowedIPs for this device>\n\n")
-		b.WriteString("[Peer]\n")
+		if peerMatch != nil {
+			if priv, _ := peerMatch["privateKey"].(string); strings.TrimSpace(priv) != "" {
+				b.WriteString("PrivateKey = " + strings.TrimSpace(priv) + "\n")
+			} else {
+				b.WriteString("# PrivateKey = <device private key, public key must be on the server peer row>\n")
+			}
+			if aip, ok := peerMatch["allowedIPs"].([]any); ok && len(aip) > 0 {
+				first := strings.TrimSpace(fmt.Sprint(aip[0]))
+				if first != "" {
+					if !strings.Contains(first, "/") {
+						first += "/32"
+					}
+					b.WriteString("Address = " + first + "\n")
+				} else {
+					b.WriteString("# Address = <from AllowedIPs for this device>\n")
+				}
+			} else {
+				b.WriteString("# Address = <e.g. 10.8.0.2/32 — from AllowedIPs for this device>\n")
+			}
+			if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
+				b.WriteString("DNS = " + strings.Join(dns, ", ") + "\n")
+			}
+		} else {
+			b.WriteString("# PrivateKey = <your device: generate in the app, then put the public key on the server peer row>\n")
+			b.WriteString("# Address = <e.g. 10.8.0.2/32 — from AllowedIPs for this device>\n")
+			if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
+				b.WriteString("DNS = " + strings.Join(dns, ", ") + "\n")
+			}
+		}
+		b.WriteString("\n[Peer]\n")
 		b.WriteString("PublicKey = " + serverPub + "\n")
 		if firstEndpoint != "" {
 			b.WriteString("Endpoint = " + firstEndpoint + "\n")
 		} else {
 			b.WriteString("# Endpoint = host:port (set when Endpoint appears above)\n")
+		}
+		if peerMatch != nil {
+			if psk, _ := peerMatch["preSharedKey"].(string); strings.TrimSpace(psk) != "" {
+				b.WriteString("PresharedKey = " + strings.TrimSpace(psk) + "\n")
+			}
+			if ka := anyInt64(peerMatch["keepAlive"]); ka > 0 {
+				b.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", ka))
+			} else {
+				b.WriteString(fmt.Sprintf("PersistentKeepalive = 25\n"))
+			}
+		} else {
+			b.WriteString("PersistentKeepalive = 25\n")
 		}
 		b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
 	}
