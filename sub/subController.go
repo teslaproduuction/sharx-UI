@@ -275,10 +275,11 @@ func (a *SUBController) subJsons(c *gin.Context) {
 }
 
 // ApplyCommonHeaders sets HTTP headers for subscription responses from the
-// active sharx-v2 ResponseRules (profile title, update interval, announce,
-// support URL, profile web page URL, extra headers). Canonical headers
-// (Subscription-Userinfo, X-Subscription-ID, Profile-Update-Interval) are
-// always emitted; overrides from ResponseRules take precedence.
+// active sharx-v2 config: ResponseRules (profile title, update interval, announce,
+// support URL, profile web page URL, extra headers), and inline client routing
+// (Routing + Routing-Enable) when routing.profiles contains a valid inline JSON body.
+// Canonical headers (Subscription-Userinfo, X-Subscription-ID, Profile-Update-Interval)
+// are always emitted. Extra headers override auto Routing when the same key is set.
 // clientAnnounce (if present on the client row) overrides ResponseRules.Announce.
 func (a *SUBController) ApplyCommonHeaders(c *gin.Context, cfg *service.SharxSubpageConfigV2, header, subId, clientAnnounce string) {
 	c.Writer.Header().Set("Subscription-Userinfo", header)
@@ -323,6 +324,13 @@ func (a *SUBController) ApplyCommonHeaders(c *gin.Context, cfg *service.SharxSub
 		if providerMethod, err := settingService.GetSubProviderIDMethod(); err == nil && providerMethod == "header" {
 			c.Writer.Header().Set("providerid", providerID)
 		}
+	}
+
+	// Client routing (Happ-style JSON) from subscription page config: first inline profile.
+	// ExtraHeaders below can override Routing / Routing-Enable if set manually.
+	if b64, ok := service.RoutingPayloadBase64ForSubscription(cfg); ok {
+		c.Writer.Header().Set("Routing", b64)
+		c.Writer.Header().Set("Routing-Enable", "1")
 	}
 
 	if rr != nil {
