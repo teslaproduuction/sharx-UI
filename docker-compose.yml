@@ -58,8 +58,8 @@ services:
       XUI_DB_PASSWORD: change_this_password
       XUI_DB_NAME: xui_db
       XUI_DB_SSLMODE: disable
-      # Host network: use localhost — watchtower публикуется только на 127.0.0.1 (см. сервис watchtower).
-      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8080/v1/update
+      # Host network: use localhost — watchtower публикуется только на 127.0.0.1:8081 (см. сервис watchtower).
+      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8081/v1/update
       XUI_DOCKER_UPDATER_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
     depends_on:
       postgres:
@@ -77,7 +77,7 @@ services:
     container_name: sharx_watchtower
     # Только для panel с network_mode: host — иначе панель не достучится до watchtower по имени сервиса.
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:8081:8080"
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
