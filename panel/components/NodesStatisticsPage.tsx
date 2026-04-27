@@ -189,7 +189,6 @@ function NodesTrafficChart({ data }: { data: ChartDatum[] }) {
               fill="url(#barUp)"
               radius={[5, 5, 0, 0]}
               maxBarSize={36}
-              isAnimationActive={false}
             />
             <Bar
               dataKey="download"
@@ -197,7 +196,6 @@ function NodesTrafficChart({ data }: { data: ChartDatum[] }) {
               fill="url(#barDown)"
               radius={[5, 5, 0, 0]}
               maxBarSize={36}
-              isAnimationActive={false}
             />
             <Bar
               dataKey="allTime"
@@ -205,7 +203,6 @@ function NodesTrafficChart({ data }: { data: ChartDatum[] }) {
               fill="url(#barAll)"
               radius={[5, 5, 0, 0]}
               maxBarSize={36}
-              isAnimationActive={false}
             />
           </BarChart>
         </ResponsiveContainer>
@@ -245,7 +242,6 @@ export function NodesStatisticsPage() {
     if (!ws) return;
     const onNodes = (p: unknown) => {
       setRows(mapNodesPayloadToStatsRows(p));
-      setLoading(false);
     };
     const onDisc = () => {
       resyncAfterDisconnect.current = true;

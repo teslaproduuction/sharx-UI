@@ -2,7 +2,7 @@
 package model
 
 import (
-	"encoding/json"
+	"fmt"
 	"strings"
 
 	"github.com/konstpic/sharx-code/v2/util/json_util"
@@ -109,14 +109,9 @@ type HistoryOfSeeders struct {
 
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
-	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
-	listenAddr := strings.TrimSpace(i.Listen)
-	if listenAddr == "" {
-		listenAddr = "0.0.0.0"
-	}
-	listenJSON, err := json.Marshal(listenAddr)
-	if err != nil {
-		listenJSON = []byte(`"0.0.0.0"`)
+	listen := i.Listen
+	if listen != "" {
+		listen = fmt.Sprintf("\"%v\"", listen)
 	}
 	protocol := string(i.Protocol)
 	// Xray expects "hysteria" as protocol id; v1/v2 is controlled by settings.version.
@@ -124,7 +119,7 @@ func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 		protocol = string(Hysteria)
 	}
 	return &xray.InboundConfig{
-		Listen:         json_util.RawMessage(listenJSON),
+		Listen:         json_util.RawMessage(listen),
 		Port:           i.Port,
 		Protocol:       protocol,
 		Settings:       json_util.RawMessage(i.Settings),

@@ -286,8 +286,6 @@
 "IPLimitlogDesc" = "Журнал історії IP-адрес. (щоб увімкнути вхідну після вимкнення, очистіть журнал)"
 "IPLimitlogclear" = "Очистити журнал"
 "setDefaultCert" = "Установити сертифікат з панелі"
-"generateSelfSignedTls" = "Generate self-signed (PEM)"
-"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "Будь ласка, вкажіть ID чату Telegram. (використовуйте команду '/id' у боті) або (@userinfobot)"
 "subscriptionDesc" = "Щоб знайти URL-адресу вашої підписки, перейдіть до «Деталі». Крім того, ви можете використовувати одне ім'я для кількох клієнтів."
 "info" = "Інформація"
@@ -343,7 +341,6 @@
 "getNewX25519CertError" = "Помилка при отриманні сертифіката X25519."
 "getNewmldsa65Error" = "Помилка при отриманні сертифіката mldsa65."
 "getNewVlessEncError" = "Помилка при отриманні сертифіката VlessEnc."
-"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "Запит"

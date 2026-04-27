@@ -760,41 +760,23 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		logger.Infof("UpdateClient: enableChanged=%v, needsReAdd=%v, multiMode=%v, xrayRunning=%v", 
 			enableChanged, needsReAdd, multiMode, xrayService.IsXrayRunning())
 		
-		// Single mode: keep config.json in sync (same idea as nodes: live core via API + persisted config).
-		// Touch every affected inbound so email changes and inbound reassignment update the file correctly.
+		// Single mode: instantly update config.json before restart
 		if !multiMode {
 			if xrayService.IsXrayRunning() {
 				processConfig := xrayService.GetConfig()
 				if processConfig != nil {
 					clientInboundIds, err := s.GetInboundIdsForClient(client.Id)
-					if err != nil {
-						logger.Warningf("UpdateClient: GetInboundIdsForClient: %v", err)
-					} else {
-						assignedSet := make(map[int]bool, len(clientInboundIds))
+					if err == nil {
 						for _, inboundId := range clientInboundIds {
-							assignedSet[inboundId] = true
-						}
-						for inboundId := range affectedInboundIds {
 							inbound, err := inboundService.GetInbound(inboundId)
 							if err != nil {
 								continue
 							}
-							assigned := assignedSet[inboundId]
-							if !assigned || !finalClient.Enable {
-								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Email); err != nil {
-									logger.Warningf("UpdateClient: failed to remove client %s from config.json (inbound %s): %v", existing.Email, inbound.Tag, err)
-								} else {
-									logger.Infof("UpdateClient: removed client %s from config.json (inbound: %s)", existing.Email, inbound.Tag)
-								}
-								continue
-							}
-							if !strings.EqualFold(existing.Email, finalClient.Email) {
-								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Email); err != nil {
-									logger.Warningf("UpdateClient: failed to remove old email %s from config.json (inbound %s): %v", existing.Email, inbound.Tag, err)
-								}
-							}
+							
+							// Build client data for config update
 							clientData := make(map[string]interface{})
 							clientData["email"] = finalClient.Email
+							
 							switch inbound.Protocol {
 							case model.Trojan, model.Mixed:
 								clientData["password"] = finalClient.Password
@@ -829,17 +811,41 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 									}
 								}
 							}
-							if err := xray.UpdateConfigFileAfterUserAddition(processConfig, inbound.Tag, clientData); err != nil {
-								logger.Warningf("UpdateClient: failed to add client %s to config.json: %v", finalClient.Email, err)
+							
+							// Instantly update config.json
+							if finalClient.Enable {
+								// Add client to config.json
+								if err := xray.UpdateConfigFileAfterUserAddition(processConfig, inbound.Tag, clientData); err != nil {
+									logger.Warningf("UpdateClient: failed to instantly add client %s to config.json: %v", finalClient.Email, err)
+								} else {
+									logger.Infof("UpdateClient: instantly added client %s to config.json (inbound: %s)", finalClient.Email, inbound.Tag)
+								}
 							} else {
-								logger.Infof("UpdateClient: added client %s to config.json (inbound: %s)", finalClient.Email, inbound.Tag)
+								// Remove client from config.json
+								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, finalClient.Email); err != nil {
+									logger.Warningf("UpdateClient: failed to instantly remove client %s from config.json: %v", finalClient.Email, err)
+								} else {
+									logger.Infof("UpdateClient: instantly removed client %s from config.json (inbound: %s)", finalClient.Email, inbound.Tag)
+								}
 							}
 						}
 					}
 				}
 			}
 		}
-
+		
+		// Single-node: local Xray needs process restart after config.json patches / credential changes.
+		// Multi-node: inbound sync is done via updateInboundWithRetry -> UpdateInboundOnNode (no full apply-config).
+		if !multiMode {
+			if enableChanged || needsReAdd {
+				needRestart = true
+			}
+			if existing.UUID != finalClient.UUID || existing.Password != finalClient.Password ||
+				existing.Security != finalClient.Security || existing.Flow != finalClient.Flow {
+				needRestart = true
+			}
+		}
+		
 		// Update Settings for affected inbounds (needed to keep DB in sync)
 		for inboundId := range affectedInboundIds {
 			inbound, err := inboundService.GetInbound(inboundId)
@@ -873,9 +879,12 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 				needRestart = true
 			}
 		}
-
-		// Restart only if UpdateInbound could not apply changes via API (see InboundService.UpdateInbound).
-		// Single-node: local sync uses gRPC DelInbound+AddInbound for the inbound, same session as nodes' add-user API.
+		
+		// Always restart in single mode (config.json already updated)
+		if !multiMode {
+			needRestart = true
+		}
+		
 		// Restart Xray asynchronously in background to apply changes
 		// This ensures config is fully synchronized without blocking the response
 		// Fastest approach: instant config update + async restart (user gets instant response, restart happens in background)
@@ -1046,8 +1055,11 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 		}
 	}
 
-	// Single-node: restart only if inbound update required a full reload (API unavailable or structural inbound change).
-	// Multi-mode: nodes are updated via their APIs when inboundNeedRestart is set.
+	// Always restart in single mode (config.json already updated)
+	// In multi-mode, nodes will be updated via their APIs
+	if !multiMode {
+		needRestart = true
+	}
 
 	// Restart Xray asynchronously in background to apply changes
 	// This ensures config is fully synchronized without blocking the response

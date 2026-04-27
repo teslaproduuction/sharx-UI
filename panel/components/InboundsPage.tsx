@@ -505,7 +505,6 @@ export function InboundsPage() {
   const [xrayPreviewError, setXrayPreviewError] = useState<string | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [modalSubmitting, setModalSubmitting] = useState(false);
-  const [generatingSelfSignedTls, setGeneratingSelfSignedTls] = useState(false);
   const [fetchingInbound, setFetchingInbound] = useState(false);
   const [step, setStep] = useState<InboundStepId>("basics");
   const [nodes, setNodes] = useState<NodeRow[]>([]);
@@ -750,58 +749,6 @@ export function InboundsPage() {
       streamForm: { ...f.streamForm, [key]: value },
     }));
   };
-
-  const generateHysteriaSelfSignedTls = useCallback(async () => {
-    setGeneratingSelfSignedTls(true);
-    try {
-      const sni = form.streamForm.tlsServerName.trim();
-      const dnsNames =
-        sni !== ""
-          ? Array.from(new Set([sni, "localhost"]))
-          : ["localhost"];
-      const r = await postJson<{
-        certPem: string;
-        keyPem: string;
-      }>(
-        panel("api/inbounds/generateSelfSignedTls"),
-        {
-          commonName: sni || "localhost",
-          dnsNames,
-          ipAddresses: ["127.0.0.1"],
-          validityDays: 365,
-        },
-        true,
-      );
-      if (r.success && r.obj != null) {
-        const o = r.obj;
-        setForm((f) => ({
-          ...f,
-          streamForm: {
-            ...f.streamForm,
-            tlsCertificatePem: o.certPem,
-            tlsKeyPem: o.keyPem,
-            tlsCertificateFile: "",
-            tlsKeyFile: "",
-          },
-        }));
-        toast.success(
-          (r as { msg?: string }).msg ||
-            t("pages.inbounds.toasts.generateSelfSignedSuccess", {
-              defaultValue: "Self-signed certificate generated.",
-            }),
-        );
-      } else {
-        toast.error(
-          (r as { msg?: string }).msg ||
-            t("fail", { defaultValue: "Error" }),
-        );
-      }
-    } catch {
-      toast.error(t("fail", { defaultValue: "Error" }));
-    } finally {
-      setGeneratingSelfSignedTls(false);
-    }
-  }, [form.streamForm.tlsServerName, t, toast]);
 
   const addXhttpHeader = () => {
     setForm((f) => ({
@@ -2240,34 +2187,6 @@ export function InboundsPage() {
                         "Use certificate file + key file on the server, or paste PEM blocks below.",
                     })}
                   </p>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-                    <p className="text-xs text-[var(--fg-subtle)]">
-                      {t("pages.inbounds.generateSelfSignedTlsHint", {
-                        defaultValue:
-                          "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure.",
-                      })}
-                    </p>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="shrink-0 text-xs"
-                      disabled={generatingSelfSignedTls || modalSubmitting}
-                      onClick={() => {
-                        void generateHysteriaSelfSignedTls();
-                      }}
-                    >
-                      {generatingSelfSignedTls ? (
-                        <span className="inline-flex items-center gap-2">
-                          <Spinner className="h-3.5 w-3.5" />
-                          {t("loading")}
-                        </span>
-                      ) : (
-                        t("pages.inbounds.generateSelfSignedTls", {
-                          defaultValue: "Generate self-signed (PEM)",
-                        })
-                      )}
-                    </Button>
-                  </div>
                   <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                     <div>
                       <label

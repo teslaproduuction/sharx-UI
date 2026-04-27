@@ -35,11 +35,10 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	clientsToDisable := make(map[string]string) // map[email]tag
 	affectedInboundIds := make(map[int]bool)    // Track affected inbounds for traffic sync
 
-	// No per-user rows this tick: treat as nobody had traffic (same idea as node stats, where
-	// online is derived from positive deltas). Clear the panel list so clients do not stay
-	// "online" forever after disconnect; the UI debounces brief gaps via OFFLINE_STATUS_DELAY.
+	// When Xray returns no client stat rows (idle period or API hiccup), do not clear the
+	// in-memory online list — otherwise the panel always shows "offline" for connected users
+	// when there is 0 B delta in the 1s window (GetTraffic uses reset_).
 	if len(traffics) == 0 {
-		setPanelOnlineClients(nil)
 		return clientsToDisable, affectedInboundIds, nil
 	}
 
@@ -322,10 +321,9 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			}
 		}
 
-		// Online for panel: match node GetStats — only clients with traffic delta > 0 this read.
-		// (Node merges process list + onlineFromTraffic; node process list is unused, so this
-		// aligns standalone with multi-node behavior and avoids stuck "online" when Xray still
-		// returns user>>>...>>>traffic rows at 0 after disconnect.)
+		// Online for panel: any enabled client present in this Xray stats read. With reset_ stats,
+		// newTotal can be 0 for an idle 1s window; we still mark online so the panel does not
+		// show "offline" for active sessions.
 		if !client.Enable {
 			continue
 		}
@@ -340,8 +338,8 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					}
 				}(client)
 			}
-			addOnline(client.Email)
 		}
+		addOnline(client.Email)
 	}
 
 	// Set online list for the panel (works with or without local *Process: multi-node has p==nil)
