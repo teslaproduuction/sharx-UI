@@ -1504,6 +1504,49 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	return nil, (needRestart0 || needRestart1 || needRestart2)
 }
 
+// ApplyHysteriaFallbackFromCumulative applies Hysteria fallback accounting using reset=false
+// inbound counters (processed as local deltas inside ClientService).
+func (s *InboundService) ApplyHysteriaFallbackFromCumulative(inboundTraffics []*xray.Traffic) error {
+	if len(inboundTraffics) == 0 {
+		return nil
+	}
+	db := database.GetDB()
+	tx := db.Begin()
+	var err error
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	clientService := ClientService{}
+	err = clientService.AddHysteriaInboundTrafficFallbackFromCumulative(tx, inboundTraffics)
+	return err
+}
+
+// ApplyHysteriaFallbackFromDeltas applies fallback directly from current reset=true inbound deltas.
+func (s *InboundService) ApplyHysteriaFallbackFromDeltas(inboundTraffics []*xray.Traffic) error {
+	if len(inboundTraffics) == 0 {
+		return nil
+	}
+	db := database.GetDB()
+	tx := db.Begin()
+	var err error
+	defer func() {
+		if err != nil {
+			tx.Rollback()
+		} else {
+			tx.Commit()
+		}
+	}()
+
+	clientService := ClientService{}
+	err = clientService.AddHysteriaInboundTrafficFallbackFromDeltas(tx, inboundTraffics)
+	return err
+}
+
 func (s *InboundService) addInboundTraffic(tx *gorm.DB, traffics []*xray.Traffic) error {
 	if len(traffics) == 0 {
 		return nil

@@ -49,6 +49,9 @@ func (j *XrayTrafficJob) Run() {
 	if !j.xrayService.IsXrayRunning() {
 		return
 	}
+	// Take cumulative snapshot BEFORE reset=true polling, otherwise counters are zeroed by the
+	// regular collector and Hy2 fallback cannot derive deltas.
+	cumulativeTraffics, _, cumulativeErr := j.xrayService.GetXrayTrafficNoReset()
 	traffics, clientTraffics, err := j.xrayService.GetXrayTraffic()
 	if err != nil {
 		return
@@ -57,6 +60,23 @@ func (j *XrayTrafficJob) Run() {
 	err, needRestart0 := j.inboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
 		logger.Warning("add inbound traffic failed:", err)
+	}
+	// Hysteria2 fallback: some Xray builds don't emit user>>>... stats for Hy2, so clientTraffics
+	// may be empty while inbound counters still grow. Use reset=false cumulative counters and local
+	// delta calculation to attribute traffic in the safe single-client-per-inbound case.
+	if len(clientTraffics) == 0 {
+		// First try direct reset=true deltas from this tick (fast path).
+		if ferr := j.inboundService.ApplyHysteriaFallbackFromDeltas(traffics); ferr != nil {
+			logger.Warningf("hysteria delta fallback accounting failed: %v", ferr)
+		}
+		// Then also run cumulative snapshot fallback for cores/builds where per-tick values are unstable.
+		if cumulativeErr == nil {
+			if ferr := j.inboundService.ApplyHysteriaFallbackFromCumulative(cumulativeTraffics); ferr != nil {
+				logger.Warningf("hysteria fallback accounting failed: %v", ferr)
+			}
+		} else {
+			logger.Warningf("failed to fetch cumulative xray traffic for hysteria fallback: %v", cumulativeErr)
+		}
 	}
 	err, needRestart1 := j.outboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
