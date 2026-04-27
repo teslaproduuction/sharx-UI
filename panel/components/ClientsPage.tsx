@@ -20,6 +20,7 @@ import {
   Mail,
   Megaphone,
   Plus,
+  Power,
   QrCode,
   RotateCcw,
   Send,
@@ -182,6 +183,8 @@ type ClientsConfirmAction =
 
 /** How long a client can disappear from the online batch before the UI flips to offline (avoids flicker on sparse WS ticks). */
 const OFFLINE_STATUS_DELAY_MS = 5_000;
+/** Consider client "recently online" for UI status when live online bit is stale. */
+const ONLINE_RECENT_WINDOW_MS = 2 * 60_000;
 
 function normEmail(s: string) {
   return s.trim().toLowerCase();
@@ -249,10 +252,12 @@ function ReadonlyConnectionState({
   legend,
   label,
   groupName,
+  activityText,
 }: {
   legend: string;
   label: string;
   groupName: string;
+  activityText?: string;
 }) {
   return (
     <div className="min-w-0 space-y-1.5">
@@ -272,69 +277,9 @@ function ReadonlyConnectionState({
           {label}
         </span>
       </div>
-    </div>
-  );
-}
-
-function ClientEnableRadioGroup({
-  name,
-  enabled,
-  onChange,
-  disabled,
-  enabledLabel,
-  disabledLabel,
-  groupLabel,
-}: {
-  name: string;
-  enabled: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  enabledLabel: string;
-  disabledLabel: string;
-  groupLabel: string;
-}) {
-  const optClass = (on: boolean) =>
-    cx(
-      "inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-      on
-        ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
-        : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-subtle)] hover:border-[var(--fg-subtle)]",
-      disabled && "cursor-not-allowed opacity-60",
-    );
-  const dotClass = (on: boolean) =>
-    cx(
-      "h-2.5 w-2.5 shrink-0 rounded-full border-2",
-      on
-        ? "border-[var(--accent)] bg-[var(--accent)]"
-        : "border-[var(--border)] bg-[var(--surface)]",
-    );
-
-  return (
-    <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={groupLabel}>
-      <label className={optClass(enabled)}>
-        <input
-          type="radio"
-          name={name}
-          className="sr-only"
-          checked={enabled}
-          disabled={disabled}
-          onChange={() => onChange(true)}
-        />
-        <span className={dotClass(enabled)} aria-hidden />
-        {enabledLabel}
-      </label>
-      <label className={optClass(!enabled)}>
-        <input
-          type="radio"
-          name={name}
-          className="sr-only"
-          checked={!enabled}
-          disabled={disabled}
-          onChange={() => onChange(false)}
-        />
-        <span className={dotClass(!enabled)} aria-hidden />
-        {disabledLabel}
-      </label>
+      {activityText ? (
+        <div className="text-[11px] text-[var(--fg-subtle)]">{activityText}</div>
+      ) : null}
     </div>
   );
 }
@@ -369,35 +314,84 @@ function clientAccountStateMeta(
 
 function ClientConnectionStatus({
   isOnline,
+  lastOnline,
   t,
 }: {
   isOnline?: boolean;
+  lastOnline?: number;
   t: TFunction;
 }) {
+  const activityText = connectionActivityText(lastOnline, t);
   return (
-    <span
-      className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium"
-      title={isOnline ? t("online") : t("offline")}
-    >
+    <span className="inline-flex min-w-0 flex-col gap-0.5">
       <span
-        className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-          isOnline
-            ? "bg-emerald-400 shadow-[0_0_0_2px] shadow-emerald-500/30"
-            : "bg-zinc-500/40 dark:bg-zinc-500/30"
-        }`}
-        aria-hidden
-      />
-      <span
-        className={
-          isOnline
-            ? "text-emerald-600 dark:text-emerald-300"
-            : "text-[var(--fg-subtle)]"
-        }
+        className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-medium"
+        title={isOnline ? t("online") : t("offline")}
       >
-        {isOnline ? t("online") : t("offline")}
+        <span
+          className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+            isOnline
+              ? "bg-emerald-400 shadow-[0_0_0_2px] shadow-emerald-500/30"
+              : "bg-zinc-500/40 dark:bg-zinc-500/30"
+          }`}
+          aria-hidden
+        />
+        <span
+          className={
+            isOnline
+              ? "text-emerald-600 dark:text-emerald-300"
+              : "text-[var(--fg-subtle)]"
+          }
+        >
+          {isOnline ? t("online") : t("offline")}
+        </span>
       </span>
+      {activityText ? (
+        <span className="text-[10px] text-[var(--fg-subtle)]">{activityText}</span>
+      ) : null}
     </span>
   );
+}
+
+function clientIsOnlineConsideringLastSeen(r: ClientCard): boolean {
+  if (r.isOnline === true) return true;
+  const lastSeenMs = panelTimestampToMs(r.lastOnline);
+  if (lastSeenMs == null || lastSeenMs <= 0) return false;
+  return Date.now() - lastSeenMs <= ONLINE_RECENT_WINDOW_MS;
+}
+
+function connectionActivityText(
+  lastOnline: number | undefined,
+  t: TFunction,
+): string {
+  const lastSeenMs = panelTimestampToMs(lastOnline);
+  if (lastSeenMs == null || lastSeenMs <= 0) return "";
+  const diffSec = Math.max(0, Math.floor((Date.now() - lastSeenMs) / 1000));
+  if (diffSec < 10) {
+    return t("pages.clients.activity.justNow", { defaultValue: "Seen just now" });
+  }
+  if (diffSec < 60) {
+    return t("pages.clients.activity.secondsAgo", {
+      defaultValue: "Seen {{count}} sec ago",
+      count: diffSec,
+    });
+  }
+  if (diffSec < 3600) {
+    return t("pages.clients.activity.minutesAgo", {
+      defaultValue: "Seen {{count}} min ago",
+      count: Math.floor(diffSec / 60),
+    });
+  }
+  if (diffSec < 86400) {
+    return t("pages.clients.activity.hoursAgo", {
+      defaultValue: "Seen {{count}} h ago",
+      count: Math.floor(diffSec / 3600),
+    });
+  }
+  return t("pages.clients.activity.daysAgo", {
+    defaultValue: "Seen {{count}} d ago",
+    count: Math.floor(diffSec / 86400),
+  });
 }
 
 type SortDir = "asc" | "desc";
@@ -798,7 +792,9 @@ function compareClients(
       });
       break;
     case "connection":
-      c = (a.isOnline ? 1 : 0) - (b.isOnline ? 1 : 0);
+      c =
+        Number(clientIsOnlineConsideringLastSeen(a)) -
+        Number(clientIsOnlineConsideringLastSeen(b));
       break;
     case "state":
       c = stateSortRank(a) - stateSortRank(b);
@@ -955,7 +951,13 @@ function ClientDataCell({
         </span>
       );
     case "connection":
-      return <ClientConnectionStatus isOnline={r.isOnline} t={t} />;
+      return (
+        <ClientConnectionStatus
+          isOnline={clientIsOnlineConsideringLastSeen(r)}
+          lastOnline={r.lastOnline}
+          t={t}
+        />
+      );
     case "state": {
       const sm = clientAccountStateMeta(r.enable, r.status, t);
       return (
@@ -1446,10 +1448,13 @@ function ClientUnifiedCard({
                     legend={t("pages.clients.fieldConnectionState", {
                       defaultValue: "Connection",
                     })}
-                    label={r.isOnline ? t("online") : t("offline")}
+                    label={
+                      clientIsOnlineConsideringLastSeen(r) ? t("online") : t("offline")
+                    }
                     groupName={t("pages.clients.fieldConnectionState", {
                       defaultValue: "Connection",
                     })}
+                    activityText={connectionActivityText(r.lastOnline, t)}
                   />
                 </div>
               ) : (
@@ -1462,17 +1467,6 @@ function ClientUnifiedCard({
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <ClientEnableRadioGroup
-                  name={id("client-enable")}
-                  enabled={form.enable}
-                  onChange={(next) => setForm((f) => ({ ...f, enable: next }))}
-                  disabled={variant === "existing" && sheetActionBusy != null}
-                  enabledLabel={t("enabled")}
-                  disabledLabel={t("disabled")}
-                  groupLabel={t("pages.clients.fieldAccountEnabled", {
-                    defaultValue: "Client account",
-                  })}
-                />
                 {form.hwidEnabled ? (
                   <PillTag tone="green">
                     <Shield size={11} className="mr-1" />
@@ -1482,6 +1476,23 @@ function ClientUnifiedCard({
               </div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-0.5 lg:pt-0.5">
+            <IconButton
+              type="button"
+              label={
+                form.enable
+                  ? t("pages.clients.disableClient", { defaultValue: "Disable client" })
+                  : t("pages.clients.enableClient", { defaultValue: "Enable client" })
+              }
+              disabled={variant === "existing" && sheetActionBusy != null}
+              className={
+                form.enable
+                  ? "!text-emerald-600 hover:!text-emerald-700 dark:!text-emerald-400 dark:hover:!text-emerald-300"
+                  : "!text-[var(--fg-subtle)]"
+              }
+              onClick={() => setForm((f) => ({ ...f, enable: !f.enable }))}
+            >
+              <Power size={18} />
+            </IconButton>
             {subFeedUrl ? (
               <>
                 <IconButton
@@ -1778,6 +1789,20 @@ function ClientUnifiedCard({
                       )}
                     </span>
                   </li>
+                  {form.hwidEnabled && r ? (
+                    <li className="flex flex-wrap justify-between gap-2">
+                      <span className="text-[var(--fg-muted)]">
+                        {t("pages.clients.viewHwid", { defaultValue: "Devices" })}
+                      </span>
+                      <span className="text-[var(--fg)]">
+                        {t("pages.clients.cardHwidCounts", {
+                          defaultValue: "Devices: {{active}}{{suffix}}",
+                          active: r.activeHwidCount,
+                          suffix: maxHwidSuffix,
+                        })}
+                      </span>
+                    </li>
+                  ) : null}
                   {r.upSpeed != null && r.upSpeed > 0 ? (
                     <li className="flex flex-wrap justify-between gap-2">
                       <span className="text-[var(--fg-muted)]">
@@ -1826,39 +1851,42 @@ function ClientUnifiedCard({
               <SectionLabel icon={Activity}>
                 {t("pages.clients.traffic")}
               </SectionLabel>
-              <p className="mb-2 text-xs text-[var(--fg-muted)]">
-                <span className="text-[var(--fg)]">
-                  {t("usage")}: {sizeFormat(upDown.up)} ↑ / {sizeFormat(upDown.down)} ↓
-                </span>
-                <span className="mx-1.5 text-[var(--border)]">·</span>
-                {limitLabel}
-                {form.hwidEnabled && variant === "existing" && r ? (
-                  <>
-                    <span className="mx-1.5 text-[var(--border)]">·</span>
-                    {t("pages.clients.cardHwidCounts", {
-                      defaultValue: "Devices: {{active}}{{suffix}}",
-                      active: r.activeHwidCount,
-                      suffix: maxHwidSuffix,
+              <div className="mb-3 space-y-1.5 text-xs text-[var(--fg-muted)]">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>{t("pages.clients.trafficRowMode", { defaultValue: "Traffic mode" })}</span>
+                  <span className="text-[var(--fg)]">{limitLabel}</span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>{t("usage")}</span>
+                  <span className="text-[var(--fg)]">
+                    {sizeFormat(upDown.up)} ↑ / {sizeFormat(upDown.down)} ↓
+                  </span>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    {t("pages.clients.cardTrafficTotalUsed", { defaultValue: "Total used" })}
+                  </span>
+                  <span className="text-[var(--fg)]">
+                    {t("pages.clients.cardTrafficUsedOnly", {
+                      defaultValue: "{{used}}",
+                      used: sizeFormat(usedTotal),
                     })}
-                  </>
-                ) : null}
-              </p>
-              <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 text-xs text-[var(--fg-muted)]">
-                <span>{t("pages.clients.cardTrafficTotalUsed", { defaultValue: "Total used" })}</span>
-                <span className="font-medium text-[var(--fg)]">
-                  {limitBytes > 0
-                    ? t("pages.clients.cardTrafficFraction", {
-                        defaultValue: "{{used}} / {{limit}} ({{pct}}%)",
-                        used: sizeFormat(usedTotal),
-                        limit: sizeFormat(limitBytes),
-                        pct: String(Math.round(trafficPct)),
-                      })
-                    : t("pages.clients.cardTrafficUsedOnly", {
-                        defaultValue: "{{used}}",
-                        used: sizeFormat(usedTotal),
-                      })}
-                </span>
+                  </span>
+                </div>
               </div>
+              {limitBytes > 0 ? (
+                <div className="mb-3 flex flex-wrap items-baseline justify-between gap-2 text-xs text-[var(--fg-muted)]">
+                  <span>{t("pages.clients.cardTrafficFractionLabel", { defaultValue: "Usage ratio" })}</span>
+                  <span className="font-medium text-[var(--fg)]">
+                    {t("pages.clients.cardTrafficFraction", {
+                      defaultValue: "{{used}} / {{limit}} ({{pct}}%)",
+                      used: sizeFormat(usedTotal),
+                      limit: sizeFormat(limitBytes),
+                      pct: String(Math.round(trafficPct)),
+                    })}
+                  </span>
+                </div>
+              ) : null}
               {limitBytes > 0 ? (
                 <div
                   className="mb-3 h-2 w-full overflow-hidden rounded-full bg-[color-mix(in_oklab,var(--border)_85%,transparent)]"
@@ -2576,8 +2604,9 @@ export function ClientsPage() {
     const anyExpiryCmp = expiryCompareOp !== "" && expiryBounds != null;
 
     return rows.filter((r) => {
-      if (filterConn === "online" && !r.isOnline) return false;
-      if (filterConn === "offline" && r.isOnline) return false;
+      const isOnline = clientIsOnlineConsideringLastSeen(r);
+      if (filterConn === "online" && !isOnline) return false;
+      if (filterConn === "offline" && isOnline) return false;
       if (!rowMatchesAccountFilter(r, filterAcct)) return false;
 
       if (filterInboundId === "none") {
@@ -2705,6 +2734,20 @@ export function ClientsPage() {
     () => displayedRows.map((r) => r.id),
     [displayedRows],
   );
+
+  const clientsStats = useMemo(() => {
+    const total = rows.length;
+    const online = rows.reduce(
+      (acc, r) => acc + (clientIsOnlineConsideringLastSeen(r) ? 1 : 0),
+      0,
+    );
+    return {
+      total,
+      online,
+      offline: Math.max(0, total - online),
+      filtered: displayedRows.length,
+    };
+  }, [rows, displayedRows.length]);
 
   const selectedOnPage = useMemo(
     () => displayedIds.filter((id) => selectedIds.has(id)),
@@ -3161,6 +3204,42 @@ export function ClientsPage() {
         }
       />
       <Reveal>
+      {rows.length > 0 ? (
+        <div className="mb-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <Surface className="p-3">
+            <p className="text-[11px] uppercase tracking-wider text-[var(--fg-subtle)]">
+              {t("pages.clients.statsUsersTotal", { defaultValue: "Users total" })}
+            </p>
+            <p className="mt-1 text-lg font-semibold text-[var(--fg)]">
+              {clientsStats.total}
+            </p>
+          </Surface>
+          <Surface className="p-3">
+            <p className="text-[11px] uppercase tracking-wider text-[var(--fg-subtle)]">
+              {t("pages.clients.statsUsersOnline", { defaultValue: "Online users" })}
+            </p>
+            <p className="mt-1 text-lg font-semibold text-emerald-500">
+              {clientsStats.online}
+            </p>
+          </Surface>
+          <Surface className="p-3">
+            <p className="text-[11px] uppercase tracking-wider text-[var(--fg-subtle)]">
+              {t("pages.clients.statsUsersOffline", { defaultValue: "Offline users" })}
+            </p>
+            <p className="mt-1 text-lg font-semibold text-[var(--fg)]">
+              {clientsStats.offline}
+            </p>
+          </Surface>
+          <Surface className="p-3">
+            <p className="text-[11px] uppercase tracking-wider text-[var(--fg-subtle)]">
+              {t("pages.clients.statsUsersShown", { defaultValue: "Shown by filters" })}
+            </p>
+            <p className="mt-1 text-lg font-semibold text-[var(--fg)]">
+              {clientsStats.filtered}
+            </p>
+          </Surface>
+        </div>
+      ) : null}
       {rows.length > 0 ? (
         <div className="mb-2 flex flex-wrap items-center gap-2">
               <IconButton

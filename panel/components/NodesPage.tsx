@@ -66,6 +66,23 @@ type NodeRow = {
   enable?: boolean;
 };
 
+type ClientNodeMatrixCell = {
+  online?: boolean;
+};
+
+type ClientNodeMatrixRow = {
+  values?: ClientNodeMatrixCell[];
+};
+
+type ClientNodeMatrixCol = {
+  id?: number;
+};
+
+type ClientNodeMatrixPayload = {
+  nodes?: ClientNodeMatrixCol[];
+  rows?: ClientNodeMatrixRow[];
+};
+
 /** Harbor-style path (same as published images); self-hosters may replace host/project. */
 const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
 
@@ -119,6 +136,9 @@ export function NodesPage() {
   const ws = usePanelWebSocket();
   const resyncAfterDisconnect = useRef(false);
   const [rows, setRows] = useState<NodeRow[]>([]);
+  const [onlineUsersByNode, setOnlineUsersByNode] = useState<Record<number, number>>(
+    {},
+  );
   const [loading, setLoading] = useState(true);
 
   const [addOpen, setAddOpen] = useState(false);
@@ -193,9 +213,31 @@ export function NodesPage() {
     }
   }, [t, toast]);
 
+  const loadOnlineUsersByNode = useCallback(async () => {
+    const r = await getJson<ClientNodeMatrixPayload>(panel("node/client-traffic-per-node"));
+    if (!r.success || !r.obj) {
+      setOnlineUsersByNode({});
+      return;
+    }
+    const payload = r.obj as ClientNodeMatrixPayload;
+    const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+    const matrixRows = Array.isArray(payload.rows) ? payload.rows : [];
+    const counts: Record<number, number> = {};
+    nodes.forEach((node, idx) => {
+      if (typeof node.id === "number") {
+        counts[node.id] = matrixRows.reduce((acc, row) => {
+          const cell = Array.isArray(row.values) ? row.values[idx] : undefined;
+          return acc + (cell?.online ? 1 : 0);
+        }, 0);
+      }
+    });
+    setOnlineUsersByNode(counts);
+  }, []);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void loadOnlineUsersByNode();
+  }, [load, loadOnlineUsersByNode]);
 
   const loadMultiNode = useCallback(async () => {
     const s = await postJson<Record<string, unknown>>(panel("setting/all"));
@@ -221,17 +263,36 @@ export function NodesPage() {
       if (resyncAfterDisconnect.current) {
         resyncAfterDisconnect.current = false;
         void load();
+        void loadOnlineUsersByNode();
       }
     };
+    const onClientMatrix = (p: unknown) => {
+      if (!p || typeof p !== "object") return;
+      const payload = p as ClientNodeMatrixPayload;
+      const nodes = Array.isArray(payload.nodes) ? payload.nodes : [];
+      const matrixRows = Array.isArray(payload.rows) ? payload.rows : [];
+      const counts: Record<number, number> = {};
+      nodes.forEach((node, idx) => {
+        if (typeof node.id === "number") {
+          counts[node.id] = matrixRows.reduce((acc, row) => {
+            const cell = Array.isArray(row.values) ? row.values[idx] : undefined;
+            return acc + (cell?.online ? 1 : 0);
+          }, 0);
+        }
+      });
+      setOnlineUsersByNode(counts);
+    };
     ws.on("nodes", onNodes);
+    ws.on("client_traffic_per_node", onClientMatrix);
     ws.on("disconnected", onDisc);
     ws.on("connected", onConn);
     return () => {
       ws.off("nodes", onNodes);
+      ws.off("client_traffic_per_node", onClientMatrix);
       ws.off("disconnected", onDisc);
       ws.off("connected", onConn);
     };
-  }, [ws, load]);
+  }, [ws, load, loadOnlineUsersByNode]);
 
   const resetAddModal = useCallback(() => {
     setAddWizardStep(1);
@@ -826,6 +887,9 @@ export function NodesPage() {
                   <th className="p-3">{t("pages.nodes.address")}</th>
                   <th className="p-3">{t("pages.nodes.authMode")}</th>
                   <th className="p-3">{t("pages.nodes.status")}</th>
+                  <th className="p-3">
+                    {t("pages.nodes.onlineUsers", { defaultValue: "Online users" })}
+                  </th>
                   <th className="p-3">{t("pages.nodes.responseTime")}</th>
                   <th className="p-3">{t("pages.nodes.xrayVersion")}</th>
                   <th className="p-3">{t("pages.nodes.xrayState")}</th>
@@ -868,6 +932,9 @@ export function NodesPage() {
                     <td className="p-3 font-mono text-xs">{r.address}</td>
                     <td className="p-3 text-xs">{authModeLabel(r.authMode)}</td>
                     <td className="p-3">{statusLabel(r.status)}</td>
+                    <td className="p-3 font-mono text-xs">
+                      {onlineUsersByNode[r.id] ?? 0}
+                    </td>
                     <td className="p-3 font-mono text-xs">
                       {r.responseTime != null && r.responseTime > 0
                         ? `${r.responseTime} ms`
