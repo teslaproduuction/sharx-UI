@@ -438,6 +438,8 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		case model.Hysteria, model.Hysteria2:
 			// Xray Hysteria inbound expects clients[].auth only (not password).
 			client["auth"] = entity.Password
+			// Explicit level 0 matches default Xray hysteria user; ensures policy.levels["0"] stats apply.
+			client["level"] = 0
 		case model.Shadowsocks:
 			// For Shadowsocks, we need to get method from settings
 			if method, ok := settings["method"].(string); ok {
