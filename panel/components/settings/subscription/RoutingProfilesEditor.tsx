@@ -83,6 +83,14 @@ function ProfileCard({
     [profile.body, profile.source],
   );
 
+  const generatedDeepLink = useMemo(() => {
+    if (profile.source !== "inline") return "";
+    const cfg = loadInlineConfig(profile.body);
+    const preset = profile.deepLinkPreset ?? "happ";
+    const prefix = getRoutingDeepLinkPrefix(preset, profile.deepLinkCustomPrefix ?? "");
+    return routingConfigToDeepLink(cfg, prefix);
+  }, [profile.body, profile.source, profile.deepLinkPreset, profile.deepLinkCustomPrefix]);
+
   const syncBodyFromConfig = useCallback(
     (cfg: HappRoutingConfig) => {
       onPatch({ ...profile, body: happConfigToJsonText(cfg, true) });
@@ -119,13 +127,9 @@ function ProfileCard({
   };
 
   const copyLink = async () => {
-    if (profile.source !== "inline") return;
-    const cfg = loadInlineConfig(profile.body);
-    const preset = profile.deepLinkPreset ?? "happ";
-    const prefix = getRoutingDeepLinkPrefix(preset, profile.deepLinkCustomPrefix ?? "");
-    const link = routingConfigToDeepLink(cfg, prefix);
+    if (profile.source !== "inline" || !generatedDeepLink) return;
     try {
-      await copyTextToClipboard(link);
+      await copyTextToClipboard(generatedDeepLink);
       toast.success(
         t("subBuilder.clientRouting.copiedLink", { defaultValue: "Deep link copied." }),
       );
@@ -296,6 +300,30 @@ function ProfileCard({
                 ) : null}
               </div>
 
+              <label className="block">
+                <span className="mb-1 block text-[11px] font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+                  {t("subBuilder.clientRouting.generatedDeepLink", {
+                    defaultValue: "Generated deep link",
+                  })}
+                </span>
+                <textarea
+                  readOnly
+                  className={textareaClass + " min-h-[88px] cursor-text font-mono text-[11px] leading-snug"}
+                  value={generatedDeepLink}
+                  onFocus={(e) => e.target.select()}
+                  spellCheck={false}
+                  aria-label={t("subBuilder.clientRouting.generatedDeepLink", {
+                    defaultValue: "Generated deep link",
+                  })}
+                />
+                <div className="mt-2 flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" className="!gap-2" onClick={() => void copyLink()}>
+                    <Copy className="size-4" />
+                    {t("subBuilder.clientRouting.copyDeepLink", { defaultValue: "Copy deep link" })}
+                  </Button>
+                </div>
+              </label>
+
               <div className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-3">
                 <div className="mb-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
                   {t("subBuilder.clientRouting.importBlock", { defaultValue: "Import" })}
@@ -316,10 +344,6 @@ function ProfileCard({
                   <Button type="button" variant="secondary" className="!gap-2" onClick={applyImport}>
                     <Upload className="size-4" />
                     {t("subBuilder.clientRouting.decodeImport", { defaultValue: "Decode & import" })}
-                  </Button>
-                  <Button type="button" variant="secondary" className="!gap-2" onClick={() => void copyLink()}>
-                    <Copy className="size-4" />
-                    {t("subBuilder.clientRouting.copyDeepLink", { defaultValue: "Copy deep link" })}
                   </Button>
                 </div>
               </div>
@@ -657,16 +681,8 @@ export function RoutingProfilesEditor({ config, onChange }: Props) {
             <p className="mt-1 text-[11px] leading-relaxed text-[var(--fg-subtle)]">
               {t("subBuilder.clientRouting.intro", {
                 defaultValue:
-                  "Edit routing JSON once, then export deep links for Happ, Incy, SharX, or any app that uses the same …://routing/add/{payload} pattern. Stored in routing.profiles.",
-              })}{" "}
-              <a
-                href="https://utils.docs.rw/happ-rb"
-                target="_blank"
-                rel="noreferrer"
-                className="text-[var(--accent)] underline-offset-2 hover:underline"
-              >
-                utils.docs.rw/happ-rb
-              </a>
+                  "Edit routing JSON once. Copy deep link builds the client URL as <prefix> + Base64(UTF-8 JSON) — the standard …://routing/add/{payload} form (choose scheme below). Stored in routing.profiles.",
+              })}
             </p>
           </div>
         </div>

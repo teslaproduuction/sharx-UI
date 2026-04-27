@@ -1,7 +1,8 @@
 /**
  * Client routing profile JSON (Happ-style shape) and deep links.
- * Supported link forms: `{scheme}://routing/add/{base64}` (Happ, Incy, SharX, …).
- * @see https://utils.docs.rw/happ-rb
+ * Link form: `{prefix}{base64(UTF-8 JSON)}` where prefix is typically `…://routing/add/`
+ * (e.g. happ, incy, sharx, or a custom URL prefix). Built locally by
+ * `routingConfigToDeepLink` — no external link builder.
  */
 
 export type HappStringBool = "true" | "false";

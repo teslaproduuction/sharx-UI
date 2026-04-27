@@ -15,6 +15,12 @@ type ModalProps = {
   width?: number | string;
   dialogClassName?: string;
   bodyClassName?: string;
+  /** Merged into the fixed full-screen wrapper (e.g. z-index for stacked modals) */
+  portalClassName?: string;
+  /** When false, Escape does not call onClose (for stacking: only top dialog handles Escape) */
+  closeOnEscape?: boolean;
+  /** When false, does not set document.body overflow (nested modal over an open dialog) */
+  lockBodyScroll?: boolean;
   /** show X in header */
   closable?: boolean;
 };
@@ -28,25 +34,29 @@ export function Modal({
   width = 640,
   dialogClassName,
   bodyClassName,
+  portalClassName,
+  closeOnEscape = true,
+  lockBodyScroll = true,
   closable = true,
 }: ModalProps) {
   const reduceMotion = useReducedMotion();
   useEffect(() => {
-    if (!open) return;
+    if (!open || !closeOnEscape) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onClose]);
+  }, [open, onClose, closeOnEscape]);
 
   useEffect(() => {
+    if (!lockBodyScroll) return;
     if (open) document.body.style.overflow = "hidden";
     else document.body.style.overflow = "";
     return () => {
       document.body.style.overflow = "";
     };
-  }, [open]);
+  }, [open, lockBodyScroll]);
 
   if (typeof document === "undefined") return null;
 
@@ -55,7 +65,9 @@ export function Modal({
   return createPortal(
     <AnimatePresence>
       {open ? (
-        <div className="fixed inset-0 z-[90] flex items-center justify-center p-4">
+        <div
+          className={`fixed inset-0 z-[90] flex items-center justify-center p-4 ${portalClassName ?? ""}`}
+        >
           <motion.button
             type="button"
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"

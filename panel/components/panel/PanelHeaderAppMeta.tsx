@@ -1,7 +1,7 @@
 "use client";
 
 import { ExternalLink, Info, Package } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -15,10 +15,24 @@ type PanelHeaderAppMetaProps = {
   variant?: "shell" | "login";
 };
 
+/** Tailwind `lg` breakpoint — split changelog layout matches this. */
+function useIsLgUp() {
+  const [lg, setLg] = useState(false);
+  useEffect(() => {
+    const q = window.matchMedia("(min-width: 1024px)");
+    const sync = () => setLg(q.matches);
+    sync();
+    q.addEventListener("change", sync);
+    return () => q.removeEventListener("change", sync);
+  }, []);
+  return lg;
+}
+
 export function PanelHeaderAppMeta({ variant = "shell" }: PanelHeaderAppMetaProps) {
   const { t } = useTranslation();
   const toast = useToast();
   const meta = usePublicAppMeta();
+  const isLgUp = useIsLgUp();
   const [open, setOpen] = useState(false);
   const [releaseDetailsOpen, setReleaseDetailsOpen] = useState(false);
   const [updaterEnabled, setUpdaterEnabled] = useState<boolean | null>(null);
@@ -83,7 +97,25 @@ export function PanelHeaderAppMeta({ variant = "shell" }: PanelHeaderAppMetaProp
   };
 
   const hasInlineReleaseNotes = Boolean(meta.releaseNotesMarkdown?.trim());
-  const modalWidth = hasInlineReleaseNotes && releaseDetailsOpen ? 1040 : 560;
+  const releaseNotesInSidePanel = hasInlineReleaseNotes && releaseDetailsOpen && isLgUp;
+  const modalWidth = releaseNotesInSidePanel ? 1040 : 560;
+  const mobileReleaseStacked =
+    open && hasInlineReleaseNotes && releaseDetailsOpen && !isLgUp;
+
+  const releaseNotesDoc: ReactNode = (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: ({ href, children }) => (
+          <a href={href} target="_blank" rel="noreferrer noopener">
+            {children}
+          </a>
+        ),
+      }}
+    >
+      {meta.releaseNotesMarkdown ?? ""}
+    </ReactMarkdown>
+  );
 
   const mainColumn = (
     <div className="space-y-4 text-sm leading-relaxed text-[var(--fg-muted)]">
@@ -184,6 +216,7 @@ export function PanelHeaderAppMeta({ variant = "shell" }: PanelHeaderAppMetaProp
       <Modal
         open={open}
         onClose={closeModal}
+        closeOnEscape={!mobileReleaseStacked}
         title={
           <span className="flex items-center gap-2">
             <Package className="size-5 text-[var(--ifm-color-primary)]" aria-hidden />
@@ -192,7 +225,7 @@ export function PanelHeaderAppMeta({ variant = "shell" }: PanelHeaderAppMetaProp
         }
         width={modalWidth}
         bodyClassName={
-          hasInlineReleaseNotes
+          releaseNotesInSidePanel
             ? "flex min-h-0 flex-1 flex-col !overflow-hidden !p-0"
             : undefined
         }
@@ -203,34 +236,43 @@ export function PanelHeaderAppMeta({ variant = "shell" }: PanelHeaderAppMetaProp
         }
       >
         {hasInlineReleaseNotes ? (
-          <div className="flex min-h-0 max-h-[min(85vh,820px)] flex-1 flex-col lg:flex-row">
-            <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">{mainColumn}</div>
-            {releaseDetailsOpen ? (
+          releaseNotesInSidePanel ? (
+            <div className="flex min-h-0 max-h-[min(85vh,820px)] flex-1 flex-col lg:flex-row">
+              <div className="min-h-0 min-w-0 flex-1 overflow-y-auto p-5">{mainColumn}</div>
               <aside className="flex min-h-0 min-w-0 flex-col border-t border-[var(--border)] bg-[var(--bg-muted)]/25 lg:w-[min(440px,46%)] lg:border-l lg:border-t-0">
                 <div className="shrink-0 border-b border-[var(--border)] px-4 py-2.5 text-xs font-semibold text-[var(--fg)]">
                   {t("menu.updateReleaseDetailsHeading")}
                 </div>
                 <div className="prose-doc min-h-0 flex-1 overflow-y-auto px-4 py-3 text-sm text-[var(--fg)]">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      a: ({ href, children }) => (
-                        <a href={href} target="_blank" rel="noreferrer noopener">
-                          {children}
-                        </a>
-                      ),
-                    }}
-                  >
-                    {meta.releaseNotesMarkdown ?? ""}
-                  </ReactMarkdown>
+                  {releaseNotesDoc}
                 </div>
               </aside>
-            ) : null}
-          </div>
+            </div>
+          ) : (
+            mainColumn
+          )
         ) : (
           mainColumn
         )}
       </Modal>
+
+      {hasInlineReleaseNotes ? (
+        <Modal
+          open={mobileReleaseStacked}
+          onClose={() => setReleaseDetailsOpen(false)}
+          portalClassName="!z-[100]"
+          lockBodyScroll={false}
+          title={t("menu.updateReleaseDetailsHeading")}
+          width={560}
+          footer={
+            <Button type="button" variant="secondary" onClick={() => setReleaseDetailsOpen(false)}>
+              {t("close")}
+            </Button>
+          }
+        >
+          <div className="prose-doc text-sm text-[var(--fg)]">{releaseNotesDoc}</div>
+        </Modal>
+      ) : null}
     </>
   );
 }
