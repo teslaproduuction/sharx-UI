@@ -286,8 +286,6 @@
 "IPLimitlogDesc" = "سجل تاريخ الـ IPs. (عشان تفعل الإدخال بعد التعطيل، امسح السجل)"
 "IPLimitlogclear" = "امسح السجل"
 "setDefaultCert" = "استخدم شهادة البانل"
-"generateSelfSignedTls" = "Generate self-signed (PEM)"
-"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "ادخل ID شات Telegram. (استخدم '/id' في البوت) أو (@userinfobot)"
 "subscriptionDesc" = "عشان تلاقي رابط الاشتراك، ادخل على 'التفاصيل'. وكمان ممكن تستخدم نفس الاسم لعدة عملاء."
 "info" = "معلومات"
@@ -343,7 +341,6 @@
 "getNewX25519CertError" = "حدث خطأ أثناء الحصول على شهادة X25519."
 "getNewmldsa65Error" = "حدث خطاء في الحصول على mldsa65."
 "getNewVlessEncError" = "حدث خطأ أثناء الحصول على VlessEnc."
-"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "طلب"

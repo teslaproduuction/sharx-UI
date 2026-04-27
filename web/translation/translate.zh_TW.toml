@@ -286,8 +286,6 @@
 "IPLimitlogDesc" = "IP 歷史日誌（要啟用被禁用的入站流量，請清除日誌）"
 "IPLimitlogclear" = "清除日誌"
 "setDefaultCert" = "從面板設定證書"
-"generateSelfSignedTls" = "Generate self-signed (PEM)"
-"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "請提供Telegram聊天ID。（在機器人中使用'/id'命令）或（@userinfobot"
 "subscriptionDesc" = "要找到你的訂閱 URL，請導航到“詳細資訊”。此外，你可以為多個客戶端使用相同的名稱。"
 "info" = "資訊"
@@ -343,7 +341,6 @@
 "getNewX25519CertError" = "取得X25519憑證時發生錯誤。"
 "getNewmldsa65Error" = "取得mldsa65憑證時發生錯誤。"
 "getNewVlessEncError" = "取得VlessEnc憑證時發生錯誤。"
-"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "請求"

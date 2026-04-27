@@ -329,18 +329,11 @@ func (s *SubJsonService) tlsData(tData map[string]any) map[string]any {
 
 	tlsData["serverName"] = tData["serverName"]
 	tlsData["alpn"] = tData["alpn"]
-	// Panel inbound TLS (e.g. Hysteria QUIC) stores allowInsecure on tlsSettings root; legacy configs used settings.allowInsecure.
-	if v, ok := tData["allowInsecure"].(bool); ok && v {
-		tlsData["allowInsecure"] = true
-	} else if tlsClientSettings != nil {
-		if allowInsecure, ok := tlsClientSettings["allowInsecure"].(bool); ok {
-			tlsData["allowInsecure"] = allowInsecure
-		}
+	if allowInsecure, ok := tlsClientSettings["allowInsecure"].(bool); ok {
+		tlsData["allowInsecure"] = allowInsecure
 	}
-	if tlsClientSettings != nil {
-		if fingerprint, ok := tlsClientSettings["fingerprint"].(string); ok {
-			tlsData["fingerprint"] = fingerprint
-		}
+	if fingerprint, ok := tlsClientSettings["fingerprint"].(string); ok {
+		tlsData["fingerprint"] = fingerprint
 	}
 	return tlsData
 }
@@ -471,8 +464,7 @@ func (s *SubJsonService) genServer(inbound *model.Inbound, streamSettings json_u
 func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any, client model.Client) json_util.RawMessage {
 	outbound := Outbound{}
 
-	// Xray outbound id is "hysteria"; version 2 comes from settings / hysteriaSettings (same as inbound GenXrayInboundConfig).
-	outbound.Protocol = string(model.Hysteria)
+	outbound.Protocol = string(inbound.Protocol)
 	outbound.Tag = "proxy"
 
 	if s.mux != "" {
@@ -497,13 +489,6 @@ func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any,
 	if !ok {
 		hyStream = map[string]any{}
 	}
-	// finalmask lives on streamSettings root in Xray, not inside hysteriaSettings (legacy mistake read nested only).
-	var preservedFinalmask map[string]any
-	if fm, ok := newStream["finalmask"].(map[string]any); ok && len(fm) > 0 {
-		preservedFinalmask = fm
-	} else if fm, ok := hyStream["finalmask"].(map[string]any); ok && len(fm) > 0 {
-		preservedFinalmask = fm
-	}
 	outHyStream := map[string]any{
 		"version": int(version),
 		"auth":    auth,
@@ -512,8 +497,9 @@ func (s *SubJsonService) genHy(inbound *model.Inbound, newStream map[string]any,
 		outHyStream["udpIdleTimeout"] = int(udpIdleTimeout)
 	}
 	newStream["hysteriaSettings"] = outHyStream
-	if preservedFinalmask != nil {
-		newStream["finalmask"] = preservedFinalmask
+
+	if finalmask, ok := hyStream["finalmask"].(map[string]any); ok {
+		newStream["finalmask"] = finalmask
 	}
 
 	newStream["network"] = "hysteria"

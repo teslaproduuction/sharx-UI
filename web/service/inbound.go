@@ -436,7 +436,6 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		case model.Trojan:
 			client["password"] = entity.Password
 		case model.Hysteria, model.Hysteria2:
-			// Xray Hysteria inbound expects clients[].auth only (not password).
 			client["auth"] = entity.Password
 		case model.Shadowsocks:
 			// For Shadowsocks, we need to get method from settings

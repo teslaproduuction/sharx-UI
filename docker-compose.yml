@@ -23,11 +23,10 @@ services:
       com.centurylinklabs.watchtower.enable: "true"
     # hostname: yourhostname
     # For "kick user" (conntrack drop) in single-node mode, grant network admin to the app container:
-    cap_add: [NET_ADMIN]
-    network_mode: host    # ports:
- #   ports:
- #     - "2053:2053"   # Web UI
- #     - "2096:2096"   # Subscriptions
+    # cap_add: [NET_ADMIN]
+    ports:
+      - "2053:2053"   # Web UI
+      - "2096:2096"   # Subscriptions
     #   - "443:443"     # Inbound
     volumes:
       - $PWD/db/:/etc/x-ui/
@@ -50,24 +49,23 @@ services:
       # XUI_WEB_DOMAIN: panel.example.com
       # XUI_WEB_PORT: 8443
       
-      # PostgreSQL: при network_mode: host контейнер не в sharx_network — имя postgres не резолвится.
-      # Порт БД проброшен на хост (5432:5432), подключайтесь к 127.0.0.1.
-      XUI_DB_HOST: 127.0.0.1
+      # PostgreSQL настройки
+      XUI_DB_HOST: postgres
       XUI_DB_PORT: 5432
       XUI_DB_USER: xui_user
       XUI_DB_PASSWORD: change_this_password
       XUI_DB_NAME: xui_db
       XUI_DB_SSLMODE: disable
-      # Host network: use localhost — watchtower публикуется только на 127.0.0.1 (см. сервис watchtower).
-      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8080/v1/update
+      # Internal HTTP API to Watchtower (same compose project, not exposed outside Docker).
+      XUI_DOCKER_UPDATER_URL: http://watchtower:8080/v1/update
       XUI_DOCKER_UPDATER_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
     depends_on:
       postgres:
         condition: service_healthy
       watchtower:
         condition: service_started
-    # networks:
-    #   - sharx_network
+    networks:
+      - sharx_network
     tty: true
 #    network_mode: host
     restart: unless-stopped
@@ -75,9 +73,6 @@ services:
   watchtower:
     image: beatkind/watchtower:2.3.2
     container_name: sharx_watchtower
-    # Только для panel с network_mode: host — иначе панель не достучится до watchtower по имени сервиса.
-    ports:
-      - "127.0.0.1:8080:8080"
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

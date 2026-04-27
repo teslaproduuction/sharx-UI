@@ -20,6 +20,8 @@ import {
   Mail,
   Megaphone,
   Plus,
+  Power,
+  PowerOff,
   QrCode,
   RotateCcw,
   Send,
@@ -244,14 +246,16 @@ function findLastOnlineForEmail(
 
 type PillTone = "green" | "blue" | "neutral" | "amber" | "rose";
 
-/** Read-only: one radio line for the current connection state (not a two-option switch). */
-function ReadonlyConnectionState({
+/** Read-only “radio” style for connection state (online / offline). */
+function ReadonlyRadioRow({
   legend,
-  label,
+  value,
+  options,
   groupName,
 }: {
   legend: string;
-  label: string;
+  value: string;
+  options: { id: string; label: string }[];
   groupName: string;
 }) {
   return (
@@ -259,82 +263,40 @@ function ReadonlyConnectionState({
       <div className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
         {legend}
       </div>
-      <div role="radiogroup" aria-label={groupName}>
-        <span
-          role="radio"
-          aria-checked
-          className="inline-flex max-w-full items-center gap-1.5 rounded-full border border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] px-2.5 py-1.5 text-xs font-medium text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
-        >
-          <span
-            className="h-2.5 w-2.5 shrink-0 rounded-full border-2 border-[var(--accent)] bg-[var(--accent)]"
-            aria-hidden
-          />
-          {label}
-        </span>
+      <div
+        className="flex flex-wrap gap-2"
+        role="radiogroup"
+        aria-label={groupName}
+      >
+        {options.map((o) => {
+          const selected = o.id === value;
+          return (
+            <span
+              key={o.id}
+              role="radio"
+              aria-checked={selected}
+              className={cx(
+                "inline-flex max-w-full items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium",
+                selected
+                  ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
+                  : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-subtle)] opacity-75",
+              )}
+              title={o.label}
+            >
+              <span
+                className={cx(
+                  "h-2.5 w-2.5 shrink-0 rounded-full border-2",
+                  selected
+                    ? "border-[var(--accent)] bg-[var(--accent)]"
+                    : "border-[var(--border)] bg-[var(--surface)]",
+                )}
+                aria-hidden
+              />
+              {o.label}
+            </span>
+          );
+        })}
       </div>
-    </div>
-  );
-}
-
-function ClientEnableRadioGroup({
-  name,
-  enabled,
-  onChange,
-  disabled,
-  enabledLabel,
-  disabledLabel,
-  groupLabel,
-}: {
-  name: string;
-  enabled: boolean;
-  onChange: (next: boolean) => void;
-  disabled?: boolean;
-  enabledLabel: string;
-  disabledLabel: string;
-  groupLabel: string;
-}) {
-  const optClass = (on: boolean) =>
-    cx(
-      "inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1.5 text-xs font-medium transition-colors",
-      on
-        ? "border-[color-mix(in_oklab,var(--accent)_50%,var(--border))] bg-[color-mix(in_oklab,var(--accent)_14%,transparent)] text-[var(--fg)] shadow-[0_0_0_1px] shadow-[color-mix(in_oklab,var(--accent)_20%,transparent)]"
-        : "border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--fg-subtle)] hover:border-[var(--fg-subtle)]",
-      disabled && "cursor-not-allowed opacity-60",
-    );
-  const dotClass = (on: boolean) =>
-    cx(
-      "h-2.5 w-2.5 shrink-0 rounded-full border-2",
-      on
-        ? "border-[var(--accent)] bg-[var(--accent)]"
-        : "border-[var(--border)] bg-[var(--surface)]",
-    );
-
-  return (
-    <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={groupLabel}>
-      <label className={optClass(enabled)}>
-        <input
-          type="radio"
-          name={name}
-          className="sr-only"
-          checked={enabled}
-          disabled={disabled}
-          onChange={() => onChange(true)}
-        />
-        <span className={dotClass(enabled)} aria-hidden />
-        {enabledLabel}
-      </label>
-      <label className={optClass(!enabled)}>
-        <input
-          type="radio"
-          name={name}
-          className="sr-only"
-          checked={!enabled}
-          disabled={disabled}
-          onChange={() => onChange(false)}
-        />
-        <span className={dotClass(!enabled)} aria-hidden />
-        {disabledLabel}
-      </label>
     </div>
   );
 }
@@ -1442,11 +1404,15 @@ function ClientUnifiedCard({
                       <span className="truncate">{accMeta.label}</span>
                     </PillTag>
                   </div>
-                  <ReadonlyConnectionState
+                  <ReadonlyRadioRow
                     legend={t("pages.clients.fieldConnectionState", {
                       defaultValue: "Connection",
                     })}
-                    label={r.isOnline ? t("online") : t("offline")}
+                    value={r.isOnline ? "online" : "offline"}
+                    options={[
+                      { id: "online", label: t("online") },
+                      { id: "offline", label: t("offline") },
+                    ]}
                     groupName={t("pages.clients.fieldConnectionState", {
                       defaultValue: "Connection",
                     })}
@@ -1462,23 +1428,25 @@ function ClientUnifiedCard({
               )}
 
               <div className="flex flex-wrap items-center gap-2">
-                <ClientEnableRadioGroup
-                  name={id("client-enable")}
-                  enabled={form.enable}
-                  onChange={(next) => setForm((f) => ({ ...f, enable: next }))}
-                  disabled={variant === "existing" && sheetActionBusy != null}
-                  enabledLabel={t("enabled")}
-                  disabledLabel={t("disabled")}
-                  groupLabel={t("pages.clients.fieldAccountEnabled", {
-                    defaultValue: "Client account",
-                  })}
-                />
+                {variant === "create" ? (
+                  <CheckboxField
+                    checked={form.enable}
+                    onChange={(e) => setForm((f) => ({ ...f, enable: e.target.checked }))}
+                    label={
+                      <span className="inline-flex items-center gap-1">
+                        <Power size={14} />
+                        {t("enable")}
+                      </span>
+                    }
+                  />
+                ) : null}
                 {form.hwidEnabled ? (
                   <PillTag tone="green">
                     <Shield size={11} className="mr-1" />
                     HWID
                   </PillTag>
                 ) : null}
+                {!form.enable ? <PillTag tone="neutral">{t("disabled")}</PillTag> : null}
               </div>
             </div>
             <div className="flex shrink-0 items-center justify-end gap-0.5 lg:pt-0.5">
@@ -1529,6 +1497,23 @@ function ClientUnifiedCard({
             ) : null}
             {showExistingChrome ? (
               <>
+                <IconButton
+                  type="button"
+                  label={
+                    form.enable
+                      ? t("pages.clients.disableClient", { defaultValue: "Disable client" })
+                      : t("pages.clients.enableClient", { defaultValue: "Enable client" })
+                  }
+                  disabled={sheetActionBusy != null}
+                  className={
+                    form.enable
+                      ? "!text-[color-mix(in_oklab,var(--accent)_92%,var(--fg))]"
+                      : "!text-[var(--fg-subtle)]"
+                  }
+                  onClick={() => setForm((f) => ({ ...f, enable: !f.enable }))}
+                >
+                  {form.enable ? <Power size={18} /> : <PowerOff size={18} />}
+                </IconButton>
                 <IconButton
                   type="button"
                   label={t("pages.clients.resetTraffic", { defaultValue: "Reset traffic" })}

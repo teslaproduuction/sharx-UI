@@ -78,8 +78,6 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.GET("/getClientTraffics/:email", a.getClientTraffics)
 	g.GET("/getClientTrafficsById/:id", a.getClientTrafficsById)
 
-	g.POST("/generateSelfSignedTls", a.generateSelfSignedTls)
-
 	g.POST("/add", a.addInbound)
 	g.POST("/del/:id", a.delInbound)
 	g.POST("/update/:id", a.updateInbound)
@@ -142,32 +140,6 @@ func (a *InboundController) previewInboundXray(c *gin.Context) {
 		return
 	}
 	jsonObj(c, cfg, nil)
-}
-
-// generateSelfSignedTls returns a PEM certificate and key for development / Hysteria testing.
-func (a *InboundController) generateSelfSignedTls(c *gin.Context) {
-	var body struct {
-		CommonName   string   `json:"commonName"`
-		DNSNames     []string `json:"dnsNames"`
-		IPAddresses  []string `json:"ipAddresses"`
-		ValidityDays int      `json:"validityDays"`
-	}
-	if err := c.ShouldBindJSON(&body); err != nil {
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	out, err := service.GenerateSelfSignedServerTLS(service.SelfSignedTLSParams{
-		CommonName:   body.CommonName,
-		DNSNames:     body.DNSNames,
-		IPAddresses:  body.IPAddresses,
-		ValidityDays: body.ValidityDays,
-	})
-	if err != nil {
-		logger.Errorf("generateSelfSignedTls: %v", err)
-		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
-		return
-	}
-	jsonMsgObj(c, I18nWeb(c, "pages.inbounds.toasts.generateSelfSignedSuccess"), out, nil)
 }
 
 // getInbounds retrieves the list of inbounds for the logged-in user.

@@ -96,13 +96,3 @@ func BroadcastClients(clients any) {
 		hub.Broadcast(MessageTypeClients, clients)
 	}
 }
-
-// BroadcastClientTrafficPerNode sends the client×node matrix (GET /node/client-traffic-per-node) to
-// all WebSocket connections for that panel user. The caller should throttle how often the matrix is built.
-func BroadcastClientTrafficPerNode(userId int, matrix any) {
-	hub := GetHub()
-	if hub == nil || userId <= 0 || matrix == nil {
-		return
-	}
-	hub.BroadcastToUser(userId, MessageTypeClientTrafficPerNode, matrix)
-}

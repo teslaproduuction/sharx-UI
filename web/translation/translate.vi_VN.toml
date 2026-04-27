@@ -286,8 +286,6 @@
 "IPLimitlogDesc" = "Lịch sử đăng nhập IP (trước khi kích hoạt điểm vào sau khi bị vô hiệu hóa bởi giới hạn IP, bạn nên xóa lịch sử)."
 "IPLimitlogclear" = "Xóa Lịch sử"
 "setDefaultCert" = "Đặt chứng chỉ từ bảng điều khiển"
-"generateSelfSignedTls" = "Generate self-signed (PEM)"
-"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "Vui lòng cung cấp ID Trò chuyện Telegram. (sử dụng lệnh '/id' trong bot) hoặc (@userinfobot)"
 "subscriptionDesc" = "Bạn có thể tìm liên kết gói đăng ký của mình trong Chi tiết, cũng như bạn có thể sử dụng cùng tên cho nhiều cấu hình khác nhau"
 "info" = "Thông tin"
@@ -343,7 +341,6 @@
 "getNewX25519CertError" = "Lỗi khi lấy chứng chỉ X25519."
 "getNewmldsa65Error" = "Lỗi khi lấy chứng chỉ mldsa65."
 "getNewVlessEncError" = "Lỗi khi lấy chứng chỉ VlessEnc."
-"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "Lời yêu cầu"

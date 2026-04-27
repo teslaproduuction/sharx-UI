@@ -164,10 +164,7 @@ func (s *HostService) UpdateHost(userId int, host *model.Host) error {
 	if host.Address != "" {
 		updates["address"] = host.Address
 	}
-	// Port 0 is valid (use inbound port). When name+address are set (full form edit), always persist port.
-	if host.Name != "" && host.Address != "" {
-		updates["port"] = host.Port
-	} else if host.Port > 0 {
+	if host.Port > 0 {
 		updates["port"] = host.Port
 	}
 	if host.Protocol != "" {

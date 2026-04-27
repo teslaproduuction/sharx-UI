@@ -659,15 +659,6 @@ function buildHysteriaStreamSettingsFromForm(
       udpIdleTimeout: Math.max(1, Math.round(state.hysteriaUdpIdleTimeout) || 60),
     },
   };
-  // Match common Xray Hy2 setups (e.g. other panels): BBR on QUIC stack; keeps client/server congestion aligned.
-  if (version === 2) {
-    out.finalmask = {
-      quicParams: {
-        debug: false,
-        congestion: "bbr",
-      },
-    };
-  }
   return JSON.stringify(out);
 }
 
@@ -1171,6 +1162,7 @@ export function buildSettingsJson(
         clients: [
           {
             auth,
+            password: auth,
             email,
             limitIp: 0,
             totalGB: 0,
@@ -1327,7 +1319,7 @@ export function mergeFirstClientIntoSettings(
     case "hysteria2": {
       const auth = patch.hysteriaAuth.trim() || randomPassword(8);
       first.auth = auth;
-      delete first.password;
+      first.password = auth;
       root.version = protocol === "hysteria2" ? 2 : 1;
       break;
     }

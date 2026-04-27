@@ -97,14 +97,8 @@ func (w *WebSocketController) HandleWebSocket(c *gin.Context) {
 
 	// Create client
 	clientID := uuid.New().String()
-	u := session.GetLoginUser(c)
-	uid := 0
-	if u != nil {
-		uid = u.Id
-	}
 	client := &websocket.Client{
 		ID:     clientID,
-		UserId: uid,
 		Hub:    w.hub,
 		Send:   make(chan []byte, 512), // Increased from 256 to 512 to prevent overflow
 		Topics: make(map[websocket.MessageType]bool),
