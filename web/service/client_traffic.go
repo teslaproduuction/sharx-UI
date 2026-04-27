@@ -36,7 +36,7 @@ var (
 // AddClientTraffic updates client traffic statistics and returns clients that need to be disabled.
 // This method handles traffic tracking for clients in the new architecture (ClientEntity).
 // After updating client traffic, it synchronizes inbound traffic as the sum of all its clients' traffic.
-func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTraffic, inboundService *InboundService) (map[string]string, map[int]bool, error) {
+func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTraffic, _ *InboundService) (map[string]string, map[int]bool, error) {
 	clientsToDisable := make(map[string]string) // map[email]tag
 	affectedInboundIds := make(map[int]bool)    // Track affected inbounds for traffic sync
 
@@ -457,31 +457,6 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 		// For other errors, don't retry
 		logger.Warning("AddClientTraffic update data ", err)
 		return nil, nil, err
-	}
-
-	// Synchronize inbound traffic as sum of all its clients' traffic
-	// IMPORTANT: Sync ALL inbounds, not just affected ones, to ensure accurate totals
-	if inboundService != nil {
-		// Get all inbounds to sync their traffic
-		allInbounds, err := inboundService.GetAllInbounds()
-		if err == nil {
-			allInboundIds := make(map[int]bool)
-			for _, inbound := range allInbounds {
-				allInboundIds[inbound.Id] = true
-			}
-			err = s.syncInboundTrafficFromClients(tx, allInboundIds, inboundService)
-			if err != nil {
-				logger.Warningf("Failed to sync inbound traffic from clients: %v", err)
-				// Don't fail the whole operation, but log the warning
-			}
-		} else {
-			logger.Warningf("Failed to get all inbounds for traffic sync: %v", err)
-			// Fallback: sync only affected inbounds
-			err = s.syncInboundTrafficFromClients(tx, affectedInboundIds, inboundService)
-			if err != nil {
-				logger.Warningf("Failed to sync affected inbound traffic: %v", err)
-			}
-		}
 	}
 
 	return clientsToDisable, affectedInboundIds, nil
