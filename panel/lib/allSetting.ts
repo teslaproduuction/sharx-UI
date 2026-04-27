@@ -76,6 +76,12 @@ export type AllSetting = {
   ldapDefaultExpiryDays: number;
   ldapDefaultLimitIP: number;
   multiNodeMode: boolean;
+  /** Seconds between worker stats polls (multi-node). */
+  nodeStatsCollectionIntervalSec: number;
+  /** Seconds between GET /health when node is online. */
+  nodeHealthCheckIntervalSec: number;
+  /** Seconds between GET /health when node is offline/error (until recovery). */
+  nodeHealthCheckDegradedIntervalSec: number;
   hwidMode: string;
   grafanaLokiUrl: string;
   grafanaVictoriaMetricsUrl: string;
@@ -183,6 +189,9 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     ldapDefaultExpiryDays: toInt(raw.ldapDefaultExpiryDays, 0),
     ldapDefaultLimitIP: toInt(raw.ldapDefaultLimitIP, 0),
     multiNodeMode: toBool(raw.multiNodeMode),
+    nodeStatsCollectionIntervalSec: toInt(raw.nodeStatsCollectionIntervalSec, 3),
+    nodeHealthCheckIntervalSec: toInt(raw.nodeHealthCheckIntervalSec, 15),
+    nodeHealthCheckDegradedIntervalSec: toInt(raw.nodeHealthCheckDegradedIntervalSec, 5),
     hwidMode: toStr(raw.hwidMode, "client_header"),
     grafanaLokiUrl: toStr(raw.grafanaLokiUrl),
     grafanaVictoriaMetricsUrl: toStr(raw.grafanaVictoriaMetricsUrl),

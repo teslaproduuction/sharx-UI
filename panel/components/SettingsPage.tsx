@@ -582,6 +582,61 @@ export function SettingsPage() {
                 ariaLabel={t("pages.settings.enableMultiNodeMode", { defaultValue: "Enable multi-node mode" })}
               />
             </Row>
+            {form.multiNodeMode ? (
+              <>
+                <Row label={t("pages.settings.nodeStatsInterval")} hint={t("pages.settings.nodeStatsIntervalDesc")}>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={600}
+                    className="max-w-[120px]"
+                    value={form.nodeStatsCollectionIntervalSec}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      patch(
+                        "nodeStatsCollectionIntervalSec",
+                        Number.isFinite(v) ? Math.min(600, Math.max(1, v)) : 3,
+                      );
+                    }}
+                  />
+                </Row>
+                <Row label={t("pages.settings.nodeHealthInterval")} hint={t("pages.settings.nodeHealthIntervalDesc")}>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={600}
+                    className="max-w-[120px]"
+                    value={form.nodeHealthCheckIntervalSec}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      patch(
+                        "nodeHealthCheckIntervalSec",
+                        Number.isFinite(v) ? Math.min(600, Math.max(1, v)) : 15,
+                      );
+                    }}
+                  />
+                </Row>
+                <Row
+                  label={t("pages.settings.nodeHealthDegradedInterval")}
+                  hint={t("pages.settings.nodeHealthDegradedIntervalDesc")}
+                >
+                  <Input
+                    type="number"
+                    min={1}
+                    max={600}
+                    className="max-w-[120px]"
+                    value={form.nodeHealthCheckDegradedIntervalSec}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      patch(
+                        "nodeHealthCheckDegradedIntervalSec",
+                        Number.isFinite(v) ? Math.min(600, Math.max(1, v)) : 5,
+                      );
+                    }}
+                  />
+                </Row>
+              </>
+            ) : null}
             <Row label={t("hwidSettings")} hint={t("hwidBetaWarningDesc")}>
               <SelectNative value={form.hwidMode} onChange={(e) => patch("hwidMode", e.target.value)}>
                 <option value="off">{t("pages.settings.hwidMode.off", { defaultValue: "Off" })}</option>
