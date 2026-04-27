@@ -1447,10 +1447,11 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	if err != nil {
 		return err, false
 	}
-
-	// Note: We no longer update inbound traffic directly from Xray API
-	// Instead, inbound traffic is synchronized as sum of all its clients' traffic in AddClientTraffic
-	// This ensures consistency between inbound and client traffic
+	// Keep inbound counters based on real Xray inbound>>>tag traffic, not sums of assigned clients.
+	// This avoids double counting when one client is attached to multiple inbounds.
+	if err = s.addInboundTraffic(tx, inboundTraffics); err != nil {
+		return err, false
+	}
 
 	needRestart0, count, err := s.autoRenewClients(tx)
 	if err != nil {
