@@ -277,7 +277,8 @@ func (a *SUBController) subJsons(c *gin.Context) {
 // ApplyCommonHeaders sets HTTP headers for subscription responses from the
 // active sharx-v2 config: ResponseRules (profile title, update interval, announce,
 // support URL, profile web page URL, extra headers), and inline client routing
-// (Routing + Routing-Enable) when routing.profiles contains a valid inline JSON body.
+// (Routing = happ://routing/add/{base64} or other scheme from profile preset; Routing-Enable)
+// when routing.profiles contains a valid inline JSON body.
 // Canonical headers (Subscription-Userinfo, X-Subscription-ID, Profile-Update-Interval)
 // are always emitted. Extra headers override auto Routing when the same key is set.
 // clientAnnounce (if present on the client row) overrides ResponseRules.Announce.
@@ -327,9 +328,10 @@ func (a *SUBController) ApplyCommonHeaders(c *gin.Context, cfg *service.SharxSub
 	}
 
 	// Client routing (Happ-style JSON) from subscription page config: first inline profile.
+	// Value is a full deeplink happ://routing/add/{base64} (or incy/sharx/custom prefix) per Happ docs.
 	// ExtraHeaders below can override Routing / Routing-Enable if set manually.
-	if b64, ok := service.RoutingPayloadBase64ForSubscription(cfg); ok {
-		c.Writer.Header().Set("Routing", b64)
+	if routingVal, ok := service.RoutingHeaderValueForSubscription(cfg); ok {
+		c.Writer.Header().Set("Routing", routingVal)
 		c.Writer.Header().Set("Routing-Enable", "1")
 	}
 
@@ -341,6 +343,11 @@ func (a *SUBController) ApplyCommonHeaders(c *gin.Context, cfg *service.SharxSub
 			}
 			c.Writer.Header().Set(key, h.Value)
 		}
+	}
+
+	// Legacy / manual "Routing" may be raw Base64 or happ://add/…; clients expect happ://routing/add/…
+	if rh := strings.TrimSpace(c.Writer.Header().Get("Routing")); rh != "" {
+		c.Writer.Header().Set("Routing", service.NormalizeSubscriptionRoutingHeaderValue(rh))
 	}
 }
 

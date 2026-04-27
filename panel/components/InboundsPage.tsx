@@ -30,6 +30,7 @@ import {
   defaultSniffingForm,
   defaultSniffingString,
   defaultStreamForm,
+  defaultStreamFormHysteria,
   defaultStreamSettingsString,
   getInboundStreamTransportMode,
   hostFromRealityTarget,
@@ -688,10 +689,14 @@ export function InboundsPage() {
   const applyStreamPresetForProtocol = (protocol: InboundFormProtocol) => {
     setForm((f) => {
       const isSwitchingToWg = protocol === "wireguard" && f.protocol !== "wireguard";
+      const streamForm =
+        protocol === "hysteria" || protocol === "hysteria2"
+          ? defaultStreamFormHysteria()
+          : defaultStreamForm();
       const out = {
         ...f,
         protocol,
-        streamForm: defaultStreamForm(),
+        streamForm,
         wireguardForm: isSwitchingToWg ? defaultWireguardForm() : f.wireguardForm,
       };
       if (isSwitchingToWg) {
@@ -1039,6 +1044,13 @@ export function InboundsPage() {
     if (fp && !list.includes(fp)) list.unshift(fp);
     return list;
   }, [form.streamForm.realityFingerprint]);
+
+  const hysteriaTlsFingerprintOptions = useMemo(() => {
+    const fp = form.streamForm.tlsUtlsFingerprint.trim();
+    const list: string[] = [...REALITY_FINGERPRINTS];
+    if (fp && !list.includes(fp)) list.unshift(fp);
+    return list;
+  }, [form.streamForm.tlsUtlsFingerprint]);
 
   const isEdit = editId != null;
 
@@ -1910,26 +1922,382 @@ export function InboundsPage() {
                 {t("pages.inbounds.streamTransport", { defaultValue: "Stream / transport" })}
               </p>
               {isHysteriaFamily ? (
-                <div>
-                  <label
-                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                    htmlFor="in-hy-udp"
-                  >
-                    {t("pages.inbounds.hysteriaUdpIdleTimeout", { defaultValue: "UDP idle timeout (sec)" })}
-                  </label>
-                  <Input
-                    id="in-hy-udp"
-                    type="number"
-                    min={1}
-                    max={3600}
-                    value={form.streamForm.hysteriaUdpIdleTimeout}
-                    onChange={(e) =>
-                      setStreamFormField(
-                        "hysteriaUdpIdleTimeout",
-                        Math.max(1, Number(e.target.value) || 60),
-                      )
-                    }
-                  />
+                <div className="space-y-3">
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-udp"
+                    >
+                      {t("pages.inbounds.hysteriaUdpIdleTimeout", {
+                        defaultValue: "UDP idle timeout (sec)",
+                      })}
+                    </label>
+                    <Input
+                      id="in-hy-udp"
+                      type="number"
+                      min={1}
+                      max={3600}
+                      value={form.streamForm.hysteriaUdpIdleTimeout}
+                      onChange={(e) =>
+                        setStreamFormField(
+                          "hysteriaUdpIdleTimeout",
+                          Math.max(1, Number(e.target.value) || 60),
+                        )
+                      }
+                    />
+                  </div>
+                  <p className="text-xs text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.hysteriaTlsHint", {
+                      defaultValue:
+                        "QUIC uses TLS like 3x-ui: SNI, ALPN (usually h3), certificate paths (optional — panel default cert is applied if empty).",
+                    })}
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-sni"
+                      >
+                        {t("pages.inbounds.tlsServerName", { defaultValue: "Server name (SNI)" })}
+                      </label>
+                      <Input
+                        id="in-hy-sni"
+                        className="min-w-0 flex-1"
+                        value={form.streamForm.tlsServerName}
+                        onChange={(e) =>
+                          setStreamFormField("tlsServerName", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-alpn"
+                      >
+                        {t("pages.inbounds.tlsAlpn", { defaultValue: "ALPN (comma-separated)" })}
+                      </label>
+                      <Input
+                        id="in-hy-alpn"
+                        value={form.streamForm.tlsAlpn}
+                        onChange={(e) =>
+                          setStreamFormField("tlsAlpn", e.target.value)
+                        }
+                        placeholder="h3"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-tls-min"
+                      >
+                        {t("pages.inbounds.tlsMinVersion", { defaultValue: "TLS min. version" })}
+                      </label>
+                      <SelectNative
+                        id="in-hy-tls-min"
+                        value={form.streamForm.tlsMinVersion}
+                        onChange={(e) =>
+                          setStreamFormField(
+                            "tlsMinVersion",
+                            e.target.value as StreamFormState["tlsMinVersion"],
+                          )
+                        }
+                      >
+                        <option value="1.2">1.2</option>
+                        <option value="1.3">1.3</option>
+                      </SelectNative>
+                    </div>
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-tls-max"
+                      >
+                        {t("pages.inbounds.tlsMaxVersion", { defaultValue: "TLS max. version" })}
+                      </label>
+                      <SelectNative
+                        id="in-hy-tls-max"
+                        value={
+                          form.streamForm.tlsMaxVersion === "1.2" ||
+                          form.streamForm.tlsMaxVersion === "1.3"
+                            ? form.streamForm.tlsMaxVersion
+                            : ""
+                        }
+                        onChange={(e) => {
+                          const v = e.target.value;
+                          setStreamFormField(
+                            "tlsMaxVersion",
+                            v === "1.2" || v === "1.3"
+                              ? v
+                              : ("" as StreamFormState["tlsMaxVersion"]),
+                          );
+                        }}
+                      >
+                        <option value="">
+                          {t("pages.inbounds.tlsMaxVersionOmit", { defaultValue: "— omit —" })}
+                        </option>
+                        <option value="1.2">1.2</option>
+                        <option value="1.3">1.3</option>
+                      </SelectNative>
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-ciph"
+                    >
+                      {t("pages.inbounds.tlsCipherSuites", { defaultValue: "Cipher suites (optional)" })}
+                    </label>
+                    <Input
+                      id="in-hy-ciph"
+                      className="font-mono text-xs"
+                      value={form.streamForm.tlsCipherSuites}
+                      onChange={(e) =>
+                        setStreamFormField("tlsCipherSuites", e.target.value)
+                      }
+                    />
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
+                    <CheckboxField
+                      checked={form.streamForm.tlsRejectUnknownSni}
+                      onChange={(e) =>
+                        setStreamFormField("tlsRejectUnknownSni", e.target.checked)
+                      }
+                      label={t("pages.inbounds.tlsRejectUnknownSni", {
+                        defaultValue: "Reject unknown SNI",
+                      })}
+                    />
+                    <CheckboxField
+                      checked={form.streamForm.tlsDisableSystemRoot}
+                      onChange={(e) =>
+                        setStreamFormField("tlsDisableSystemRoot", e.target.checked)
+                      }
+                      label={t("pages.inbounds.tlsDisableSystemRoot", {
+                        defaultValue: "Disable system root CAs",
+                      })}
+                    />
+                    <CheckboxField
+                      checked={form.streamForm.tlsEnableSessionResumption}
+                      onChange={(e) =>
+                        setStreamFormField("tlsEnableSessionResumption", e.target.checked)
+                      }
+                      label={t("pages.inbounds.tlsEnableSessionResumption", {
+                        defaultValue: "TLS session resumption",
+                      })}
+                    />
+                    <CheckboxField
+                      checked={form.streamForm.tlsAllowInsecure}
+                      onChange={(e) =>
+                        setStreamFormField("tlsAllowInsecure", e.target.checked)
+                      }
+                      label={t("pages.inbounds.tlsAllowInsecure", {
+                        defaultValue: "Allow insecure",
+                      })}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-utls"
+                    >
+                      {t("pages.inbounds.hysteriaUtlsFingerprint", {
+                        defaultValue: "uTLS fingerprint (tls.settings)",
+                      })}
+                    </label>
+                    <SelectNative
+                      id="in-hy-utls"
+                      value={
+                        hysteriaTlsFingerprintOptions.includes(
+                          form.streamForm.tlsUtlsFingerprint,
+                        )
+                          ? form.streamForm.tlsUtlsFingerprint
+                          : hysteriaTlsFingerprintOptions[0] ?? "chrome"
+                      }
+                      onChange={(e) =>
+                        setStreamFormField("tlsUtlsFingerprint", e.target.value)
+                      }
+                    >
+                      {hysteriaTlsFingerprintOptions.map((x) => (
+                        <option key={x} value={x}>
+                          {x}
+                        </option>
+                      ))}
+                    </SelectNative>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-ech-keys"
+                      >
+                        {t("pages.inbounds.tlsEchServerKeys", {
+                          defaultValue: "ECH server keys (optional)",
+                        })}
+                      </label>
+                      <Input
+                        id="in-hy-ech-keys"
+                        className="font-mono text-xs"
+                        value={form.streamForm.tlsEchServerKeys}
+                        onChange={(e) =>
+                          setStreamFormField("tlsEchServerKeys", e.target.value)
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-ech-fq"
+                      >
+                        {t("pages.inbounds.tlsEchForceQuery", {
+                          defaultValue: "ECH force query",
+                        })}
+                      </label>
+                      <Input
+                        id="in-hy-ech-fq"
+                        className="font-mono text-xs"
+                        value={form.streamForm.tlsEchForceQuery}
+                        onChange={(e) =>
+                          setStreamFormField("tlsEchForceQuery", e.target.value)
+                        }
+                        placeholder="none"
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-ech-cfg"
+                    >
+                      {t("pages.inbounds.tlsEchConfigList", {
+                        defaultValue: "ECH config list (tls.settings, optional)",
+                      })}
+                    </label>
+                    <Input
+                      id="in-hy-ech-cfg"
+                      className="font-mono text-xs"
+                      value={form.streamForm.tlsEchConfigList}
+                      onChange={(e) =>
+                        setStreamFormField("tlsEchConfigList", e.target.value)
+                      }
+                    />
+                  </div>
+                  <p className="text-xs text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.tlsCertHint", {
+                      defaultValue:
+                        "Use certificate file + key file on the server, or paste PEM blocks below.",
+                    })}
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-certfile"
+                      >
+                        {t("pages.inbounds.tlsCertificateFile", {
+                          defaultValue: "Certificate file path",
+                        })}
+                      </label>
+                      <Input
+                        id="in-hy-certfile"
+                        className="font-mono text-xs"
+                        value={form.streamForm.tlsCertificateFile}
+                        onChange={(e) =>
+                          setStreamFormField("tlsCertificateFile", e.target.value)
+                        }
+                        placeholder="/path/to/fullchain.pem"
+                      />
+                    </div>
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-keyfile"
+                      >
+                        {t("pages.inbounds.tlsKeyFile", { defaultValue: "Private key file path" })}
+                      </label>
+                      <Input
+                        id="in-hy-keyfile"
+                        className="font-mono text-xs"
+                        value={form.streamForm.tlsKeyFile}
+                        onChange={(e) =>
+                          setStreamFormField("tlsKeyFile", e.target.value)
+                        }
+                        placeholder="/path/to/privkey.pem"
+                      />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hy-cert-usage"
+                      >
+                        {t("pages.inbounds.tlsCertUsage", { defaultValue: "Certificate usage" })}
+                      </label>
+                      <Input
+                        id="in-hy-cert-usage"
+                        className="font-mono text-xs"
+                        value={form.streamForm.tlsCertUsage}
+                        onChange={(e) =>
+                          setStreamFormField("tlsCertUsage", e.target.value)
+                        }
+                        placeholder="encipherment"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-2 pt-6 sm:pt-0">
+                      <CheckboxField
+                        checked={form.streamForm.tlsCertOneTimeLoading}
+                        onChange={(e) =>
+                          setStreamFormField("tlsCertOneTimeLoading", e.target.checked)
+                        }
+                        label={t("pages.inbounds.tlsCertOneTimeLoading", {
+                          defaultValue: "Certificate one-time loading",
+                        })}
+                      />
+                      <CheckboxField
+                        checked={form.streamForm.tlsCertBuildChain}
+                        onChange={(e) =>
+                          setStreamFormField("tlsCertBuildChain", e.target.checked)
+                        }
+                        label={t("pages.inbounds.tlsCertBuildChain", {
+                          defaultValue: "Build certificate chain",
+                        })}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-pem-cert"
+                    >
+                      {t("pages.inbounds.tlsCertificatePem", { defaultValue: "Certificate (PEM)" })}
+                    </label>
+                    <TextArea
+                      id="in-hy-pem-cert"
+                      className="min-h-[100px]"
+                      value={form.streamForm.tlsCertificatePem}
+                      onChange={(e) =>
+                        setStreamFormField("tlsCertificatePem", e.target.value)
+                      }
+                      placeholder="-----BEGIN CERTIFICATE-----"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-hy-pem-key"
+                    >
+                      {t("pages.inbounds.tlsKeyPem", { defaultValue: "Private key (PEM)" })}
+                    </label>
+                    <TextArea
+                      id="in-hy-pem-key"
+                      className="min-h-[100px]"
+                      value={form.streamForm.tlsKeyPem}
+                      onChange={(e) =>
+                        setStreamFormField("tlsKeyPem", e.target.value)
+                      }
+                      placeholder="-----BEGIN PRIVATE KEY-----"
+                    />
+                  </div>
                 </div>
               ) : streamTransportMode === "wireguard" ? (
                 <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
@@ -3807,6 +4175,26 @@ export function InboundsPage() {
                     setSniffingFormField("destFakedns", e.target.checked)
                   }
                   label="fakedns"
+                />
+              </div>
+              <div className="mt-3 flex flex-col gap-2">
+                <CheckboxField
+                  checked={form.sniffingForm.metadataOnly}
+                  onChange={(e) =>
+                    setSniffingFormField("metadataOnly", e.target.checked)
+                  }
+                  label={t("pages.inbounds.sniffingMetadataOnly", {
+                    defaultValue: "Metadata only",
+                  })}
+                />
+                <CheckboxField
+                  checked={form.sniffingForm.routeOnly}
+                  onChange={(e) =>
+                    setSniffingFormField("routeOnly", e.target.checked)
+                  }
+                  label={t("pages.inbounds.sniffingRouteOnly", {
+                    defaultValue: "Route only",
+                  })}
                 />
               </div>
             </InboundFormSection>

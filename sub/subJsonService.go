@@ -405,8 +405,8 @@ func (s *SubJsonService) genVless(inbound *model.Inbound, streamSettings json_ut
 	settings["address"] = inbound.Listen
 	settings["port"] = inbound.Port
 	settings["id"] = client.ID
-	if client.Flow != "" {
-		settings["flow"] = client.Flow
+	if flow := service.VLESSFlowFromInboundSettings(inbound.Settings); flow != "" {
+		settings["flow"] = flow
 	}
 
 	// Add encryption for VLESS outbound from inbound settings

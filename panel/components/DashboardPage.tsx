@@ -99,6 +99,20 @@ function metricColor(percent: number, accent: string) {
   return "#ef4444";
 }
 
+/** SVG polyline points for 0–100 series in viewBox 0 0 840 220 (matches CPU/memory modals). */
+function resourceHistoryPolylinePoints(values: number[]): string {
+  return values
+    .map((raw, i, a) => {
+      const n = a.length;
+      if (!n) return "";
+      const y = Math.max(0, Math.min(100, raw));
+      const x = 40 + (i / (n - 1 || 1)) * 760;
+      const yy = 200 - (y / 100) * 180;
+      return `${x},${yy}`;
+    })
+    .join(" ");
+}
+
 function pct(cur: number, tot: number) {
   if (!tot) return 0;
   return Number(toFixed((cur / tot) * 100, 2));
@@ -203,6 +217,7 @@ export function DashboardPage() {
   const [configOpen, setConfigOpen] = useState(false);
   const [configText, setConfigText] = useState("");
   const [cpuOpen, setCpuOpen] = useState(false);
+  const [memOpen, setMemOpen] = useState(false);
   const [logRows, setLogRows] = useState(20);
   const [logLevel, setLogLevel] = useState("info");
   const [logSys, setLogSys] = useState(false);
@@ -489,6 +504,9 @@ export function DashboardPage() {
   const openCpu = () => {
     setCpuOpen(true);
   };
+  const openMem = () => {
+    setMemOpen(true);
+  };
   const exportDb = () => {
     if (typeof window === "undefined") return;
     window.location.href = p("panel/api/server/getDb");
@@ -596,8 +614,8 @@ export function DashboardPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={openCpu}
-                  title={t("pages.index.cpuHistory")}
+                  onClick={openMem}
+                  title={t("pages.index.memoryHistory")}
                   className="group rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left transition hover:border-[var(--accent)]/40 hover:bg-[var(--surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40"
                 >
                   <LinearProgress percent={memP} strokeColor={metricColor(memP, accent)} />
@@ -611,28 +629,18 @@ export function DashboardPage() {
                     <ResourceSparkline data={memHistory} stroke={ramSparkColor} />
                   </div>
                 </button>
-                <button
-                  type="button"
-                  onClick={openCpu}
-                  title={t("pages.index.cpuHistory")}
-                  className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left transition hover:border-[var(--accent)]/40 hover:bg-[var(--surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40"
-                >
+                <div className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left">
                   <LinearProgress percent={swP} strokeColor={metricColor(swP, accent)} />
                   <p className="mt-1.5 text-center text-xs">
                     {t("pages.index.swap")} · {toFixed(swP, 0)}%
                   </p>
-                </button>
-                <button
-                  type="button"
-                  onClick={openCpu}
-                  title={t("pages.index.cpuHistory")}
-                  className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left transition hover:border-[var(--accent)]/40 hover:bg-[var(--surface)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40"
-                >
+                </div>
+                <div className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left">
                   <LinearProgress percent={dskP} strokeColor={metricColor(dskP, accent)} />
                   <p className="mt-1.5 text-center text-xs">
                     {t("pages.index.storage")} · {toFixed(dskP, 0)}%
                   </p>
-                </button>
+                </div>
               </div>
               {multi && nTot > 0 && (
                 <div className="mt-3 border-t border-[var(--border)] pt-3 text-center text-sm text-[var(--fg-muted)]">
@@ -1207,15 +1215,26 @@ export function DashboardPage() {
               fill="none"
               stroke={accent}
               strokeWidth="2"
-              points={cpuLong
-                .map((y, i, a) => {
-                  const n = a.length;
-                  if (!n) return "";
-                  const x = 40 + (i / (n - 1 || 1)) * 760;
-                  const yy = 200 - (y / 100) * 180;
-                  return `${x},${yy}`;
-                })
-                .join(" ")}
+              points={resourceHistoryPolylinePoints(cpuLong)}
+            />
+          </svg>
+        </div>
+      </Modal>
+
+      <Modal open={memOpen} onClose={() => setMemOpen(false)} title={t("pages.index.memoryHistory")} width={900}>
+        <div className="h-[220px] w-full">
+          <svg
+            viewBox="0 0 840 220"
+            width="100%"
+            height="100%"
+            preserveAspectRatio="none"
+            className="text-[var(--accent)]"
+          >
+            <polyline
+              fill="none"
+              stroke={ramSparkColor}
+              strokeWidth="2"
+              points={resourceHistoryPolylinePoints(memHistory)}
             />
           </svg>
         </div>

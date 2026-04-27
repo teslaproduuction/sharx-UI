@@ -1032,35 +1032,9 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	return links
 }
 
-// vlessFlowForShareLink returns per-client VLESS flow for share links, or the first non-empty
-// flow from inbound settings JSON (settings.clients[].flow) when the client row has none.
-// The panel stores the form "default" on clients[0] when editing the inbound.
-func vlessFlowForShareLink(clientFlow string, inboundSettings string) string {
-	if t := strings.TrimSpace(clientFlow); t != "" {
-		return t
-	}
-	if inboundSettings == "" {
-		return ""
-	}
-	var root map[string]any
-	if err := json.Unmarshal([]byte(inboundSettings), &root); err != nil {
-		return ""
-	}
-	clients, _ := root["clients"].([]any)
-	for _, c := range clients {
-		cm, ok := c.(map[string]any)
-		if !ok {
-			continue
-		}
-		f, ok := cm["flow"].(string)
-		if !ok {
-			continue
-		}
-		if t := strings.TrimSpace(f); t != "" {
-			return t
-		}
-	}
-	return ""
+// vlessFlowForShareLink returns VLESS flow from the inbound settings only (clientFlow is ignored).
+func vlessFlowForShareLink(_ string, inboundSettings string) string {
+	return service.VLESSFlowFromInboundSettings(inboundSettings)
 }
 
 // applyXhttpPaddingParams copies xPadding* fields from xhttpSettings into vless:// / trojan:// / ss://

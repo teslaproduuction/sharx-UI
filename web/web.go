@@ -369,13 +369,14 @@ func (s *Server) startTask() {
 		_, err = s.cron.AddJob(runtime, job.NewStatsNotifyJob())
 		if err != nil {
 			logger.Warning("Add NewStatsNotifyJob error", err)
-			return
 		}
 
-		// Check CPU load and alarm to TgBot if threshold passes (every 1 second for real-time)
+		// CPU alert: sample every 15s (each sample blocks ~5s); do not use @every 1s with a long Percent interval
 		cpuThreshold, err := s.settingService.GetTgCpu()
 		if (err == nil) && (cpuThreshold > 0) {
-			s.cron.AddJob("@every 1s", job.NewCheckCpuJob())
+			if _, err := s.cron.AddJob("@every 15s", job.NewCheckCpuJob()); err != nil {
+				logger.Warning("Add CheckCpuJob error", err)
+			}
 		}
 	} else {
 		s.cron.Remove(entry)
@@ -450,13 +451,16 @@ func (s *Server) Start() (err error) {
 		s.httpServer.Serve(listener)
 	}()
 
-	s.startTask()
-
+	// Start Telegram before background jobs so outbound alerts see isRunning=true (OnReceive sets it early).
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()
-	if (err == nil) && (isTgbotenabled) {
+	if (err == nil) && isTgbotenabled {
 		tgBot := s.tgbotService.NewTgbot()
-		tgBot.Start(i18nFS)
+		if err := tgBot.Start(i18nFS); err != nil {
+			logger.Warning("Telegram bot failed to start (CPU and other alerts may be dropped):", err)
+		}
 	}
+
+	s.startTask()
 
 	return nil
 }

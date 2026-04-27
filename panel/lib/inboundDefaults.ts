@@ -195,6 +195,8 @@ export type SniffingFormState = {
   destTls: boolean;
   destQuic: boolean;
   destFakedns: boolean;
+  metadataOnly: boolean;
+  routeOnly: boolean;
 };
 
 export function defaultSniffingForm(): SniffingFormState {
@@ -204,6 +206,8 @@ export function defaultSniffingForm(): SniffingFormState {
     destTls: true,
     destQuic: true,
     destFakedns: false,
+    metadataOnly: false,
+    routeOnly: false,
   };
 }
 
@@ -212,6 +216,8 @@ export function parseSniffingToForm(json: string): SniffingFormState {
   try {
     const root = JSON.parse(json) as Record<string, unknown>;
     if (typeof root.enabled === "boolean") base.enabled = root.enabled;
+    if (typeof root.metadataOnly === "boolean") base.metadataOnly = root.metadataOnly;
+    if (typeof root.routeOnly === "boolean") base.routeOnly = root.routeOnly;
     const ov = root.destOverride;
     if (Array.isArray(ov)) {
       const set = new Set(ov.filter((x) => typeof x === "string") as string[]);
@@ -235,6 +241,8 @@ export function buildSniffingFromForm(state: SniffingFormState): string {
   return JSON.stringify({
     enabled: state.enabled,
     destOverride,
+    metadataOnly: state.metadataOnly,
+    routeOnly: state.routeOnly,
   });
 }
 
@@ -243,13 +251,24 @@ export function defaultStreamSettingsHysteriaString(version: 1 | 2): string {
   return JSON.stringify({
     network: "hysteria",
     security: "tls",
+    externalProxy: [],
     tlsSettings: {
       alpn: ["h3"],
       minVersion: "1.2",
+      maxVersion: "1.3",
+      cipherSuites: "",
+      rejectUnknownSni: false,
+      disableSystemRoot: false,
+      enableSessionResumption: true,
       certificates: [],
+      echServerKeys: "",
+      echForceQuery: "none",
+      settings: {
+        fingerprint: "chrome",
+        echConfigList: "",
+      },
     },
     hysteriaSettings: {
-      protocol: "hysteria",
       version,
       auth: "",
       udpIdleTimeout: 60,
@@ -374,6 +393,18 @@ export type StreamFormState = {
   xhttpUplinkChunkSize: number;
   grpcServiceName: string;
   hysteriaUdpIdleTimeout: number;
+  /** Hysteria QUIC-TLS (3x-ui–style tlsSettings); unused for TCP/WS editor paths. */
+  tlsMaxVersion: "" | "1.2" | "1.3";
+  tlsRejectUnknownSni: boolean;
+  tlsDisableSystemRoot: boolean;
+  tlsEnableSessionResumption: boolean;
+  tlsUtlsFingerprint: string;
+  tlsEchServerKeys: string;
+  tlsEchForceQuery: string;
+  tlsEchConfigList: string;
+  tlsCertOneTimeLoading: boolean;
+  tlsCertUsage: string;
+  tlsCertBuildChain: boolean;
   /** REALITY (security === reality); matches 3x-ui RealityStreamSettings.toJson */
   realityShow: boolean;
   realityXver: number;
@@ -436,6 +467,17 @@ export function defaultStreamForm(): StreamFormState {
     xhttpUplinkChunkSize: 0,
     grpcServiceName: "",
     hysteriaUdpIdleTimeout: 60,
+    tlsMaxVersion: "",
+    tlsRejectUnknownSni: false,
+    tlsDisableSystemRoot: false,
+    tlsEnableSessionResumption: true,
+    tlsUtlsFingerprint: "chrome",
+    tlsEchServerKeys: "",
+    tlsEchForceQuery: "none",
+    tlsEchConfigList: "",
+    tlsCertOneTimeLoading: false,
+    tlsCertUsage: "encipherment",
+    tlsCertBuildChain: false,
     realityShow: false,
     realityXver: 0,
     realityTarget: "www.apple.com:443",
@@ -452,6 +494,172 @@ export function defaultStreamForm(): StreamFormState {
     realitySpiderX: "/",
     realityMldsa65Verify: "",
   };
+}
+
+/** Defaults when switching inbound protocol to Hysteria / Hysteria2 (QUIC-TLS). */
+export function defaultStreamFormHysteria(): StreamFormState {
+  return {
+    ...defaultStreamForm(),
+    tlsAlpn: "h3",
+    tlsMinVersion: "1.2",
+    tlsMaxVersion: "1.3",
+    tlsEnableSessionResumption: true,
+    tlsUtlsFingerprint: "chrome",
+    tlsEchForceQuery: "none",
+    hysteriaUdpIdleTimeout: 60,
+  };
+}
+
+function tlsCertificatesFromStreamForm(state: StreamFormState): unknown[] {
+  const certFile = state.tlsCertificateFile.trim();
+  const keyFile = state.tlsKeyFile.trim();
+  const pemCert = state.tlsCertificatePem.trim();
+  const pemKey = state.tlsKeyPem.trim();
+  if (certFile && keyFile) {
+    return [
+      {
+        certificateFile: certFile,
+        keyFile,
+      },
+    ];
+  }
+  if (pemCert && pemKey) {
+    return [
+      {
+        certificate: pemToCertArray(pemCert),
+        key: pemToCertArray(pemKey),
+      },
+    ];
+  }
+  if (certFile || keyFile || pemCert || pemKey) {
+    return [
+      {
+        certificateFile: certFile,
+        keyFile,
+        certificate: pemCert ? pemToCertArray(pemCert) : [],
+        key: pemKey ? pemToCertArray(pemKey) : [],
+      },
+    ];
+  }
+  return [];
+}
+
+function hysteriaCertEntriesWithMeta(
+  certs: unknown[],
+  state: StreamFormState,
+): unknown[] {
+  if (certs.length === 0) return certs;
+  return certs.map((c, i) => {
+    if (i !== 0 || typeof c !== "object" || c === null) return c;
+    const o = c as Record<string, unknown>;
+    return {
+      ...o,
+      oneTimeLoading: state.tlsCertOneTimeLoading,
+      usage: state.tlsCertUsage.trim() || "encipherment",
+      buildChain: state.tlsCertBuildChain,
+    };
+  });
+}
+
+function parseHysteriaTlsFormFields(
+  base: StreamFormState,
+  root: Record<string, unknown>,
+): void {
+  const hy = root.hysteriaSettings as Record<string, unknown> | undefined;
+  if (hy) {
+    const timeout = hy.udpIdleTimeout;
+    if (typeof timeout === "number" && timeout > 0) {
+      base.hysteriaUdpIdleTimeout = Math.round(timeout);
+    }
+  }
+  const tls = root.tlsSettings as Record<string, unknown> | undefined;
+  if (!tls) return;
+  if (typeof tls.serverName === "string") base.tlsServerName = tls.serverName;
+  base.tlsAlpn = alpnToString(tls.alpn);
+  if (tls.allowInsecure === true) base.tlsAllowInsecure = true;
+  const mv = tls.minVersion;
+  if (mv === "1.3" || mv === "1.2") base.tlsMinVersion = mv;
+  const maxV = tls.maxVersion;
+  if (maxV === "1.3" || maxV === "1.2") base.tlsMaxVersion = maxV;
+  if (typeof tls.cipherSuites === "string") base.tlsCipherSuites = tls.cipherSuites;
+  if (typeof tls.rejectUnknownSni === "boolean") {
+    base.tlsRejectUnknownSni = tls.rejectUnknownSni;
+  }
+  if (typeof tls.disableSystemRoot === "boolean") {
+    base.tlsDisableSystemRoot = tls.disableSystemRoot;
+  }
+  if (typeof tls.enableSessionResumption === "boolean") {
+    base.tlsEnableSessionResumption = tls.enableSessionResumption;
+  }
+  if (typeof tls.echServerKeys === "string") base.tlsEchServerKeys = tls.echServerKeys;
+  if (typeof tls.echForceQuery === "string") base.tlsEchForceQuery = tls.echForceQuery;
+  const tset = tls.settings as Record<string, unknown> | undefined;
+  if (tset) {
+    if (typeof tset.fingerprint === "string") base.tlsUtlsFingerprint = tset.fingerprint;
+    if (typeof tset.echConfigList === "string") {
+      base.tlsEchConfigList = tset.echConfigList;
+    }
+  }
+  const certs = tls.certificates;
+  if (Array.isArray(certs) && certs.length > 0 && typeof certs[0] === "object" && certs[0] !== null) {
+    const c0 = certs[0] as Record<string, unknown>;
+    if (typeof c0.certificateFile === "string") base.tlsCertificateFile = c0.certificateFile;
+    if (typeof c0.keyFile === "string") base.tlsKeyFile = c0.keyFile;
+    if (c0.certificate != null) base.tlsCertificatePem = certArrayToPem(c0.certificate);
+    if (c0.key != null) base.tlsKeyPem = certArrayToPem(c0.key);
+    if (typeof c0.oneTimeLoading === "boolean") {
+      base.tlsCertOneTimeLoading = c0.oneTimeLoading;
+    }
+    if (typeof c0.usage === "string") base.tlsCertUsage = c0.usage;
+    if (typeof c0.buildChain === "boolean") base.tlsCertBuildChain = c0.buildChain;
+  }
+}
+
+function buildHysteriaStreamSettingsFromForm(
+  state: StreamFormState,
+  version: 1 | 2,
+): string {
+  const rawCerts = tlsCertificatesFromStreamForm(state);
+  const certificates = hysteriaCertEntriesWithMeta(rawCerts, state);
+  const alpnParts = state.tlsAlpn
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const alpn = alpnParts.length > 0 ? alpnParts : ["h3"];
+
+  const tlsSettings: Record<string, unknown> = {
+    serverName: state.tlsServerName.trim(),
+    minVersion: state.tlsMinVersion,
+    alpn,
+    cipherSuites: state.tlsCipherSuites.trim(),
+    rejectUnknownSni: state.tlsRejectUnknownSni,
+    disableSystemRoot: state.tlsDisableSystemRoot,
+    enableSessionResumption: state.tlsEnableSessionResumption,
+    certificates,
+    allowInsecure: state.tlsAllowInsecure,
+    echServerKeys: state.tlsEchServerKeys.trim(),
+    echForceQuery: state.tlsEchForceQuery.trim() || "none",
+    settings: {
+      fingerprint: state.tlsUtlsFingerprint.trim() || "chrome",
+      echConfigList: state.tlsEchConfigList.trim(),
+    },
+  };
+  if (state.tlsMaxVersion === "1.2" || state.tlsMaxVersion === "1.3") {
+    tlsSettings.maxVersion = state.tlsMaxVersion;
+  }
+
+  const out: Record<string, unknown> = {
+    network: "hysteria",
+    security: "tls",
+    externalProxy: [],
+    tlsSettings,
+    hysteriaSettings: {
+      version,
+      auth: "",
+      udpIdleTimeout: Math.max(1, Math.round(state.hysteriaUdpIdleTimeout) || 60),
+    },
+  };
+  return JSON.stringify(out);
 }
 
 function pemToCertArray(pem: string): string[] {
@@ -578,11 +786,7 @@ export function parseStreamSettingsToForm(
   if (protocol === "hysteria" || protocol === "hysteria2") {
     try {
       const root = JSON.parse(json) as Record<string, unknown>;
-      const hy = root.hysteriaSettings as Record<string, unknown> | undefined;
-      const timeout = hy?.udpIdleTimeout;
-      if (typeof timeout === "number" && timeout > 0) {
-        base.hysteriaUdpIdleTimeout = Math.round(timeout);
-      }
+      parseHysteriaTlsFormFields(base, root);
     } catch {
       /* keep defaults */
     }
@@ -745,38 +949,10 @@ export function buildStreamSettingsFromForm(
     return "{}";
   }
   if (protocol === "hysteria") {
-    return JSON.stringify({
-      network: "hysteria",
-      security: "tls",
-      tlsSettings: {
-        alpn: ["h3"],
-        minVersion: "1.2",
-        certificates: [],
-      },
-      hysteriaSettings: {
-        protocol: "hysteria",
-        version: 1,
-        auth: "",
-        udpIdleTimeout: Math.max(1, Math.round(state.hysteriaUdpIdleTimeout) || 60),
-      },
-    });
+    return buildHysteriaStreamSettingsFromForm(state, 1);
   }
   if (protocol === "hysteria2") {
-    return JSON.stringify({
-      network: "hysteria",
-      security: "tls",
-      tlsSettings: {
-        alpn: ["h3"],
-        minVersion: "1.2",
-        certificates: [],
-      },
-      hysteriaSettings: {
-        protocol: "hysteria",
-        version: 2,
-        auth: "",
-        udpIdleTimeout: Math.max(1, Math.round(state.hysteriaUdpIdleTimeout) || 60),
-      },
-    });
+    return buildHysteriaStreamSettingsFromForm(state, 2);
   }
   if (protocol === "shadowsocks" || protocol === "mixed") {
     return buildStreamSettingsShadowsocksFromForm(state);
@@ -871,35 +1047,7 @@ export function buildStreamSettingsFromForm(
       .split(",")
       .map((s) => s.trim())
       .filter(Boolean);
-    const certFile = state.tlsCertificateFile.trim();
-    const keyFile = state.tlsKeyFile.trim();
-    const pemCert = state.tlsCertificatePem.trim();
-    const pemKey = state.tlsKeyPem.trim();
-    let certificates: unknown[] = [];
-    if (certFile && keyFile) {
-      certificates = [
-        {
-          certificateFile: certFile,
-          keyFile,
-        },
-      ];
-    } else if (pemCert && pemKey) {
-      certificates = [
-        {
-          certificate: pemToCertArray(pemCert),
-          key: pemToCertArray(pemKey),
-        },
-      ];
-    } else if (certFile || keyFile || pemCert || pemKey) {
-      certificates = [
-        {
-          certificateFile: certFile,
-          keyFile,
-          certificate: pemCert ? pemToCertArray(pemCert) : [],
-          key: pemKey ? pemToCertArray(pemKey) : [],
-        },
-      ];
-    }
+    const certificates = tlsCertificatesFromStreamForm(state);
     out.tlsSettings = {
       serverName: state.tlsServerName.trim(),
       alpn: alpn.length > 0 ? alpn : ["http/1.1"],
