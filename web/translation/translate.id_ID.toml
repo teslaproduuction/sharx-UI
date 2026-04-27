@@ -286,6 +286,8 @@
 "IPLimitlogDesc" = "Log histori IP. (untuk mengaktifkan masuk setelah menonaktifkan, hapus log)"
 "IPLimitlogclear" = "Hapus Log"
 "setDefaultCert" = "Atur Sertifikat dari Panel"
+"generateSelfSignedTls" = "Generate self-signed (PEM)"
+"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "Harap berikan ID Obrolan Telegram. (gunakan perintah '/id' di bot) atau (@userinfobot)"
 "subscriptionDesc" = "Untuk menemukan URL langganan Anda, buka 'Rincian'. Selain itu, Anda dapat menggunakan nama yang sama untuk beberapa klien."
 "info" = "Info"
@@ -341,6 +343,7 @@
 "getNewX25519CertError" = "Terjadi kesalahan saat mendapatkan sertifikat X25519."
 "getNewmldsa65Error" = "Terjadi kesalahan saat mendapatkan sertifikat mldsa65."
 "getNewVlessEncError" = "Terjadi kesalahan saat mendapatkan sertifikat VlessEnc."
+"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "Permintaan"

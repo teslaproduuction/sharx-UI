@@ -2,10 +2,20 @@
 package job
 
 import (
+	"sync"
+	"time"
+
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
+)
+
+const minClientTrafficMatrixWSInterval = 1 * time.Second
+
+var (
+	clientMatrixWSMu     sync.Mutex
+	lastClientMatrixWSAt = map[int]time.Time{}
 )
 
 // CollectNodeStatsJob collects traffic and online clients statistics from all nodes.
@@ -23,12 +33,12 @@ func NewCollectNodeStatsJob() *CollectNodeStatsJob {
 // Run executes the job to collect statistics from all nodes.
 func (j *CollectNodeStatsJob) Run() {
 	logger.Debug("Starting node stats collection job")
-	
+
 	if err := j.nodeService.CollectNodeStats(); err != nil {
 		logger.Errorf("Failed to collect node stats: %v", err)
 		return
 	}
-	
+
 	// Broadcast updated nodes list via WebSocket for real-time updates
 	// Enrich nodes with inbounds and profiles (same as in NodeController)
 	nodes, err := j.nodeService.GetAllNodes()
@@ -37,11 +47,11 @@ func (j *CollectNodeStatsJob) Run() {
 		// Use the same structure as NodeController.broadcastNodesUpdate()
 		type NodeWithInbounds struct {
 			*model.Node
-			Inbounds    []*model.Inbound                    `json:"inbounds,omitempty"`
-			Profiles    []*model.XrayCoreConfigProfile       `json:"profiles,omitempty"`
-			XrayVersion string                                `json:"xrayVersion,omitempty"`
+			Inbounds    []*model.Inbound               `json:"inbounds,omitempty"`
+			Profiles    []*model.XrayCoreConfigProfile `json:"profiles,omitempty"`
+			XrayVersion string                         `json:"xrayVersion,omitempty"`
 		}
-		
+
 		profileService := service.XrayCoreConfigProfileService{}
 		result := make([]NodeWithInbounds, 0, len(nodes))
 		for _, node := range nodes {
@@ -63,6 +73,29 @@ func (j *CollectNodeStatsJob) Run() {
 	} else if err != nil {
 		logger.Warningf("Failed to get nodes for WebSocket broadcast: %v", err)
 	}
-	
+
+	// Per-user client×node traffic matrix for statistics UI (only if someone is connected; ~1s per user; heavy in multi-node).
+	if h := websocket.GetHub(); h != nil {
+		now := time.Now()
+		for _, uid := range h.ConnectedUserIds() {
+			clientMatrixWSMu.Lock()
+			if t, ok := lastClientMatrixWSAt[uid]; ok && now.Sub(t) < minClientTrafficMatrixWSInterval {
+				clientMatrixWSMu.Unlock()
+				continue
+			}
+			lastClientMatrixWSAt[uid] = time.Now()
+			clientMatrixWSMu.Unlock()
+
+			mat, mErr := j.nodeService.GetClientTrafficPerNodeMatrix(uid)
+			if mErr != nil || mat == nil {
+				if mErr != nil {
+					logger.Debugf("client traffic matrix for WS (user %d): %v", uid, mErr)
+				}
+				continue
+			}
+			websocket.BroadcastClientTrafficPerNode(uid, mat)
+		}
+	}
+
 	logger.Debug("Node stats collection job completed successfully")
 }

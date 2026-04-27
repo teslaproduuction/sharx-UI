@@ -286,6 +286,8 @@
 "IPLimitlogDesc" = "گزارش تاریخچه آی‌پی. برای فعال کردن ورودی پس از غیرفعال شدن، گزارش را پاک کنید"
 "IPLimitlogclear" = "پاک کردن گزارش‌ها"
 "setDefaultCert" = "استفاده از گواهی پنل"
+"generateSelfSignedTls" = "Generate self-signed (PEM)"
+"generateSelfSignedTlsHint" = "Uses Server name (SNI) as the certificate CN when set, with that name in SAN. Clears certificate file paths and fills the PEM fields below. Clients must trust this certificate or use allow insecure."
 "telegramDesc" = "لطفا شناسه گفتگوی تلگرام را وارد کنید. (از دستور '/id' در ربات استفاده کنید) یا (@userinfobot)"
 "subscriptionDesc" = "شما می‌توانید لینک سابسکربپشن خودرا در 'جزئیات' پیدا کنید، همچنین می‌توانید از همین نام برای چندین کاربر استفاده‌کنید"
 "info" = "اطلاعات"
@@ -341,6 +343,7 @@
 "getNewX25519CertError" = "خطا در دریافت گواهی X25519."
 "getNewmldsa65Error" = "خطا در دریافت گواهی mldsa65."
 "getNewVlessEncError" = "خطا در دریافت گواهی VlessEnc."
+"generateSelfSignedSuccess" = "Self-signed certificate generated."
 
 [pages.inbounds.stream.general]
 "request" = "درخواست"
