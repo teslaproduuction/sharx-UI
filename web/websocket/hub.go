@@ -17,14 +17,15 @@ import (
 type MessageType string
 
 const (
-	MessageTypeStatus       MessageType = "status"       // Server status update
-	MessageTypeTraffic      MessageType = "traffic"      // Traffic statistics update
-	MessageTypeInbounds     MessageType = "inbounds"     // Inbounds list update
-	MessageTypeNotification MessageType = "notification" // System notification
-	MessageTypeXrayState    MessageType = "xray_state"   // Xray state change
-	MessageTypeOutbounds    MessageType = "outbounds"    // Outbounds list update
-	MessageTypeNodes        MessageType = "nodes"        // Nodes list update
-	MessageTypeClients      MessageType = "clients"      // Clients list update
+	MessageTypeStatus               MessageType = "status"                  // Server status update
+	MessageTypeTraffic              MessageType = "traffic"                 // Traffic statistics update
+	MessageTypeInbounds             MessageType = "inbounds"                // Inbounds list update
+	MessageTypeNotification         MessageType = "notification"            // System notification
+	MessageTypeXrayState            MessageType = "xray_state"              // Xray state change
+	MessageTypeOutbounds            MessageType = "outbounds"               // Outbounds list update
+	MessageTypeNodes                MessageType = "nodes"                   // Nodes list update
+	MessageTypeClients              MessageType = "clients"                 // Clients list update
+	MessageTypeClientTrafficPerNode MessageType = "client_traffic_per_node" // Per-user client×node matrix (see GET /node/client-traffic-per-node)
 )
 
 // Message represents a WebSocket message
@@ -37,6 +38,7 @@ type Message struct {
 // Client represents a WebSocket client connection
 type Client struct {
 	ID     string
+	UserId int // Panel user id (session / API token); 0 if unknown
 	Send   chan []byte
 	Hub    *Hub
 	Topics map[MessageType]bool // Subscribed topics
@@ -72,8 +74,8 @@ type Hub struct {
 	cacheMu      sync.RWMutex
 
 	// Throttling for frequent updates
-	throttleMap map[MessageType]time.Time
-	throttleMu  sync.Mutex
+	throttleMap      map[MessageType]time.Time
+	throttleMu       sync.Mutex
 	throttleInterval time.Duration
 }
 
@@ -91,15 +93,15 @@ func NewHub() *Hub {
 	}
 
 	return &Hub{
-		clients:        make(map[*Client]bool),
-		broadcast:      make(chan []byte, 2048), // Increased from 256 to 2048 for high load
-		register:       make(chan *Client, 100), // Buffered channel for fast registration
-		unregister:     make(chan *Client, 100), // Buffered channel for fast unregistration
-		ctx:            ctx,
-		cancel:         cancel,
-		workerPoolSize: workerPoolSize,
-		messageCache:   make(map[MessageType][]byte),
-		throttleMap:    make(map[MessageType]time.Time),
+		clients:          make(map[*Client]bool),
+		broadcast:        make(chan []byte, 2048), // Increased from 256 to 2048 for high load
+		register:         make(chan *Client, 100), // Buffered channel for fast registration
+		unregister:       make(chan *Client, 100), // Buffered channel for fast unregistration
+		ctx:              ctx,
+		cancel:           cancel,
+		workerPoolSize:   workerPoolSize,
+		messageCache:     make(map[MessageType][]byte),
+		throttleMap:      make(map[MessageType]time.Time),
 		throttleInterval: 100 * time.Millisecond, // Throttle updates to max 10 per second per type
 	}
 }
@@ -348,6 +350,63 @@ func (h *Hub) Broadcast(messageType MessageType, payload any) {
 	case <-h.ctx.Done():
 		// Hub is shutting down
 	}
+}
+
+// ConnectedUserIds returns distinct panel user ids for active WebSocket connections.
+func (h *Hub) ConnectedUserIds() []int {
+	if h == nil {
+		return nil
+	}
+	h.mu.RLock()
+	seen := make(map[int]struct{}, len(h.clients))
+	for c := range h.clients {
+		if c != nil && c.UserId > 0 {
+			seen[c.UserId] = struct{}{}
+		}
+	}
+	h.mu.RUnlock()
+	if len(seen) == 0 {
+		return nil
+	}
+	out := make([]int, 0, len(seen))
+	for id := range seen {
+		out = append(out, id)
+	}
+	return out
+}
+
+// BroadcastToUser sends one message to WebSocket clients belonging to a panel user.
+func (h *Hub) BroadcastToUser(userId int, messageType MessageType, payload any) {
+	if h == nil || userId <= 0 || payload == nil {
+		return
+	}
+	var targets []*Client
+	h.mu.RLock()
+	for c := range h.clients {
+		if c != nil && c.UserId == userId {
+			targets = append(targets, c)
+		}
+	}
+	h.mu.RUnlock()
+	if len(targets) == 0 {
+		return
+	}
+
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	msg := Message{Type: messageType, Payload: payload, Time: getCurrentTimestamp()}
+	if err := enc.Encode(&msg); err != nil {
+		logger.Error("Failed to marshal WebSocket user-targeted message:", err)
+		return
+	}
+	data := bytes.TrimRight(buf.Bytes(), "\n")
+	const maxMessageSize = 1024 * 1024
+	if len(data) > maxMessageSize {
+		logger.Warningf("WebSocket user message too large: %d bytes, dropping", len(data))
+		return
+	}
+	h.broadcastParallel(targets, data)
 }
 
 // BroadcastToTopic sends a message only to clients subscribed to the specific topic

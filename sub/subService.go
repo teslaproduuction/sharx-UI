@@ -2439,6 +2439,12 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		params["sni"], _ = sniValue.(string)
 	}
 
+	insecureLink := false
+	if tlsSetting != nil {
+		if v, ok := tlsSetting["allowInsecure"].(bool); ok && v {
+			insecureLink = true
+		}
+	}
 	tlsSettings, _ := searchKey(tlsSetting, "settings")
 	if tlsSettings != nil {
 		if fpValue, ok := searchKey(tlsSettings, "fingerprint"); ok {
@@ -2446,9 +2452,12 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		}
 		if insecure, ok := searchKey(tlsSettings, "allowInsecure"); ok {
 			if b, ok := insecure.(bool); ok && b {
-				params["insecure"] = "1"
+				insecureLink = true
 			}
 		}
+	}
+	if insecureLink {
+		params["insecure"] = "1"
 	}
 
 	if finalmask, ok := stream["finalmask"].(map[string]interface{}); ok {
