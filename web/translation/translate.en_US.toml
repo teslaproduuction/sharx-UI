@@ -1489,6 +1489,7 @@ fieldConnectionState = "Connection"
 [pages.clients.sessions]
 "dropSuccess" = "Connections dropped"
 "loadError" = "Failed to load active sessions"
+"offlineBlockedGroup" = "Blocked IPs (not in live stats)"
 
 [pages.clients.toasts]
 "clientCreateSuccess" = "Client created successfully"
