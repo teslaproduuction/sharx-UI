@@ -20,7 +20,12 @@ import {
 } from "react-simple-maps";
 import { getJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
-import { reverseGeocodeLabel } from "@/lib/reverse-geocode";
+import {
+  mapLinkGoogle,
+  mapLinkOpenStreetMap,
+  mapLinkYandex,
+  reverseGeocodeLabel,
+} from "@/lib/reverse-geocode";
 import { PageHeader, PageScaffold, Surface } from "@/components/panel";
 import { Button, IconButton } from "@/components/ui";
 
@@ -118,6 +123,49 @@ function clusterCentroid(members: MapPoint[]): { lat: number; lng: number } {
   const lat = members.reduce((s, m) => s + m.lat, 0) / members.length;
   const lng = members.reduce((s, m) => s + m.lng, 0) / members.length;
   return { lat, lng };
+}
+
+function CoordMapLinks({
+  lat,
+  lng,
+  t,
+}: {
+  lat: number;
+  lng: number;
+  t: (key: string) => string;
+}) {
+  const cls =
+    "text-[var(--ifm-color-primary)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--ifm-color-primary)] rounded-sm";
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] leading-tight text-[var(--ifm-color-secondary)]">
+      <a
+        href={mapLinkGoogle(lat, lng)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cls}
+      >
+        {t("pages.nodes.geography.mapLinkGoogle")}
+      </a>
+      <span aria-hidden>·</span>
+      <a
+        href={mapLinkYandex(lat, lng)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cls}
+      >
+        {t("pages.nodes.geography.mapLinkYandex")}
+      </a>
+      <span aria-hidden>·</span>
+      <a
+        href={mapLinkOpenStreetMap(lat, lng)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={cls}
+      >
+        {t("pages.nodes.geography.mapLinkOsm")}
+      </a>
+    </div>
+  );
 }
 
 function clusterFill(members: MapPoint[]): string {
@@ -268,9 +316,9 @@ function MapLinkLine({
 }) {
   const k = useContext(MapZoomContext);
   const kk = k > 0.001 ? k : 1;
-  // Thicker + halo so panel→node links stay visible on land fill at any zoom.
-  const w = Math.max(0.75, 1.45 / kk);
-  const haloW = w + 2.8;
+  // Thin stroke + light halo so links stay readable on land at any zoom.
+  const w = Math.max(0.35, 0.75 / kk);
+  const haloW = w + 1.15;
   return (
     <g>
       <Line
@@ -668,7 +716,14 @@ export function NodesGeographyPage() {
                         {t("pages.nodes.geography.legendPanel")}
                       </td>
                       <td className="px-3 py-2 tabular-nums text-[var(--ifm-color-secondary)]">
-                        {panelPt.lat.toFixed(4)}, {panelPt.lng.toFixed(4)}
+                        <div>
+                          {panelPt.lat.toFixed(4)}, {panelPt.lng.toFixed(4)}
+                        </div>
+                        <CoordMapLinks
+                          lat={panelPt.lat}
+                          lng={panelPt.lng}
+                          t={t}
+                        />
                       </td>
                       <td className="max-w-[14rem] px-3 py-2 text-[var(--ifm-color-secondary)]">
                         {placesLoading
@@ -721,7 +776,10 @@ export function NodesGeographyPage() {
                           {n.name}
                         </td>
                         <td className="px-3 py-2 tabular-nums text-[var(--ifm-color-secondary)]">
-                          {lat.toFixed(4)}, {lng.toFixed(4)}
+                          <div>
+                            {lat.toFixed(4)}, {lng.toFixed(4)}
+                          </div>
+                          <CoordMapLinks lat={lat} lng={lng} t={t} />
                         </td>
                         <td className="max-w-[14rem] px-3 py-2 text-[var(--ifm-color-secondary)]">
                           {placesLoading

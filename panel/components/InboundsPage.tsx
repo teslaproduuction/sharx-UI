@@ -10,7 +10,6 @@ import {
   Filter,
   KeyRound,
   Network,
-  Pencil,
   Plus,
   Server,
   SlidersHorizontal,
@@ -49,11 +48,11 @@ import {
   streamPresetTcpTlsString,
   suggestRandomTlsSni,
   totalBytesToGbInput,
+  XHTTP_MODES,
   type InboundFormProtocol,
   type SniffingFormState,
   type StreamFormState,
 } from "@/lib/inboundDefaults";
-import { newWireGuardPeerKeypairBase64 } from "@/lib/wireguardKeypair";
 import { sizeFormat } from "@/lib/format";
 import {
   joinNameFlag,
@@ -497,6 +496,12 @@ export function InboundsPage() {
   const [toggleEnableBusyId, setToggleEnableBusyId] = useState<number | null>(null);
 
   const [modalOpen, setModalOpen] = useState(false);
+  const [inboundModalView, setInboundModalView] = useState<"form" | "json">(
+    "form",
+  );
+  const [xrayPreviewText, setXrayPreviewText] = useState<string | null>(null);
+  const [xrayPreviewLoading, setXrayPreviewLoading] = useState(false);
+  const [xrayPreviewError, setXrayPreviewError] = useState<string | null>(null);
   const [editId, setEditId] = useState<number | null>(null);
   const [modalSubmitting, setModalSubmitting] = useState(false);
   const [fetchingInbound, setFetchingInbound] = useState(false);
@@ -602,6 +607,7 @@ export function InboundsPage() {
     setEditId(null);
     setStep("basics");
     setPreserveTraffic({ up: 0, down: 0, allTime: 0 });
+    setInboundModalView("form");
   }, []);
 
   const openAdd = () => {
@@ -613,6 +619,7 @@ export function InboundsPage() {
 
   const openEdit = async (id: number) => {
     setModalOpen(true);
+    setInboundModalView("form");
     setFetchingInbound(true);
     setEditId(id);
     setStep("basics");
@@ -738,6 +745,42 @@ export function InboundsPage() {
     }));
   };
 
+  const addXhttpHeader = () => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        xhttpHeaders: [...f.streamForm.xhttpHeaders, { name: "", value: "" }],
+      },
+    }));
+  };
+
+  const removeXhttpHeader = (index: number) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        xhttpHeaders: f.streamForm.xhttpHeaders.filter((_, i) => i !== index),
+      },
+    }));
+  };
+
+  const setXhttpHeaderField = (
+    index: number,
+    key: "name" | "value",
+    value: string,
+  ) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        xhttpHeaders: f.streamForm.xhttpHeaders.map((row, i) =>
+          i === index ? { ...row, [key]: value } : row,
+        ),
+      },
+    }));
+  };
+
   const setSniffingFormField = <K extends keyof SniffingFormState>(
     key: K,
     value: SniffingFormState[K],
@@ -748,10 +791,11 @@ export function InboundsPage() {
     }));
   };
 
-  const submitModal = async () => {
+  const buildInboundSubmitBody = useCallback(():
+    | { ok: true; body: Record<string, unknown> }
+    | { ok: false; message: string } => {
     if (!form.port || form.port < 1 || form.port > 65535) {
-      toast.error(t("pages.inbounds.port") + ": 1–65535");
-      return;
+      return { ok: false, message: t("pages.inbounds.port") + ": 1–65535" };
     }
     const streamSettingsStr = buildStreamSettingsFromForm(
       form.streamForm,
@@ -762,23 +806,19 @@ export function InboundsPage() {
     try {
       streamObj = JSON.parse(streamSettingsStr);
     } catch {
-      toast.error(t("pages.inbounds.invalidStreamJson"));
-      return;
+      return { ok: false, message: t("pages.inbounds.invalidStreamJson") };
     }
     const sniffingStr = buildSniffingFromForm(form.sniffingForm);
     try {
       sniffObj = JSON.parse(sniffingStr);
     } catch {
-      toast.error(t("pages.inbounds.invalidSniffingJson"));
-      return;
+      return { ok: false, message: t("pages.inbounds.invalidSniffingJson") };
     }
     if (typeof streamObj !== "object" || streamObj === null) {
-      toast.error(t("pages.inbounds.invalidStreamJson"));
-      return;
+      return { ok: false, message: t("pages.inbounds.invalidStreamJson") };
     }
     if (typeof sniffObj !== "object" || sniffObj === null) {
-      toast.error(t("pages.inbounds.invalidSniffingJson"));
-      return;
+      return { ok: false, message: t("pages.inbounds.invalidSniffingJson") };
     }
 
     const patch = {
@@ -810,38 +850,110 @@ export function InboundsPage() {
       .map(([k]) => Number(k))
       .filter((n) => n > 0);
 
+    const body: Record<string, unknown> = {
+      remark: joinNameFlag(form.nameFlag, form.remark),
+      enable: form.enable,
+      listen: form.listen.trim(),
+      port: form.port,
+      protocol: form.protocol,
+      settings,
+      streamSettings: streamSettingsStr,
+      sniffing: sniffingStr,
+      total: totalBytes,
+      expiryTime: 0,
+      trafficReset: form.trafficReset,
+      up: editId != null ? preserveTraffic.up : 0,
+      down: editId != null ? preserveTraffic.down : 0,
+    };
+    if (editId != null) {
+      body.allTime = preserveTraffic.allTime;
+    }
+    if (form.protocol === "wireguard") {
+      body.wireguard = buildWireguardInboundApiPayload(form.wireguardForm);
+    }
+    if (selectedNodeIds.length > 0) {
+      body.nodeIds = selectedNodeIds;
+    }
+    return { ok: true, body };
+  }, [
+    baselineSettings,
+    editId,
+    form,
+    nodeIds,
+    preserveTraffic,
+    t,
+  ]);
+
+  const inboundApiPayloadPreview = useMemo(
+    () => buildInboundSubmitBody(),
+    [buildInboundSubmitBody],
+  );
+
+  useEffect(() => {
+    if (!modalOpen || inboundModalView !== "json") {
+      return;
+    }
+    if (!inboundApiPayloadPreview.ok) {
+      setXrayPreviewText(null);
+      setXrayPreviewError(inboundApiPayloadPreview.message);
+      setXrayPreviewLoading(false);
+      return;
+    }
+    let alive = true;
+    setXrayPreviewLoading(true);
+    setXrayPreviewError(null);
+    setXrayPreviewText(null);
+    const body: Record<string, unknown> = {
+      ...inboundApiPayloadPreview.body,
+    };
+    if (editId != null) {
+      body.id = editId;
+    }
+    void postJson<unknown>(panel("api/inbounds/previewXray"), body, true).then(
+      (r) => {
+        if (!alive) return;
+        if (r.success && r.obj != null) {
+          setXrayPreviewText(JSON.stringify(r.obj, null, 2));
+          setXrayPreviewError(null);
+        } else {
+          setXrayPreviewText(null);
+          setXrayPreviewError(
+            (r as { msg?: string }).msg || t("fail", { defaultValue: "Error" }),
+          );
+        }
+        setXrayPreviewLoading(false);
+      },
+      () => {
+        if (!alive) return;
+        setXrayPreviewText(null);
+        setXrayPreviewError(t("fail", { defaultValue: "Error" }));
+        setXrayPreviewLoading(false);
+      },
+    );
+    return () => {
+      alive = false;
+    };
+  }, [
+    modalOpen,
+    inboundModalView,
+    inboundApiPayloadPreview,
+    editId,
+    t,
+  ]);
+
+  const submitModal = async () => {
+    const built = buildInboundSubmitBody();
+    if (!built.ok) {
+      toast.error(built.message);
+      return;
+    }
     setModalSubmitting(true);
     try {
-      const body: Record<string, unknown> = {
-        remark: joinNameFlag(form.nameFlag, form.remark),
-        enable: form.enable,
-        listen: form.listen.trim(),
-        port: form.port,
-        protocol: form.protocol,
-        settings,
-        streamSettings: streamSettingsStr,
-        sniffing: sniffingStr,
-        total: totalBytes,
-        expiryTime: 0,
-        trafficReset: form.trafficReset,
-        up: editId != null ? preserveTraffic.up : 0,
-        down: editId != null ? preserveTraffic.down : 0,
-      };
-      if (editId != null) {
-        body.allTime = preserveTraffic.allTime;
-      }
-      if (form.protocol === "wireguard") {
-        body.wireguard = buildWireguardInboundApiPayload(form.wireguardForm);
-      }
-      if (selectedNodeIds.length > 0) {
-        body.nodeIds = selectedNodeIds;
-      }
-
       const url =
         editId != null
           ? panel(`api/inbounds/update/${editId}`)
           : panel("api/inbounds/add");
-      const r = await postJson<unknown>(url, body, true);
+      const r = await postJson<unknown>(url, built.body, true);
       if (r.success) {
         toast.success(
           (r as { msg?: string }).msg || t("success", { defaultValue: "OK" }),
@@ -1395,7 +1507,16 @@ export function InboundsPage() {
                   displayedInboundRows.map((r) => (
                     <tr
                       key={r.id}
-                      className="border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                      role="button"
+                      tabIndex={0}
+                      className="cursor-pointer border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                      onClick={() => void openEdit(r.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          void openEdit(r.id);
+                        }
+                      }}
                     >
                       <td
                         className="truncate p-3 font-medium text-[var(--fg)]"
@@ -1410,7 +1531,10 @@ export function InboundsPage() {
                       <td className="p-3 tabular-nums whitespace-nowrap">
                         {sizeFormat(r.up)} / {sizeFormat(r.down)}
                       </td>
-                      <td className="p-3">
+                      <td
+                        className="p-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <Switch
                           size="sm"
                           checked={r.enable}
@@ -1419,16 +1543,11 @@ export function InboundsPage() {
                           ariaLabel={`${t("enable")} — ${r.remark || `inbound ${r.id}`}`}
                         />
                       </td>
-                      <td className="p-3">
+                      <td
+                        className="p-3"
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <div className="flex flex-wrap gap-1">
-                          <Button
-                            variant="secondary"
-                            className="!p-2"
-                            onClick={() => void openEdit(r.id)}
-                            aria-label={t("edit")}
-                          >
-                            <Pencil size={16} />
-                          </Button>
                           <Button
                             variant="danger"
                             className="!p-2"
@@ -1540,23 +1659,84 @@ export function InboundsPage() {
                   tone={modalHeaderIconTone}
                   size="md"
                 />
-                <div>
-                  <div className="text-sm font-semibold text-[var(--fg)]">
-                    {joinNameFlag(form.nameFlag, form.remark) ||
-                      t("pages.inbounds.addInbound", { defaultValue: "Add inbound" })}
-                  </div>
-                  <div className="text-xs text-[var(--fg-muted)]">
-                    {t("pages.inbounds.addInboundModalStreamNote")}
-                  </div>
+                <div className="text-sm font-semibold text-[var(--fg)]">
+                  {joinNameFlag(form.nameFlag, form.remark) ||
+                    t("pages.inbounds.addInbound", { defaultValue: "Add inbound" })}
                 </div>
               </div>
-              <div className="text-xs text-[var(--fg-subtle)]">
-                {t("protocol")}: <span className="font-mono text-[var(--fg)]">{form.protocol}</span>
-                <span className="mx-2">·</span>
-                {t("pages.inbounds.port")}: <span className="font-mono text-[var(--fg)]">{form.port}</span>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+                <div
+                  className="inline-flex w-fit shrink-0 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] p-0.5"
+                  role="group"
+                  aria-label={t("pages.inbounds.payloadViewToggle", {
+                    defaultValue: "Form or Xray core preview",
+                  })}
+                >
+                  <button
+                    type="button"
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      inboundModalView === "form"
+                        ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
+                        : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                    }`}
+                    onClick={() => setInboundModalView("form")}
+                  >
+                    {t("pages.inbounds.viewForm", { defaultValue: "Form" })}
+                  </button>
+                  <button
+                    type="button"
+                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                      inboundModalView === "json"
+                        ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
+                        : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                    }`}
+                    onClick={() => setInboundModalView("json")}
+                  >
+                    {t("pages.inbounds.viewXrayCorePreview", {
+                      defaultValue: "Xray config",
+                    })}
+                  </button>
+                </div>
+                <div className="text-xs text-[var(--fg-subtle)] sm:text-right">
+                  {t("protocol")}:{" "}
+                  <span className="font-mono text-[var(--fg)]">{form.protocol}</span>
+                  <span className="mx-2">·</span>
+                  {t("pages.inbounds.port")}:{" "}
+                  <span className="font-mono text-[var(--fg)]">{form.port}</span>
+                </div>
               </div>
             </div>
 
+            {inboundModalView === "json" ? (
+              <div className="space-y-2">
+                <p className="text-xs text-[var(--fg-muted)]">
+                  {t("pages.inbounds.xrayCorePreviewHint", {
+                    defaultValue:
+                      "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here.",
+                  })}
+                </p>
+                <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-subtle)] p-3">
+                  {!inboundApiPayloadPreview.ok ? (
+                    <p className="text-sm text-amber-600 dark:text-amber-400">
+                      {inboundApiPayloadPreview.message}
+                    </p>
+                  ) : xrayPreviewLoading ? (
+                    <div className="grid min-h-32 place-items-center">
+                      <Spinner size={28} />
+                    </div>
+                  ) : xrayPreviewError != null ? (
+                    <p className="text-sm text-amber-600 dark:text-amber-400">
+                      {xrayPreviewError}
+                    </p>
+                  ) : xrayPreviewText != null ? (
+                    <pre className="max-h-[min(60dvh,28rem)] overflow-auto text-xs font-mono leading-relaxed text-[var(--fg)] [overflow-wrap:anywhere] whitespace-pre-wrap">
+                      {xrayPreviewText}
+                    </pre>
+                  ) : null}
+                </div>
+              </div>
+            ) : (
+              <>
             {isEdit ? (
               <div className="overflow-x-auto">
                 <Tabs
@@ -1950,6 +2130,7 @@ export function InboundsPage() {
                         <option value="tcp">TCP</option>
                         <option value="ws">WebSocket</option>
                         <option value="grpc">gRPC</option>
+                        <option value="xhttp">XHTTP (SplitHTTP)</option>
                         <option value="quic">QUIC</option>
                       </SelectNative>
                     </div>
@@ -2084,6 +2265,476 @@ export function InboundsPage() {
                         }
                         placeholder=""
                       />
+                    </div>
+                  ) : null}
+                  {form.streamForm.network === "xhttp" ? (
+                    <div className="mt-3 space-y-4">
+                      <p className="text-xs text-[var(--fg-subtle)]">
+                        {t("pages.inbounds.xhttpHint", {
+                          defaultValue:
+                            "XHTTP (SplitHTTP) — same fields as 3x-ui / Xray xhttpSettings (request headers, mode, padding, session, uplink).",
+                        })}
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-host"
+                          >
+                            {t("host", { defaultValue: "Host" })}
+                          </label>
+                          <Input
+                            id="in-xhttp-host"
+                            className="font-mono text-xs"
+                            value={form.streamForm.xhttpHost}
+                            onChange={(e) => setStreamFormField("xhttpHost", e.target.value)}
+                            placeholder=""
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-path"
+                          >
+                            {t("path", { defaultValue: "Path" })}
+                          </label>
+                          <div className="flex gap-2">
+                            <Input
+                              id="in-xhttp-path"
+                              className="min-w-0 flex-1 font-mono text-xs"
+                              value={form.streamForm.xhttpPath}
+                              onChange={(e) => setStreamFormField("xhttpPath", e.target.value)}
+                              placeholder="/"
+                            />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              className="shrink-0 text-xs"
+                              onClick={() => setStreamFormField("xhttpPath", randomWsPath())}
+                            >
+                              {t("pages.inbounds.genRandomWsPath", {
+                                defaultValue: "Random path",
+                              })}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                      <div>
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <span className="text-xs font-medium text-[var(--fg-muted)]">
+                            {t("pages.inbounds.streamTcpRequestHeader", {
+                              defaultValue: "Request headers",
+                            })}
+                          </span>
+                          <Button
+                            type="button"
+                            variant="secondary"
+                            className="text-xs"
+                            onClick={addXhttpHeader}
+                          >
+                            <Plus className="mr-1 inline h-3.5 w-3.5" />
+                            {t("pages.inbounds.xhttpAddHeader", { defaultValue: "Add" })}
+                          </Button>
+                        </div>
+                        <div className="space-y-2">
+                          {form.streamForm.xhttpHeaders.map((row, index) => (
+                            <div key={index} className="flex gap-2">
+                              <Input
+                                className="min-w-0 flex-1 font-mono text-xs"
+                                value={row.name}
+                                onChange={(e) =>
+                                  setXhttpHeaderField(index, "name", e.target.value)
+                                }
+                                placeholder="name"
+                                aria-label={`header name ${index + 1}`}
+                              />
+                              <Input
+                                className="min-w-0 flex-1 font-mono text-xs"
+                                value={row.value}
+                                onChange={(e) =>
+                                  setXhttpHeaderField(index, "value", e.target.value)
+                                }
+                                placeholder="value"
+                                aria-label={`header value ${index + 1}`}
+                              />
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                className="shrink-0 px-2"
+                                onClick={() => removeXhttpHeader(index)}
+                                aria-label={t("remove", { defaultValue: "Remove" })}
+                              >
+                                <Trash2 className="h-4 w-4" />
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-mode"
+                          >
+                            Mode
+                          </label>
+                          <SelectNative
+                            id="in-xhttp-mode"
+                            value={form.streamForm.xhttpMode}
+                            onChange={(e) => setStreamFormField("xhttpMode", e.target.value)}
+                          >
+                            {XHTTP_MODES.map((m) => (
+                              <option key={m} value={m}>
+                                {m}
+                              </option>
+                            ))}
+                          </SelectNative>
+                        </div>
+                        {form.streamForm.xhttpMode === "packet-up" ? (
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-sc-max-posts"
+                            >
+                              Max buffered upload
+                            </label>
+                            <Input
+                              id="in-xhttp-sc-max-posts"
+                              type="number"
+                              min={0}
+                              className="font-mono text-xs"
+                              value={String(form.streamForm.xhttpScMaxBufferedPosts)}
+                              onChange={(e) =>
+                                setStreamFormField(
+                                  "xhttpScMaxBufferedPosts",
+                                  Math.max(0, parseInt(e.target.value, 10) || 0),
+                                )
+                              }
+                            />
+                          </div>
+                        ) : null}
+                        {form.streamForm.xhttpMode === "packet-up" ? (
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-sc-max-bytes"
+                            >
+                              Max upload size (bytes)
+                            </label>
+                            <Input
+                              id="in-xhttp-sc-max-bytes"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpScMaxEachPostBytes}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpScMaxEachPostBytes", e.target.value)
+                              }
+                            />
+                          </div>
+                        ) : null}
+                        {form.streamForm.xhttpMode === "stream-up" ? (
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-sc-stream-up"
+                            >
+                              Stream-Up server
+                            </label>
+                            <Input
+                              id="in-xhttp-sc-stream-up"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpScStreamUpServerSecs}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpScStreamUpServerSecs", e.target.value)
+                              }
+                              placeholder="20-80"
+                            />
+                          </div>
+                        ) : null}
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-pad-bytes"
+                          >
+                            Padding bytes
+                          </label>
+                          <Input
+                            id="in-xhttp-pad-bytes"
+                            className="font-mono text-xs"
+                            value={form.streamForm.xhttpPaddingBytes}
+                            onChange={(e) =>
+                              setStreamFormField("xhttpPaddingBytes", e.target.value)
+                            }
+                            placeholder="100-1000"
+                          />
+                        </div>
+                        <div className="flex items-end pb-1">
+                          <CheckboxField
+                            checked={form.streamForm.xhttpPaddingObfs}
+                            onChange={(e) =>
+                              setStreamFormField("xhttpPaddingObfs", e.target.checked)
+                            }
+                            label="Padding obfs mode"
+                          />
+                        </div>
+                      </div>
+                      {form.streamForm.xhttpPaddingObfs ? (
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-pad-key"
+                            >
+                              Padding key
+                            </label>
+                            <Input
+                              id="in-xhttp-pad-key"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpPaddingKey}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpPaddingKey", e.target.value)
+                              }
+                              placeholder="x_padding"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-pad-hdr"
+                            >
+                              Padding header
+                            </label>
+                            <Input
+                              id="in-xhttp-pad-hdr"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpPaddingHeader}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpPaddingHeader", e.target.value)
+                              }
+                              placeholder="X-Padding"
+                            />
+                          </div>
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-pad-pl"
+                            >
+                              Padding placement
+                            </label>
+                            <SelectNative
+                              id="in-xhttp-pad-pl"
+                              value={form.streamForm.xhttpPaddingPlacement}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpPaddingPlacement", e.target.value)
+                              }
+                            >
+                              <option value="">Default (queryInHeader)</option>
+                              <option value="queryInHeader">queryInHeader</option>
+                              <option value="header">header</option>
+                              <option value="cookie">cookie</option>
+                              <option value="query">query</option>
+                            </SelectNative>
+                          </div>
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-pad-meth"
+                            >
+                              Padding method
+                            </label>
+                            <SelectNative
+                              id="in-xhttp-pad-meth"
+                              value={form.streamForm.xhttpPaddingMethod}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpPaddingMethod", e.target.value)
+                              }
+                            >
+                              <option value="">Default (repeat-x)</option>
+                              <option value="repeat-x">repeat-x</option>
+                              <option value="tokenish">tokenish</option>
+                            </SelectNative>
+                          </div>
+                        </div>
+                      ) : null}
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-up-meth"
+                          >
+                            Uplink HTTP method
+                          </label>
+                          <SelectNative
+                            id="in-xhttp-up-meth"
+                            value={form.streamForm.xhttpUplinkHttpMethod}
+                            onChange={(e) =>
+                              setStreamFormField("xhttpUplinkHttpMethod", e.target.value)
+                            }
+                          >
+                            <option value="">Default (POST)</option>
+                            <option value="POST">POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="GET">GET (packet-up only)</option>
+                          </SelectNative>
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-sess-pl"
+                          >
+                            Session placement
+                          </label>
+                          <SelectNative
+                            id="in-xhttp-sess-pl"
+                            value={form.streamForm.xhttpSessionPlacement}
+                            onChange={(e) =>
+                              setStreamFormField("xhttpSessionPlacement", e.target.value)
+                            }
+                          >
+                            <option value="">Default (path)</option>
+                            <option value="path">path</option>
+                            <option value="header">header</option>
+                            <option value="cookie">cookie</option>
+                            <option value="query">query</option>
+                          </SelectNative>
+                        </div>
+                        {form.streamForm.xhttpSessionPlacement &&
+                        form.streamForm.xhttpSessionPlacement !== "path" ? (
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-sess-key"
+                            >
+                              Session key
+                            </label>
+                            <Input
+                              id="in-xhttp-sess-key"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpSessionKey}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpSessionKey", e.target.value)
+                              }
+                              placeholder="x_session"
+                            />
+                          </div>
+                        ) : null}
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-xhttp-seq-pl"
+                          >
+                            Sequence placement
+                          </label>
+                          <SelectNative
+                            id="in-xhttp-seq-pl"
+                            value={form.streamForm.xhttpSeqPlacement}
+                            onChange={(e) =>
+                              setStreamFormField("xhttpSeqPlacement", e.target.value)
+                            }
+                          >
+                            <option value="">Default (path)</option>
+                            <option value="path">path</option>
+                            <option value="header">header</option>
+                            <option value="cookie">cookie</option>
+                            <option value="query">query</option>
+                          </SelectNative>
+                        </div>
+                        {form.streamForm.xhttpSeqPlacement &&
+                        form.streamForm.xhttpSeqPlacement !== "path" ? (
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-seq-key"
+                            >
+                              Sequence key
+                            </label>
+                            <Input
+                              id="in-xhttp-seq-key"
+                              className="font-mono text-xs"
+                              value={form.streamForm.xhttpSeqKey}
+                              onChange={(e) => setStreamFormField("xhttpSeqKey", e.target.value)}
+                              placeholder="x_seq"
+                            />
+                          </div>
+                        ) : null}
+                      </div>
+                      {form.streamForm.xhttpMode === "packet-up" ? (
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                          <div>
+                            <label
+                              className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                              htmlFor="in-xhttp-ud-pl"
+                            >
+                              Uplink data placement
+                            </label>
+                            <SelectNative
+                              id="in-xhttp-ud-pl"
+                              value={form.streamForm.xhttpUplinkDataPlacement}
+                              onChange={(e) =>
+                                setStreamFormField("xhttpUplinkDataPlacement", e.target.value)
+                              }
+                            >
+                              <option value="">Default (body)</option>
+                              <option value="body">body</option>
+                              <option value="header">header</option>
+                              <option value="cookie">cookie</option>
+                              <option value="query">query</option>
+                            </SelectNative>
+                          </div>
+                          {form.streamForm.xhttpUplinkDataPlacement &&
+                          form.streamForm.xhttpUplinkDataPlacement !== "body" ? (
+                            <>
+                              <div>
+                                <label
+                                  className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                                  htmlFor="in-xhttp-ud-key"
+                                >
+                                  Uplink data key
+                                </label>
+                                <Input
+                                  id="in-xhttp-ud-key"
+                                  className="font-mono text-xs"
+                                  value={form.streamForm.xhttpUplinkDataKey}
+                                  onChange={(e) =>
+                                    setStreamFormField("xhttpUplinkDataKey", e.target.value)
+                                  }
+                                  placeholder="x_data"
+                                />
+                              </div>
+                              <div>
+                                <label
+                                  className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                                  htmlFor="in-xhttp-ud-chunk"
+                                >
+                                  Uplink chunk size
+                                </label>
+                                <Input
+                                  id="in-xhttp-ud-chunk"
+                                  type="number"
+                                  min={0}
+                                  className="font-mono text-xs"
+                                  value={String(form.streamForm.xhttpUplinkChunkSize)}
+                                  onChange={(e) =>
+                                    setStreamFormField(
+                                      "xhttpUplinkChunkSize",
+                                      Math.max(0, parseInt(e.target.value, 10) || 0),
+                                    )
+                                  }
+                                  placeholder="0"
+                                />
+                              </div>
+                            </>
+                          ) : null}
+                        </div>
+                      ) : null}
+                      <div>
+                        <CheckboxField
+                          checked={form.streamForm.xhttpNoSseHeader}
+                          onChange={(e) =>
+                            setStreamFormField("xhttpNoSseHeader", e.target.checked)
+                          }
+                          label="No SSE header"
+                        />
+                      </div>
                     </div>
                   ) : null}
                   {form.streamForm.network === "quic" ? (
@@ -2907,7 +3558,7 @@ export function InboundsPage() {
                 <p className="text-xs text-[var(--fg-subtle)]">
                   {t("pages.inbounds.wireguardSettingsHint", {
                     defaultValue:
-                      "Server-side WireGuard (UDP): MTU, private key, tunnel addresses, optional peers (client public keys), noKernelTun, optional workers. Settings JSON is built on the server. No panel-managed client rows for this protocol.",
+                      "Server-side WireGuard (UDP): MTU, server secret key, tunnel `address` (CIDRs), optional client DNS (shown in the user’s .conf and subscription), noKernelTun, optional workers. Peers (keys, PSK, AllowedIPs) are created when you assign a client to this inbound.",
                   })}
                 </p>
                 <div>
@@ -3006,6 +3657,34 @@ export function InboundsPage() {
                     spellCheck={false}
                   />
                 </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-wg-dns"
+                  >
+                    {t("pages.inbounds.wireguardClientDns", {
+                      defaultValue: "Client DNS (for user .conf)",
+                    })}
+                  </label>
+                  <TextArea
+                    id="in-wg-dns"
+                    className="min-h-[56px] font-mono text-xs"
+                    placeholder={t("pages.inbounds.wireguardClientDnsPlaceholder", {
+                      defaultValue: "e.g. 1.1.1.1, 8.8.8.8 or one per line (optional)",
+                    })}
+                    value={form.wireguardForm.clientDns}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        wireguardForm: {
+                          ...f.wireguardForm,
+                          clientDns: e.target.value,
+                        },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
                 <CheckboxField
                   checked={form.wireguardForm.noKernelTun}
                   onChange={(e) =>
@@ -3049,199 +3728,6 @@ export function InboundsPage() {
                       }))
                     }
                   />
-                </div>
-                <div>
-                  <div className="mb-1.5 flex items-center justify-between gap-2">
-                    <span className="text-xs font-medium text-[var(--fg-muted)]">
-                      {t("pages.inbounds.wireguardPeers", {
-                        defaultValue: "Peers (client public keys)",
-                      })}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className="text-xs"
-                      onClick={() => {
-                        setForm((f) => {
-                          const g = newWireGuardPeerKeypairBase64();
-                          const n = 2 + f.wireguardForm.peers.length;
-                          return {
-                            ...f,
-                            wireguardForm: {
-                              ...f.wireguardForm,
-                              peers: [
-                                ...f.wireguardForm.peers,
-                                {
-                                  publicKey: g.publicKeyB64,
-                                  preSharedKey: "",
-                                  allowedIps: `10.8.0.${n}/32`,
-                                  clientPrivateKey: g.privateKeyB64,
-                                },
-                              ],
-                            },
-                          };
-                        });
-                      }}
-                    >
-                      {t("pages.inbounds.wireguardAddPeer", {
-                        defaultValue: "Add peer",
-                      })}
-                    </Button>
-                  </div>
-                  <div className="space-y-3">
-                    {form.wireguardForm.peers.length === 0 ? (
-                      <p className="text-xs text-[var(--fg-subtle)]">
-                        {t("pages.inbounds.wireguardPeersEmpty", {
-                          defaultValue: "No peers yet. Add a row for each client public key (optional PSK, allowedIPs).",
-                        })}
-                      </p>
-                    ) : null}
-                    {form.wireguardForm.peers.map((row, idx) => (
-                      <div
-                        key={idx}
-                        className="space-y-2 rounded-md border border-[var(--border)] p-2"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <span className="text-xs text-[var(--fg-muted)]">
-                            {t("pages.inbounds.wireguardPeerN", {
-                              defaultValue: "Peer {{n}}",
-                              n: idx + 1,
-                            })}
-                          </span>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="shrink-0 text-xs"
-                            onClick={() =>
-                              setForm((f) => ({
-                                ...f,
-                                wireguardForm: {
-                                  ...f.wireguardForm,
-                                  peers: f.wireguardForm.peers.filter(
-                                    (_p, i) => i !== idx,
-                                  ),
-                                },
-                              }))
-                            }
-                          >
-                            {t("pages.inbounds.wireguardRemovePeer", {
-                              defaultValue: "Remove",
-                            })}
-                          </Button>
-                        </div>
-                        <Input
-                          className="font-mono text-xs"
-                          value={row.publicKey}
-                          placeholder="publicKey (base64) — on server / [Peer] on client"
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const next = f.wireguardForm.peers.slice();
-                              const cur = next[idx]!;
-                              next[idx] = {
-                                ...cur,
-                                publicKey: v,
-                                clientPrivateKey: "",
-                              };
-                              return {
-                                ...f,
-                                wireguardForm: { ...f.wireguardForm, peers: next },
-                              };
-                            });
-                          }}
-                          spellCheck={false}
-                        />
-                        <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:gap-2">
-                          <div className="min-w-0 flex-1">
-                            <label className="mb-0.5 block text-[10px] text-[var(--fg-muted)]">
-                              {t("pages.inbounds.wireguardClientPrivate", {
-                                defaultValue: "Client private key (for user [Interface] — not sent to Xray)",
-                              })}
-                            </label>
-                            <Input
-                              className="font-mono text-xs"
-                              value={row.clientPrivateKey ?? ""}
-                              placeholder={t("pages.inbounds.wireguardClientPrivatePlaceholder", {
-                                defaultValue: "Generated with public key, or paste",
-                              })}
-                              onChange={(e) => {
-                                const v = e.target.value;
-                                setForm((f) => {
-                                  const next = f.wireguardForm.peers.slice();
-                                  const cur = next[idx]!;
-                                  next[idx] = { ...cur, clientPrivateKey: v };
-                                  return {
-                                    ...f,
-                                    wireguardForm: { ...f.wireguardForm, peers: next },
-                                  };
-                                });
-                              }}
-                              spellCheck={false}
-                            />
-                          </div>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            className="shrink-0 text-xs"
-                            onClick={() => {
-                              const g = newWireGuardPeerKeypairBase64();
-                              setForm((f) => {
-                                const next = f.wireguardForm.peers.slice();
-                                const cur = next[idx]!;
-                                next[idx] = {
-                                  ...cur,
-                                  publicKey: g.publicKeyB64,
-                                  clientPrivateKey: g.privateKeyB64,
-                                };
-                                return {
-                                  ...f,
-                                  wireguardForm: { ...f.wireguardForm, peers: next },
-                                };
-                              });
-                            }}
-                          >
-                            {t("pages.inbounds.wireguardRegenPeerKeys", {
-                              defaultValue: "New client keys",
-                            })}
-                          </Button>
-                        </div>
-                        <Input
-                          className="font-mono text-xs"
-                          value={row.preSharedKey}
-                          placeholder="preSharedKey (optional)"
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const next = f.wireguardForm.peers.slice();
-                              next[idx] = { ...next[idx]!, preSharedKey: v };
-                              return {
-                                ...f,
-                                wireguardForm: { ...f.wireguardForm, peers: next },
-                              };
-                            });
-                          }}
-                          spellCheck={false}
-                        />
-                        <TextArea
-                          className="min-h-[52px] font-mono text-xs"
-                          value={row.allowedIps}
-                          placeholder="allowedIPs (CIDR, comma or newline)"
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setForm((f) => {
-                              const next = f.wireguardForm.peers.slice();
-                              next[idx] = { ...next[idx]!, allowedIps: v };
-                              return {
-                                ...f,
-                                wireguardForm: { ...f.wireguardForm, peers: next },
-                              };
-                            });
-                          }}
-                          spellCheck={false}
-                        />
-                      </div>
-                    ))}
-                  </div>
                 </div>
                 <div>
                   <Button
@@ -3355,6 +3841,8 @@ export function InboundsPage() {
                 })}
               </p>
             ) : null}
+              </>
+            )}
           </div>
         )}
       </Modal>

@@ -81,6 +81,7 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/add", a.addInbound)
 	g.POST("/del/:id", a.delInbound)
 	g.POST("/update/:id", a.updateInbound)
+	g.POST("/previewXray", a.previewInboundXray)
 	g.POST("/clientIps/:email", a.getClientIps)
 	g.POST("/clearClientIps/:email", a.clearClientIps)
 	g.POST("/addClient", a.addInboundClient)
@@ -95,6 +96,50 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/lastOnline", a.lastOnline)
 	g.POST("/updateClientTraffic/:email", a.updateClientTraffic)
 	g.POST("/:id/delClientByEmail/:email", a.delInboundClientByEmail)
+}
+
+// previewInboundXray returns the Xray core inbound detour (listen, port, tag, settings, streamSettings, sniffing)
+// as it would appear in the generated config — not the panel API request body.
+func (a *InboundController) previewInboundXray(c *gin.Context) {
+	var bindBody inboundBindBody
+	if err := c.ShouldBind(&bindBody); err != nil {
+		logger.Errorf("previewInboundXray bind: %v", err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	inbound := &bindBody.Inbound
+	user := session.GetLoginUser(c)
+	inbound.UserId = user.Id
+
+	if err := applyWireGuardPanelForm(inbound, bindBody.Wireguard); err != nil {
+		logger.Errorf("previewInboundXray wireguard: %v", err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+
+	if inbound.Id > 0 {
+		existing, err := a.inboundService.GetInbound(inbound.Id)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+			return
+		}
+		if existing.UserId != user.Id {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("access denied"))
+			return
+		}
+		inbound.ClientStats = existing.ClientStats
+	}
+
+	settingService := service.SettingService{}
+	multiMode, _ := settingService.GetMultiNodeMode()
+	inbound.Tag = a.inboundService.GenerateInboundTag(inbound, multiMode)
+
+	cfg, err := a.xrayService.PreviewInboundCoreConfig(inbound)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, cfg, nil)
 }
 
 // getInbounds retrieves the list of inbounds for the logged-in user.

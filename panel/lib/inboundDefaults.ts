@@ -3,8 +3,6 @@
  * Matches structures used by the legacy web UI (x-ui style).
  */
 
-import { newWireGuardPeerKeypairBase64 } from "./wireguardKeypair";
-
 export type InboundFormProtocol =
   | "vless"
   | "vmess"
@@ -63,45 +61,27 @@ function splitListLinesOrCommas(s: string): string[] {
     .filter((x) => x.length > 0);
 }
 
-/** One row in the WireGuard peers form (Xray public keys, optional PSK, optional allowedIPs). */
-export type WireguardPeerFormRow = {
-  publicKey: string;
-  preSharedKey: string;
-  /** Comma- or newline-separated CIDRs. */
-  allowedIps: string;
-  /**
-   * Client [Interface] private (base64), for admin to hand to user. Not in Xray JSON.
-   * Shown when generated here; may be empty if the peer was loaded from the server or keys were pasted manually.
-   */
-  clientPrivateKey?: string;
-};
-
 export type WireguardFormState = {
   mtu: number;
   secretKey: string;
   /** One CIDR per line (maps to `address`). */
   address: string;
-  peers: WireguardPeerFormRow[];
+  /**
+   * Client-side DNS for WireGuard [Interface] (comma or newline; stored as `clientDns` in settings).
+   * Shown in subscription / connection info, not used by Xray.
+   */
+  clientDns: string;
   noKernelTun: boolean;
   /** Optional positive integer; empty = omitted when saving. */
   workers: string;
 };
 
 export function defaultWireguardForm(): WireguardFormState {
-  const p = newWireGuardPeerKeypairBase64();
   return {
     mtu: 1420,
     secretKey: newWireGuardSecretKeyBase64(),
     address: "10.8.0.1/32",
-    /** One client row: public on server, private for user, typical AllowedIP. */
-    peers: [
-      {
-        publicKey: p.publicKeyB64,
-        preSharedKey: "",
-        allowedIps: "10.8.0.2/32",
-        clientPrivateKey: p.privateKeyB64,
-      },
-    ],
+    clientDns: "",
     noKernelTun: true,
     workers: "2",
   };
@@ -112,7 +92,7 @@ export function parseWireguardSettingsToForm(settingsStr: string): WireguardForm
     mtu: 1420,
     secretKey: "",
     address: "10.8.0.1/32",
-    peers: [],
+    clientDns: "",
     noKernelTun: true,
     workers: "",
   };
@@ -127,38 +107,18 @@ export function parseWireguardSettingsToForm(settingsStr: string): WireguardForm
         .filter(Boolean);
       if (lines.length) base.address = lines.join("\n");
     }
+    const cd = root.clientDns;
+    if (Array.isArray(cd)) {
+      const lines = cd
+        .map((a) => (typeof a === "string" ? a.trim() : ""))
+        .filter(Boolean);
+      if (lines.length) base.clientDns = lines.join("\n");
+    }
     if (typeof root.noKernelTun === "boolean") {
       base.noKernelTun = root.noKernelTun;
     }
     if (typeof root.workers === "number" && root.workers > 0) {
       base.workers = String(root.workers);
-    }
-    const pr = root.peers;
-    if (Array.isArray(pr)) {
-      const rows: WireguardPeerFormRow[] = [];
-      for (const p of pr) {
-        if (typeof p !== "object" || p === null) continue;
-        const o = p as Record<string, unknown>;
-        if (typeof o.publicKey !== "string") continue;
-        const allowed = o.allowedIPs ?? o.allowedIps;
-        let allowedIps = "";
-        if (Array.isArray(allowed)) {
-          allowedIps = allowed
-            .map((a) => (typeof a === "string" ? a.trim() : ""))
-            .filter(Boolean)
-            .join("\n");
-        } else if (typeof allowed === "string") {
-          allowedIps = allowed;
-        }
-        rows.push({
-          publicKey: o.publicKey,
-          preSharedKey:
-            typeof o.preSharedKey === "string" ? o.preSharedKey : "",
-          allowedIps: allowedIps,
-          clientPrivateKey: "",
-        });
-      }
-      base.peers = rows;
     }
   } catch {
     /* use base */
@@ -166,17 +126,14 @@ export function parseWireguardSettingsToForm(settingsStr: string): WireguardForm
   return base;
 }
 
-export type WireguardInboundApiPeer = {
-  publicKey: string;
-  preSharedKey?: string;
-  allowedIPs: string[];
-};
-
 export type WireguardInboundApiPayload = {
   mtu: number;
   secretKey: string;
   address: string[];
-  peers: WireguardInboundApiPeer[];
+  /** Client [Interface] DNS; stored as `clientDns` in settings (panel / subscription only). */
+  clientDns: string[];
+  /** Always empty: peers are generated when clients are assigned to this inbound. */
+  peers: [];
   noKernelTun: boolean;
   workers?: number;
 };
@@ -187,24 +144,13 @@ export function buildWireguardInboundApiPayload(
   const addrs = splitListLinesOrCommas(w.address);
   const address = addrs.length > 0 ? addrs : ["10.8.0.1/32"];
   const mtu = Number.isFinite(w.mtu) && w.mtu > 0 ? w.mtu : 1420;
-  const peers: WireguardInboundApiPeer[] = [];
-  for (const p of w.peers) {
-    const pk = p.publicKey.trim();
-    if (pk === "") continue;
-    const e: WireguardInboundApiPeer = {
-      publicKey: pk,
-      allowedIPs: splitListLinesOrCommas(p.allowedIps),
-    };
-    const psk = p.preSharedKey.trim();
-    if (psk !== "") e.preSharedKey = psk;
-    peers.push(e);
-  }
   const wu = parseInt(w.workers.trim(), 10);
   const out: WireguardInboundApiPayload = {
     mtu,
     secretKey: w.secretKey.trim(),
     address,
-    peers,
+    clientDns: splitListLinesOrCommas(w.clientDns),
+    peers: [],
     noKernelTun: w.noKernelTun,
   };
   if (Number.isFinite(wu) && wu > 0) {
@@ -345,9 +291,45 @@ export const REALITY_FINGERPRINTS = [
   "unsafe",
 ] as const;
 
+/** xHTTP custom request headers (3x-ui name/value rows → Xray v2 `headers` map, last wins per key). */
+export type XhttpHeaderRow = { name: string; value: string };
+
+/** MODE_OPTION from 3x-ui inbound xHTTPStreamSettings. */
+export const XHTTP_MODES = ["auto", "packet-up", "stream-up", "stream-one"] as const;
+
+function xhttpHeadersFromXrayJson(raw: unknown): XhttpHeaderRow[] {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
+  const h = raw as Record<string, unknown>;
+  const out: XhttpHeaderRow[] = [];
+  for (const key of Object.keys(h)) {
+    const values = h[key];
+    if (typeof values === "string" && values.length > 0) {
+      out.push({ name: key, value: values });
+    } else if (Array.isArray(values)) {
+      for (const v of values) {
+        if (typeof v === "string" && v.length > 0) {
+          out.push({ name: key, value: v });
+        }
+      }
+    }
+  }
+  return out;
+}
+
+function xhttpHeadersToV2Map(rows: XhttpHeaderRow[]): Record<string, string> {
+  const o: Record<string, string> = {};
+  for (const { name, value } of rows) {
+    const n = name.trim();
+    const v = value.trim();
+    if (!n || !v) continue;
+    o[n] = v;
+  }
+  return o;
+}
+
 /** Structured stream / transport fields (non-hysteria); serialized to Xray streamSettings JSON. */
 export type StreamFormState = {
-  network: "tcp" | "ws" | "grpc" | "quic";
+  network: "tcp" | "ws" | "grpc" | "quic" | "xhttp";
   security: "none" | "tls" | "reality";
   tcpHeaderType: "none" | "http";
   acceptProxyProtocol: boolean;
@@ -367,6 +349,29 @@ export type StreamFormState = {
   tlsKeyPem: string;
   wsPath: string;
   wsHost: string;
+  /** XHTTP (SplitHTTP) — full xHTTPStreamSettings from 3x-ui / Xray. */
+  xhttpPath: string;
+  xhttpHost: string;
+  xhttpHeaders: XhttpHeaderRow[];
+  xhttpScMaxBufferedPosts: number;
+  xhttpScMaxEachPostBytes: string;
+  xhttpScStreamUpServerSecs: string;
+  xhttpNoSseHeader: boolean;
+  xhttpMode: string;
+  xhttpPaddingBytes: string;
+  xhttpPaddingObfs: boolean;
+  xhttpPaddingKey: string;
+  xhttpPaddingHeader: string;
+  xhttpPaddingPlacement: string;
+  xhttpPaddingMethod: string;
+  xhttpUplinkHttpMethod: string;
+  xhttpSessionPlacement: string;
+  xhttpSessionKey: string;
+  xhttpSeqPlacement: string;
+  xhttpSeqKey: string;
+  xhttpUplinkDataPlacement: string;
+  xhttpUplinkDataKey: string;
+  xhttpUplinkChunkSize: number;
   grpcServiceName: string;
   hysteriaUdpIdleTimeout: number;
   /** REALITY (security === reality); matches 3x-ui RealityStreamSettings.toJson */
@@ -407,6 +412,28 @@ export function defaultStreamForm(): StreamFormState {
     tlsKeyPem: "",
     wsPath: "/",
     wsHost: "",
+    xhttpPath: "/",
+    xhttpHost: "",
+    xhttpHeaders: [],
+    xhttpScMaxBufferedPosts: 30,
+    xhttpScMaxEachPostBytes: "1000000",
+    xhttpScStreamUpServerSecs: "20-80",
+    xhttpNoSseHeader: false,
+    xhttpMode: "auto",
+    xhttpPaddingBytes: "100-1000",
+    xhttpPaddingObfs: false,
+    xhttpPaddingKey: "",
+    xhttpPaddingHeader: "",
+    xhttpPaddingPlacement: "",
+    xhttpPaddingMethod: "",
+    xhttpUplinkHttpMethod: "",
+    xhttpSessionPlacement: "",
+    xhttpSessionKey: "",
+    xhttpSeqPlacement: "",
+    xhttpSeqKey: "",
+    xhttpUplinkDataPlacement: "",
+    xhttpUplinkDataKey: "",
+    xhttpUplinkChunkSize: 0,
     grpcServiceName: "",
     hysteriaUdpIdleTimeout: 60,
     realityShow: false,
@@ -567,7 +594,7 @@ export function parseStreamSettingsToForm(
   try {
     const root = JSON.parse(json) as Record<string, unknown>;
     const net = root.network;
-    if (net === "ws" || net === "grpc" || net === "tcp" || net === "quic") {
+    if (net === "ws" || net === "grpc" || net === "tcp" || net === "quic" || net === "xhttp") {
       base.network = net;
     }
     const sec = root.security;
@@ -637,6 +664,41 @@ export function parseStreamSettingsToForm(
       const qht = qh?.type;
       if (typeof qht === "string" && isQuicHeaderType(qht)) {
         base.quicHeaderType = qht;
+      }
+    }
+    if (net === "xhttp") {
+      const xh = root.xhttpSettings as Record<string, unknown> | undefined;
+      if (xh && typeof xh === "object" && !Array.isArray(xh)) {
+        if (typeof xh.path === "string") base.xhttpPath = xh.path;
+        if (typeof xh.host === "string") base.xhttpHost = xh.host;
+        base.xhttpHeaders = xhttpHeadersFromXrayJson(xh.headers);
+        if (typeof xh.scMaxBufferedPosts === "number" && xh.scMaxBufferedPosts >= 0) {
+          base.xhttpScMaxBufferedPosts = Math.round(xh.scMaxBufferedPosts);
+        }
+        if (typeof xh.scMaxEachPostBytes === "string") base.xhttpScMaxEachPostBytes = xh.scMaxEachPostBytes;
+        if (typeof xh.scStreamUpServerSecs === "string") {
+          base.xhttpScStreamUpServerSecs = xh.scStreamUpServerSecs;
+        }
+        if (xh.noSSEHeader === true) base.xhttpNoSseHeader = true;
+        if (typeof xh.mode === "string") base.xhttpMode = xh.mode;
+        if (typeof xh.xPaddingBytes === "string") base.xhttpPaddingBytes = xh.xPaddingBytes;
+        if (xh.xPaddingObfsMode === true) base.xhttpPaddingObfs = true;
+        if (typeof xh.xPaddingKey === "string") base.xhttpPaddingKey = xh.xPaddingKey;
+        if (typeof xh.xPaddingHeader === "string") base.xhttpPaddingHeader = xh.xPaddingHeader;
+        if (typeof xh.xPaddingPlacement === "string") base.xhttpPaddingPlacement = xh.xPaddingPlacement;
+        if (typeof xh.xPaddingMethod === "string") base.xhttpPaddingMethod = xh.xPaddingMethod;
+        if (typeof xh.uplinkHTTPMethod === "string") base.xhttpUplinkHttpMethod = xh.uplinkHTTPMethod;
+        if (typeof xh.sessionPlacement === "string") base.xhttpSessionPlacement = xh.sessionPlacement;
+        if (typeof xh.sessionKey === "string") base.xhttpSessionKey = xh.sessionKey;
+        if (typeof xh.seqPlacement === "string") base.xhttpSeqPlacement = xh.seqPlacement;
+        if (typeof xh.seqKey === "string") base.xhttpSeqKey = xh.seqKey;
+        if (typeof xh.uplinkDataPlacement === "string") {
+          base.xhttpUplinkDataPlacement = xh.uplinkDataPlacement;
+        }
+        if (typeof xh.uplinkDataKey === "string") base.xhttpUplinkDataKey = xh.uplinkDataKey;
+        if (typeof xh.uplinkChunkSize === "number" && xh.uplinkChunkSize >= 0) {
+          base.xhttpUplinkChunkSize = Math.round(xh.uplinkChunkSize);
+        }
       }
     }
     if (base.security === "tls") {
@@ -749,6 +811,31 @@ export function buildStreamSettingsFromForm(
       security: state.quicSecurity,
       key: state.quicKey.trim(),
       header: { type: state.quicHeaderType },
+    };
+  } else if (state.network === "xhttp") {
+    out.xhttpSettings = {
+      path: state.xhttpPath.trim() || "/",
+      host: state.xhttpHost.trim(),
+      headers: xhttpHeadersToV2Map(state.xhttpHeaders),
+      scMaxBufferedPosts: Math.max(0, Math.round(Number(state.xhttpScMaxBufferedPosts)) || 30),
+      scMaxEachPostBytes: state.xhttpScMaxEachPostBytes.trim() || "1000000",
+      scStreamUpServerSecs: state.xhttpScStreamUpServerSecs.trim() || "20-80",
+      noSSEHeader: state.xhttpNoSseHeader,
+      xPaddingBytes: state.xhttpPaddingBytes.trim() || "100-1000",
+      mode: state.xhttpMode.trim() || "auto",
+      xPaddingObfsMode: state.xhttpPaddingObfs,
+      xPaddingKey: state.xhttpPaddingKey.trim(),
+      xPaddingHeader: state.xhttpPaddingHeader.trim(),
+      xPaddingPlacement: state.xhttpPaddingPlacement.trim(),
+      xPaddingMethod: state.xhttpPaddingMethod.trim(),
+      uplinkHTTPMethod: state.xhttpUplinkHttpMethod.trim(),
+      sessionPlacement: state.xhttpSessionPlacement.trim(),
+      sessionKey: state.xhttpSessionKey.trim(),
+      seqPlacement: state.xhttpSeqPlacement.trim(),
+      seqKey: state.xhttpSeqKey.trim(),
+      uplinkDataPlacement: state.xhttpUplinkDataPlacement.trim(),
+      uplinkDataKey: state.xhttpUplinkDataKey.trim(),
+      uplinkChunkSize: Math.max(0, Math.round(Number(state.xhttpUplinkChunkSize)) || 0),
     };
   }
 

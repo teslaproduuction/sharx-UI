@@ -60,11 +60,11 @@ var inboundMutexLock sync.Mutex
 func getInboundMutex(inboundId int) *sync.Mutex {
 	inboundMutexLock.Lock()
 	defer inboundMutexLock.Unlock()
-	
+
 	if mutex, exists := inboundUpdateMutexes[inboundId]; exists {
 		return mutex
 	}
-	
+
 	mutex := &sync.Mutex{}
 	inboundUpdateMutexes[inboundId] = mutex
 	return mutex
@@ -78,14 +78,14 @@ func (s *InboundService) updateInboundWithRetry(inbound *model.Inbound) (*model.
 	mutex := getInboundMutex(inbound.Id)
 	mutex.Lock()
 	defer mutex.Unlock()
-	
+
 	maxRetries := 3
 	baseDelay := 50 * time.Millisecond
-	
+
 	var result *model.Inbound
 	var needRestart bool
 	var err error
-	
+
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		if attempt > 0 {
 			// Exponential backoff: 50ms, 100ms, 200ms
@@ -93,12 +93,12 @@ func (s *InboundService) updateInboundWithRetry(inbound *model.Inbound) (*model.
 			logger.Debugf("Retrying inbound %d update (attempt %d/%d) after %v", inbound.Id, attempt+1, maxRetries, delay)
 			time.Sleep(delay)
 		}
-		
+
 		result, needRestart, err = s.UpdateInbound(inbound)
 		if err == nil {
 			return result, needRestart, nil
 		}
-		
+
 		// Check if error is "database is locked"
 		errStr := err.Error()
 		if strings.Contains(errStr, "database is locked") || strings.Contains(errStr, "locked") {
@@ -110,11 +110,11 @@ func (s *InboundService) updateInboundWithRetry(inbound *model.Inbound) (*model.
 			logger.Warningf("Failed to update inbound %d after %d retries: %v", inbound.Id, maxRetries, err)
 			return result, needRestart, err
 		}
-		
+
 		// For other errors, don't retry
 		return result, needRestart, err
 	}
-	
+
 	return result, needRestart, err
 }
 
@@ -128,7 +128,7 @@ func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
-	
+
 	// Enrich with node assignments
 	nodeService := NodeService{}
 	for _, inbound := range result {
@@ -146,7 +146,7 @@ func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 			// Ensure empty array if no nodes assigned
 			inbound.NodeIds = []int{}
 		}
-		
+
 		// Enrich client stats with UUID/SubId from inbound settings
 		clients, _ := s.GetClients(inbound)
 		if len(clients) == 0 || len(inbound.ClientStats) == 0 {
@@ -165,7 +165,7 @@ func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 			}
 		}
 	}
-	
+
 	return result, nil
 }
 
@@ -178,7 +178,7 @@ func (s *InboundService) GetAllInbounds() ([]*model.Inbound, error) {
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return nil, err
 	}
-	
+
 	// Enrich with node assignments
 	nodeService := NodeService{}
 	for _, inbound := range inbounds {
@@ -196,7 +196,7 @@ func (s *InboundService) GetAllInbounds() ([]*model.Inbound, error) {
 			// Ensure empty array if no nodes assigned
 			inbound.NodeIds = []int{}
 		}
-		
+
 		// Enrich client stats with UUID/SubId from inbound settings
 		clients, _ := s.GetClients(inbound)
 		if len(clients) == 0 || len(inbound.ClientStats) == 0 {
@@ -225,6 +225,11 @@ func (s *InboundService) GetInboundsByTrafficReset(period string) ([]*model.Inbo
 		return nil, err
 	}
 	return inbounds, nil
+}
+
+// GenerateInboundTag returns the Xray tag for an inbound (same rules as at runtime).
+func (s *InboundService) GenerateInboundTag(inbound *model.Inbound, multiMode bool) string {
+	return s.generateInboundTag(inbound, multiMode)
 }
 
 // generateInboundTag generates a unique tag for an inbound.
@@ -284,13 +289,13 @@ func (s *InboundService) checkPortExist(listen string, port int, ignoreId int) (
 // Always uses ClientEntity (new architecture).
 func (s *InboundService) GetClients(inbound *model.Inbound) ([]model.Client, error) {
 	clientService := ClientService{}
-	
+
 	// Get clients from ClientEntity (new architecture)
 	clientEntities, err := clientService.GetClientsForInbound(inbound.Id)
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Convert ClientEntity to Client
 	clients := make([]model.Client, len(clientEntities))
 	for i, entity := range clientEntities {
@@ -311,13 +316,29 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 	if settings == nil {
 		settings = make(map[string]any)
 	}
-	
-	// WireGuard: panel clients are not mapped into `settings` (Xray uses `peers`, keys, etc.).
+
+	// WireGuard: merge assigned clients into `peers` (keys, PSK, keepAlive, allowedIPs) while preserving manual peers and server block.
 	if proto == model.WireGuard {
-		if inbound.Settings != "" {
-			return inbound.Settings, nil
+		base := strings.TrimSpace(inbound.Settings)
+		if base == "" {
+			var err error
+			base, err = BuildWireGuardInboundSettingsJSON(nil)
+			if err != nil {
+				return "", err
+			}
 		}
-		return "{}", nil
+		var wgSettings map[string]any
+		if err := json.Unmarshal([]byte(base), &wgSettings); err != nil {
+			return "", err
+		}
+		if err := mergeWireGuardSettingsWithClients(wgSettings, clientEntities); err != nil {
+			return "", err
+		}
+		settingsJSON, err := json.MarshalIndent(wgSettings, "", "  ")
+		if err != nil {
+			return "", err
+		}
+		return applyWireGuardSettingsAddressForXray(string(settingsJSON)), nil
 	}
 
 	// Mixed inbound (HTTP + SOCKS on one port): Xray uses `accounts`, not `clients`.
@@ -364,10 +385,10 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		if !entity.Enable || entity.Status == "expired_traffic" || entity.Status == "expired_time" {
 			continue
 		}
-		
+
 		client := make(map[string]any)
 		client["email"] = entity.Email
-		
+
 		switch proto {
 		case model.Trojan:
 			client["password"] = entity.Password
@@ -390,29 +411,29 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 				client["flow"] = entity.Flow
 			}
 		}
-		
+
 		xrayClients = append(xrayClients, client)
 	}
-	
+
 	settings["clients"] = xrayClients
 	settingsJSON, err := json.MarshalIndent(settings, "", "  ")
 	if err != nil {
 		return "", err
 	}
-	
+
 	return string(settingsJSON), nil
 }
 
 func (s *InboundService) getAllEmails() ([]string, error) {
 	db := database.GetDB()
 	var emails []string
-	
+
 	// Get emails from ClientEntity (new architecture only)
 	err := db.Model(&model.ClientEntity{}).Pluck("email", &emails).Error
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return emails, nil
 }
 
@@ -548,15 +569,15 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	}
 
 	db := database.GetDB()
-	
+
 	err = db.Transaction(func(tx *gorm.DB) error {
 		return tx.Save(inbound).Error
 	})
-	
+
 	if err != nil {
 		return inbound, false, err
 	}
-	
+
 	// In multi-node mode, update tag with ID after creation to ensure uniqueness
 	if multiMode && inbound.Id > 0 {
 		newTag := s.generateInboundTag(inbound, multiMode)
@@ -569,12 +590,12 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 			}
 		}
 	}
-	
+
 	// Invalidate cache for this user's inbounds
 	if inbound.UserId > 0 {
 		cache.InvalidateInbounds(inbound.UserId)
 	}
-	
+
 	// Note: ClientStats are no longer managed here - clients are managed through ClientEntity
 	// Traffic is stored directly in ClientEntity table
 
@@ -621,7 +642,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: START, inboundId=%d", id)
 	// #endregion
-	
+
 	db := database.GetDB()
 	if db == nil {
 		// #region agent log
@@ -637,11 +658,11 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] DelInbound: Xray API delete, inboundId=%d, tag=%s", id, tag)
 		// #endregion
-		
+
 		// Check multi-node mode
 		settingService := SettingService{}
 		multiMode, _ := settingService.GetMultiNodeMode()
-		
+
 		if multiMode {
 			// Multi-node mode: remove from all nodes assigned to this inbound
 			nodeService := NodeService{}
@@ -699,7 +720,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		return false, err
 	}
 	userId := inbound.UserId
-	
+
 	// Delete client traffics of inbounds
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: deleting client_traffics, inboundId=%d", id)
@@ -711,7 +732,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		// #endregion
 		return false, err
 	}
-	
+
 	// Delete node mappings for this inbound (cascade delete)
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: deleting inbound_node_mappings, inboundId=%d", id)
@@ -723,7 +744,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		// #endregion
 		return false, err
 	}
-	
+
 	// Delete client_inbound_mappings for this inbound
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: deleting client_inbound_mappings, inboundId=%d", id)
@@ -735,7 +756,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		// #endregion
 		return false, err
 	}
-	
+
 	// Delete host_inbound_mappings for this inbound
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: deleting host_inbound_mappings, inboundId=%d", id)
@@ -773,13 +794,13 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: before Delete, inboundId=%d, userId=%d", id, userId)
 	// #endregion
-	
+
 	err = db.Delete(model.Inbound{}, id).Error
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DelInbound: after Delete, inboundId=%d, error=%v, rowsAffected=%d", id, err, db.RowsAffected)
 	// #endregion
-	
+
 	if err == nil && userId > 0 {
 		// Invalidate cache for this user's inbounds
 		// #region agent log
@@ -789,7 +810,7 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] DelInbound: after cache invalidation, userId=%d, error=%v", userId, cacheErr)
 		// #endregion
-		
+
 		// Send notification about inbound deletion (only if deletion was successful)
 		if err == nil {
 			tgbotService := Tgbot{}
@@ -813,7 +834,7 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 		return nil, fmt.Errorf("database connection is nil")
 	}
 	inbound := &model.Inbound{}
-	err := db.Model(model.Inbound{}).First(inbound, id).Error
+	err := db.Model(model.Inbound{}).Preload("ClientStats").First(inbound, id).Error
 	if err != nil {
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] GetInbound: ERROR, inboundId=%d, error=%v, errorType=%T", id, err, err)
@@ -823,7 +844,7 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] GetInbound: SUCCESS, inboundId=%d, userId=%d", id, inbound.UserId)
 	// #endregion
-	
+
 	// Enrich with node assignments
 	nodeService := NodeService{}
 	nodes, err := nodeService.GetNodesForInbound(inbound.Id)
@@ -839,7 +860,7 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 		// Ensure empty array if no nodes assigned
 		inbound.NodeIds = []int{}
 	}
-	
+
 	return inbound, nil
 }
 
@@ -879,12 +900,21 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		return inbound, false, err
 	}
 
+	// WireGuard: panel no longer posts peers; keep existing DB peers (from client assignment).
+	if model.NormalizeProtocol(inbound.Protocol) == model.WireGuard {
+		merged, err2 := PreserveWireGuardPeersOnInboundUpdate(inbound.Settings, oldInbound.Settings)
+		if err2 != nil {
+			return inbound, false, err2
+		}
+		inbound.Settings = merged
+	}
+
 	// Save original values for change detection (before modifying oldInbound)
 	originalOldInbound := *oldInbound
 	tag := oldInbound.Tag
 
 	db := database.GetDB()
-	
+
 	// updateClientTraffics is no longer needed - clients are managed through ClientEntity
 	// Settings JSON is generated from ClientEntity via BuildSettingsFromClientEntities
 	// No need to sync client_traffics as traffic is stored directly in ClientEntity
@@ -1057,7 +1087,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] UpdateInbound: before transaction, inboundId=%d, userId=%d", inbound.Id, oldInbound.UserId)
 	// #endregion
-	
+
 	err = db.Transaction(func(tx *gorm.DB) error {
 		saveErr := tx.Save(oldInbound).Error
 		// #region agent log
@@ -1065,11 +1095,11 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		// #endregion
 		return saveErr
 	})
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] UpdateInbound: after transaction, inboundId=%d, error=%v", inbound.Id, err)
 	// #endregion
-	
+
 	if err == nil {
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] UpdateInbound service: DB transaction success, inboundId=%d, needRestart=%v", inbound.Id, needRestart)
@@ -1103,7 +1133,7 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 			originalOldInbound.Sniffing != inbound.Sniffing ||
 			originalOldInbound.ExpiryTime != inbound.ExpiryTime ||
 			originalOldInbound.TrafficReset != inbound.TrafficReset
-		
+
 		if hasRealChanges {
 			tgbotService := Tgbot{}
 			if tgbotService.IsRunning() {
@@ -1371,7 +1401,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	if err != nil {
 		return err, false
 	}
-	
+
 	// Note: We no longer update inbound traffic directly from Xray API
 	// Instead, inbound traffic is synchronized as sum of all its clients' traffic in AddClientTraffic
 	// This ensures consistency between inbound and client traffic
@@ -1386,14 +1416,14 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	// NOTE: disableInvalidClients is no longer needed - client disabling is handled by ClientService.AddClientTraffic
 	// which updates ClientEntity.Enable and client_traffics.enable, and then DisableClientsByEmail handles Xray API removal
 	// and Settings update. This ensures proper separation: clients are managed individually, not as part of inbound.
-	
+
 	// NOTE: disableInvalidInbounds is disabled - inbound should NOT be blocked by traffic limits.
 	// Inbound is only a container for clients and should show statistics (sum of all clients' traffic).
 	// Traffic limits are managed at the client level only.
 	// If inbound needs to be disabled, it should be done manually via Enable flag, not automatically by traffic.
 	needRestart1 := false
 	needRestart2 := false
-	
+
 	// Disable clients in new architecture (ClientEntity) after transaction commits
 	// This is done outside the transaction to avoid nested transactions
 	// The client_traffics.enable has already been updated in addClientTraffic
@@ -1424,7 +1454,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	} else if len(clientsToDisable) > 0 {
 		logger.Debugf("AddTraffic: %d clients to disable but transaction failed, skipping", len(clientsToDisable))
 	}
-	
+
 	return nil, (needRestart0 || needRestart1 || needRestart2)
 }
 
@@ -2492,7 +2522,7 @@ func (s *InboundService) SearchInbounds(query string) ([]*model.Inbound, error) 
 
 func (s *InboundService) MigrationRequirements() {
 	db := database.GetDB()
-	
+
 	err := db.Transaction(func(tx *gorm.DB) error {
 		// Calculate and backfill all_time from up+down for inbounds and clients
 		if err := tx.Exec(`
@@ -2502,7 +2532,7 @@ func (s *InboundService) MigrationRequirements() {
 		`).Error; err != nil {
 			return err
 		}
-		
+
 		if err := tx.Exec(`
 			UPDATE client_traffics
 			SET all_time = COALESCE(up, 0) + COALESCE(down, 0)
@@ -2516,58 +2546,58 @@ func (s *InboundService) MigrationRequirements() {
 		if err := tx.Model(model.Inbound{}).Where("protocol IN (?)", []string{"vmess", "vless", "trojan"}).Find(&inbounds).Error; err != nil && err != gorm.ErrRecordNotFound {
 			return err
 		}
-	for inbound_index := range inbounds {
-		settings := map[string]any{}
-		json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
-		clients, ok := settings["clients"].([]any)
-		if ok {
-			// Fix Client configuration problems
-			var newClients []any
-			for client_index := range clients {
-				c := clients[client_index].(map[string]any)
+		for inbound_index := range inbounds {
+			settings := map[string]any{}
+			json.Unmarshal([]byte(inbounds[inbound_index].Settings), &settings)
+			clients, ok := settings["clients"].([]any)
+			if ok {
+				// Fix Client configuration problems
+				var newClients []any
+				for client_index := range clients {
+					c := clients[client_index].(map[string]any)
 
-				// Add email='' if it is not exists
-				if _, ok := c["email"]; !ok {
-					c["email"] = ""
-				}
+					// Add email='' if it is not exists
+					if _, ok := c["email"]; !ok {
+						c["email"] = ""
+					}
 
-				// Convert string tgId to int64
-				if _, ok := c["tgId"]; ok {
-					var tgId any = c["tgId"]
-					if tgIdStr, ok2 := tgId.(string); ok2 {
-						tgIdInt64, err := strconv.ParseInt(strings.ReplaceAll(tgIdStr, " ", ""), 10, 64)
-						if err == nil {
-							c["tgId"] = tgIdInt64
+					// Convert string tgId to int64
+					if _, ok := c["tgId"]; ok {
+						var tgId any = c["tgId"]
+						if tgIdStr, ok2 := tgId.(string); ok2 {
+							tgIdInt64, err := strconv.ParseInt(strings.ReplaceAll(tgIdStr, " ", ""), 10, 64)
+							if err == nil {
+								c["tgId"] = tgIdInt64
+							}
 						}
 					}
-				}
 
-				// Remove "flow": "xtls-rprx-direct"
-				if _, ok := c["flow"]; ok {
-					if c["flow"] == "xtls-rprx-direct" {
-						c["flow"] = ""
+					// Remove "flow": "xtls-rprx-direct"
+					if _, ok := c["flow"]; ok {
+						if c["flow"] == "xtls-rprx-direct" {
+							c["flow"] = ""
+						}
 					}
+					// Backfill created_at and updated_at
+					if _, ok := c["created_at"]; !ok {
+						c["created_at"] = time.Now().Unix() * 1000
+					}
+					c["updated_at"] = time.Now().Unix() * 1000
+					newClients = append(newClients, any(c))
 				}
-				// Backfill created_at and updated_at
-				if _, ok := c["created_at"]; !ok {
-					c["created_at"] = time.Now().Unix() * 1000
+				settings["clients"] = newClients
+				modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
+				if err != nil {
+					return err
 				}
-				c["updated_at"] = time.Now().Unix() * 1000
-				newClients = append(newClients, any(c))
-			}
-			settings["clients"] = newClients
-			modifiedSettings, err := json.MarshalIndent(settings, "", "  ")
-			if err != nil {
-				return err
+
+				inbounds[inbound_index].Settings = string(modifiedSettings)
 			}
 
-			inbounds[inbound_index].Settings = string(modifiedSettings)
+			// Note: Client traffic is now stored in ClientEntity table
+			// No need to create client_traffics records - they are deprecated
 		}
 
-		// Note: Client traffic is now stored in ClientEntity table
-		// No need to create client_traffics records - they are deprecated
-		}
-		
 		if err := tx.Save(inbounds).Error; err != nil {
 			return err
 		}
@@ -2627,10 +2657,10 @@ func (s *InboundService) MigrationRequirements() {
 		// Note: PostgreSQL doesn't have INSTR function, use POSITION instead
 		// But this migration might be for SQLite compatibility, so we'll skip it for PostgreSQL
 		// If needed, use: WHERE POSITION('0.0.0.0:' IN tag) > 0
-		
+
 		return nil
 	})
-	
+
 	if err != nil {
 		logger.Warning("MigrationRequirements error:", err)
 	}
