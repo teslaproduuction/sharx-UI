@@ -349,6 +349,7 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 		return nil, err
 	}
 	xray.EnsureAPIServicesRoutingService(xrayConfig)
+	xray.EnsureAPIRoutingOutbound(xrayConfig)
 	xray.EnsurePolicyStatsUserOnline(xrayConfig)
 
 	s.inboundService.AddTraffic(nil, nil)
@@ -618,6 +619,7 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 
 	nodeConfig := *configToUse
 	xray.EnsureAPIServicesRoutingService(&nodeConfig)
+	xray.EnsureAPIRoutingOutbound(&nodeConfig)
 	xray.EnsurePolicyStatsUserOnline(&nodeConfig)
 	apiInbound := xray.InboundConfig{}
 	hasAPIInbound := false
