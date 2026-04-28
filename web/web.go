@@ -11,7 +11,6 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -35,9 +34,6 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-//go:embed assets
-var assetsFS embed.FS
-
 //go:embed translation/*
 var i18nFS embed.FS
 
@@ -45,48 +41,6 @@ var i18nFS embed.FS
 var docsFS embed.FS
 
 var startTime = time.Now()
-
-type wrapAssetsFS struct {
-	embed.FS
-}
-
-func (f *wrapAssetsFS) Open(name string) (fs.File, error) {
-	file, err := f.FS.Open("assets/" + name)
-	if err != nil {
-		return nil, err
-	}
-	return &wrapAssetsFile{
-		File: file,
-	}, nil
-}
-
-type wrapAssetsFile struct {
-	fs.File
-}
-
-func (f *wrapAssetsFile) Stat() (fs.FileInfo, error) {
-	info, err := f.File.Stat()
-	if err != nil {
-		return nil, err
-	}
-	return &wrapAssetsFileInfo{
-		FileInfo: info,
-	}, nil
-}
-
-type wrapAssetsFileInfo struct {
-	fs.FileInfo
-}
-
-func (f *wrapAssetsFileInfo) ModTime() time.Time {
-	return startTime
-}
-
-
-// EmbeddedAssets returns the embedded assets filesystem for reuse by other servers.
-func EmbeddedAssets() embed.FS {
-	return assetsFS
-}
 
 // EmbeddedDocs returns the embedded docs filesystem.
 func EmbeddedDocs() embed.FS {
@@ -160,7 +114,6 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		return nil, err
 	}
 	engine.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{basePath + "panel/api/"})))
-	assetsBasePath := basePath + "assets/"
 
 	// Use Redis store for sessions if available, otherwise fallback to cookie store
 	var store sessions.Store
@@ -190,9 +143,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	})
 	engine.Use(func(c *gin.Context) {
 		uri := c.Request.RequestURI
-		if strings.HasPrefix(uri, assetsBasePath) {
-			c.Header("Cache-Control", "max-age=31536000, public, immutable")
-		} else if strings.HasPrefix(uri, basePath+"_next/") || strings.HasPrefix(uri, basePath+"locales/") {
+		if strings.HasPrefix(uri, basePath+"_next/") || strings.HasPrefix(uri, basePath+"locales/") {
 			c.Header("Cache-Control", "max-age=31536000, public, immutable")
 		} else if strings.HasPrefix(uri, basePath+"custom.min.css") {
 			c.Header("Cache-Control", "max-age=31536000, public, immutable")
@@ -220,12 +171,6 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 		}
 		engine.GET("/", toBase)
 		engine.HEAD("/", toBase)
-	}
-
-	if config.IsDebug() {
-		engine.StaticFS(basePath+"assets", http.FS(os.DirFS("web/assets")))
-	} else {
-		engine.StaticFS(basePath+"assets", http.FS(&wrapAssetsFS{FS: assetsFS}))
 	}
 
 	engine.Use(middleware.RedirectMiddleware(basePath))
