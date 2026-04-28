@@ -76,6 +76,7 @@ export type AllSetting = {
   ldapDefaultExpiryDays: number;
   ldapDefaultLimitIP: number;
   multiNodeMode: boolean;
+  enableIPv6: boolean;
   /** Seconds between worker stats polls (multi-node). */
   nodeStatsCollectionIntervalSec: number;
   /** Seconds between GET /health when node is online. */
@@ -189,6 +190,7 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     ldapDefaultExpiryDays: toInt(raw.ldapDefaultExpiryDays, 0),
     ldapDefaultLimitIP: toInt(raw.ldapDefaultLimitIP, 0),
     multiNodeMode: toBool(raw.multiNodeMode),
+    enableIPv6: toBool(raw.enableIPv6),
     nodeStatsCollectionIntervalSec: toInt(raw.nodeStatsCollectionIntervalSec, 3),
     nodeHealthCheckIntervalSec: toInt(raw.nodeHealthCheckIntervalSec, 15),
     nodeHealthCheckDegradedIntervalSec: toInt(raw.nodeHealthCheckDegradedIntervalSec, 5),

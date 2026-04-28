@@ -108,6 +108,8 @@ type AllSetting struct {
 	
 	// Multi-node mode setting
 	MultiNodeMode bool `json:"multiNodeMode" form:"multiNodeMode"` // Enable multi-node architecture mode
+	// Dashboard public IPv6 detection
+	EnableIPv6 bool `json:"enableIPv6" form:"enableIPv6"` // Enable fetching/storing public IPv6 in dashboard status
 	// Multi-node worker polling (seconds). Adaptive health uses DegradedIntervalSec when status != online.
 	NodeStatsCollectionIntervalSec       int `json:"nodeStatsCollectionIntervalSec" form:"nodeStatsCollectionIntervalSec"`
 	NodeHealthCheckIntervalSec          int `json:"nodeHealthCheckIntervalSec" form:"nodeHealthCheckIntervalSec"`                   // When node status is online

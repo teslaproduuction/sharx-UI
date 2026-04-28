@@ -348,6 +348,7 @@ export function DashboardPage() {
   const [dontSec, setDontSec] = useState(false);
   const [showIp, setShowIp] = useState(false);
   const [multi, setMulti] = useState(false);
+  const [ipv6Enabled, setIpv6Enabled] = useState(false);
   const [verOpen, setVerOpen] = useState(false);
   const [verList, setVerList] = useState<string[]>([]);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
@@ -453,7 +454,9 @@ export function DashboardPage() {
         await postJson(panel("setting/defaultSettings"));
         const s = await postJson<Record<string, unknown>>(panel("setting/all"));
         if (s.success && s.obj) {
-          setMulti(Boolean((s.obj as { multiNodeMode?: boolean }).multiNodeMode));
+          const settings = s.obj as { multiNodeMode?: boolean; enableIPv6?: boolean };
+          setMulti(Boolean(settings.multiNodeMode));
+          setIpv6Enabled(Boolean(settings.enableIPv6));
         }
       } catch {
         /* ignore */
@@ -644,6 +647,7 @@ export function DashboardPage() {
   const showNetwork = enabledWidgets.includes("network");
   const showPanelRuntime = enabledWidgets.includes("panel_runtime");
   const showUsersOnline = enabledWidgets.includes("users_online");
+  const showUserAgent = enabledWidgets.includes("user_agent");
   const cpuGhz = st.cpuSpeedMhz
     ? st.cpuSpeedMhz >= 1000
       ? `${toFixed(st.cpuSpeedMhz / 1000, 2)} GHz`
@@ -1080,6 +1084,7 @@ export function DashboardPage() {
         </Reveal>
         )}
 
+        {showUserAgent && (
         <Reveal className="mt-4">
           <Surface>
             <div className="mb-2 flex items-center gap-2">
@@ -1133,6 +1138,7 @@ export function DashboardPage() {
             )}
           </Surface>
         </Reveal>
+        )}
 
         {showDatabase && (
         <Reveal className="mt-4">
@@ -1327,10 +1333,12 @@ export function DashboardPage() {
                   title={t("pages.index.statIPv4")}
                   value={showIp ? st.publicIP?.ipv4 : "****"}
                 />
-                <StatBlock
-                  title={t("pages.index.statIPv6")}
-                  value={showIp ? st.publicIP?.ipv6 : "****"}
-                />
+                {ipv6Enabled ? (
+                  <StatBlock
+                    title={t("pages.index.statIPv6")}
+                    value={showIp ? st.publicIP?.ipv6 : "****"}
+                  />
+                ) : null}
               </div>
             </div>
           </Surface>

@@ -31,7 +31,7 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
             className="block text-xs font-medium text-[var(--fg-subtle)]"
             htmlFor="remark-model-sep"
           >
-            {t("pages.settings.remarkModelSep")}
+            {t("pages.settings.remarkModelSep", { defaultValue: "Разделитель (один символ)" })}
           </label>
           <Input
             id="remark-model-sep"
@@ -48,7 +48,9 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           <div className="text-xs font-medium text-[var(--fg-subtle)]">
-            {t("pages.settings.remarkModelOrder")}
+            {t("pages.settings.remarkModelOrder", {
+              defaultValue: "Порядок полей (буквы i e o n p r)",
+            })}
           </div>
           <RemarkModelOrderBuilder
             sep={ui.sep}
@@ -58,8 +60,24 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
         </div>
       </div>
       <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
-        {t("pages.settings.remarkModelOrderHint")}
+        {t("pages.settings.remarkModelOrderHint", {
+          defaultValue:
+            "Меняйте порядок стрелками; добавляйте сегменты кнопками +i … +r. По умолчанию -ieo: подключение, email, extra — склеены разделителем. Неизвестные буквы отбрасываются при сохранении.",
+        })}
       </p>
+      <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5 text-xs text-[var(--fg-muted)]">
+        <span className="font-semibold text-[var(--fg)]">
+          {t("pages.settings.remarkModelLegendFieldLabel", {
+            defaultValue: "Легенда:",
+          })}
+        </span>{" "}
+        i = {t("pages.settings.remarkModelField.i")}, e ={" "}
+        {t("pages.settings.remarkModelField.e")}, o ={" "}
+        {t("pages.settings.remarkModelField.o")}, n ={" "}
+        {t("pages.settings.remarkModelField.n")}, p ={" "}
+        {t("pages.settings.remarkModelField.p")}, r ={" "}
+        {t("pages.settings.remarkModelField.r")}
+      </div>
       <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5">
         <span className="text-xs font-medium text-[var(--fg-muted)]">
           {t("pages.settings.sampleRemark")}:

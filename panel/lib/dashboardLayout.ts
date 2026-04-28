@@ -9,6 +9,7 @@ export const DASHBOARD_WIDGET_ORDER = [
   "quick_actions",
   "uptime",
   "users_online",
+  "user_agent",
   "database",
   "network",
   "panel_runtime",
@@ -17,6 +18,7 @@ export const DASHBOARD_WIDGET_ORDER = [
 export type DashboardWidgetId = (typeof DASHBOARD_WIDGET_ORDER)[number];
 
 const STORAGE_KEY = "sharx.panel.dashboard.widgets";
+const USER_AGENT_MIGRATION_KEY = "sharx.panel.dashboard.widgets.user_agent.migrated";
 
 export const DASHBOARD_WIDGET_I18N: Record<DashboardWidgetId, string> = {
   resources: "pages.index.dashWidgetResources",
@@ -24,6 +26,7 @@ export const DASHBOARD_WIDGET_I18N: Record<DashboardWidgetId, string> = {
   quick_actions: "pages.index.dashWidgetQuickActions",
   uptime: "pages.index.dashWidgetUptime",
   users_online: "pages.index.dashWidgetUsersOnline",
+  user_agent: "pages.clients.hwidUserAgentShareTitle",
   database: "pages.index.dashWidgetDatabase",
   network: "pages.index.dashWidgetNetwork",
   panel_runtime: "pages.index.dashWidgetPanelRuntime",
@@ -49,6 +52,13 @@ export function loadDashboardWidgets(): DashboardWidgetId[] {
       parsed.filter((x): x is string => typeof x === "string" && isDashboardWidgetId(x))
     );
     if (asSet.size === 0) return [...DASHBOARD_WIDGET_ORDER];
+    // One-time migration: after introducing user_agent widget, keep it enabled by default
+    // for users with previously saved layout, while still allowing manual disabling later.
+    const uaMigrated = localStorage.getItem(USER_AGENT_MIGRATION_KEY) === "1";
+    if (!uaMigrated) {
+      asSet.add("user_agent");
+      localStorage.setItem(USER_AGENT_MIGRATION_KEY, "1");
+    }
     return DASHBOARD_WIDGET_ORDER.filter((id) => asSet.has(id));
   } catch {
     return [...DASHBOARD_WIDGET_ORDER];
