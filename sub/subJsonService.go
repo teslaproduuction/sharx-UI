@@ -416,7 +416,9 @@ func (s *SubJsonService) genVless(inbound *model.Inbound, streamSettings json_ut
 	settings["address"] = inbound.Listen
 	settings["port"] = inbound.Port
 	settings["id"] = client.ID
-	if flow := service.VLESSFlowFromInboundSettings(inbound.Settings); flow != "" {
+	stream := s.streamData(inbound.StreamSettings)
+	streamNetwork, _ := stream["network"].(string)
+	if flow := service.VLESSFlowFromInboundSettings(inbound.Settings); (streamNetwork == "tcp" || streamNetwork == "xhttp") && flow != "" {
 		settings["flow"] = flow
 	}
 
