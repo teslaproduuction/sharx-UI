@@ -7,7 +7,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 	"os/signal"
@@ -32,6 +31,7 @@ func main() {
 	flag.Parse()
 
 	logger.InitLogger(logging.INFO)
+	logger.SetSource("node")
 
 	configDirs := []string{"bin", "config", ".", "/app/bin", "/app/config"}
 	var configDir string
@@ -46,15 +46,18 @@ func main() {
 	}
 
 	if err := nodeConfig.InitConfig(configDir); err != nil {
-		log.Fatalf("Failed to initialize node config: %v", err)
+		logger.Errorf("Failed to initialize node config: %v", err)
+		os.Exit(1)
 	}
 
 	bundle, err := auth.LoadBundleFromEnv()
 	if err != nil {
-		log.Fatalf("SECRET_KEY: %v", err)
+		logger.Errorf("SECRET_KEY: %v", err)
+		os.Exit(1)
 	}
 	if bundle == nil {
-		log.Fatalf("SECRET_KEY is required (set env SECRET_KEY to the base64 JSON bundle from the panel)")
+		logger.Error("SECRET_KEY is required (set env SECRET_KEY to the base64 JSON bundle from the panel)")
+		os.Exit(1)
 	}
 	h := pairing_outbound.OutboundHMACKey(bundle.Payload.CACertPem, bundle.Payload.JWTPublicKey)
 	nodeLogs.SetOutboundHMACKey(h)
@@ -85,9 +88,9 @@ func main() {
 	}
 	server := api.NewServer(port, xrayManager)
 	server.SetPairing(bundle)
-	log.Printf("SECRET_KEY: TLS + mTLS + JWT; log push uses HMAC (optional PANEL_URL in config or env)")
+	logger.Info("SECRET_KEY: TLS + mTLS + JWT; log push uses HMAC (optional PANEL_URL in config or env)")
 
-	log.Printf("Starting SharX Node Service on port %d", port)
+	logger.Infof("Starting SharX Node Service on port %d", port)
 	// Must run before Start(): Start blocks on Serve(), so code after it never runs.
 	go geopush.Run(panelURL, nodeAddress, h)
 
@@ -102,15 +105,16 @@ func main() {
 	select {
 	case err := <-errCh:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("Failed to start server: %v", err)
+			logger.Errorf("Failed to start server: %v", err)
+			os.Exit(1)
 		}
 	case <-sigCh:
-		log.Println("Shutting down...")
+		logger.Info("Shutting down...")
 		xrayManager.Stop()
 		if err := server.Stop(); err != nil {
-			log.Printf("server stop: %v", err)
+			logger.Warningf("server stop: %v", err)
 		}
 	}
 
-	log.Println("Shutdown complete")
+	logger.Info("Shutdown complete")
 }

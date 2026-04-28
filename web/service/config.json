@@ -1,9 +1,9 @@
 {
   "log": {
-    "access": "none",
+    "access": "/app/logs/xray-access.log",
     "dnsLog": false,
-    "error": "",
-    "loglevel": "warning",
+    "error": "/app/logs/xray-error.log",
+    "loglevel": "debug",
     "maskAddress": ""
   },
   "api": {

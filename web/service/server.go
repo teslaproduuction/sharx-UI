@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
 	"github.com/konstpic/sharx-code/v2/util/sys"
+	"github.com/konstpic/sharx-code/v2/web/websocket"
 	"github.com/konstpic/sharx-code/v2/xray"
 
 	"github.com/google/uuid"
@@ -114,7 +116,7 @@ type Status struct {
 	} `json:"nodesXray"`
 	// UsersOnline is the number of distinct client emails currently considered online (local Xray or worker nodes).
 	UsersOnline int `json:"usersOnline"`
-	Database struct {
+	Database    struct {
 		Size         uint64 `json:"size"`         // Database size in bytes
 		Tables       int    `json:"tables"`       // Number of tables
 		TotalRows    uint64 `json:"totalRows"`    // Total number of rows across all tables
@@ -146,6 +148,32 @@ type ServerService struct {
 	cpuHistory         []CPUSample
 	cachedCpuSpeedMhz  float64
 	lastCpuInfoAttempt time.Time
+	geofileTaskMu      sync.Mutex
+	geofileTasks       map[string]*GeofileDownloadTask
+}
+
+const (
+	maxGeoFileUploadSize = 64 * 1024 * 1024
+)
+
+type GeofileApplyResult struct {
+	FileName    string   `json:"fileName"`
+	LocalOK     bool     `json:"localOk"`
+	NodeSuccess []string `json:"nodeSuccess"`
+	NodeErrors  []string `json:"nodeErrors"`
+}
+
+type GeofileDownloadTask struct {
+	ID          string              `json:"id"`
+	FileName    string              `json:"fileName"`
+	SourceURL   string              `json:"sourceUrl"`
+	Status      string              `json:"status"`
+	Downloaded  int64               `json:"downloaded"`
+	Total       int64               `json:"total"`
+	Error       string              `json:"error,omitempty"`
+	Result      *GeofileApplyResult `json:"result,omitempty"`
+	CreatedAtMs int64               `json:"createdAtMs"`
+	UpdatedAtMs int64               `json:"updatedAtMs"`
 }
 
 // AggregateCpuHistory returns up to maxPoints averaged buckets of size bucketSeconds over recent data.
@@ -843,54 +871,100 @@ func (s *ServerService) UpdateXray(version string) error {
 	return nil
 }
 
-func (s *ServerService) GetLogs(count string, level string, syslog string) []string {
+func (s *ServerService) GetLogs(count string, level string) []string {
 	c, _ := strconv.Atoi(count)
-	var lines []string
-
-	if syslog == "true" {
-		// Check if running on Windows - journalctl is not available
-		if runtime.GOOS == "windows" {
-			return []string{"Syslog is not supported on Windows. Please use application logs instead by unchecking the 'Syslog' option."}
-		}
-
-		// Validate and sanitize count parameter
-		countInt, err := strconv.Atoi(count)
-		if err != nil || countInt < 1 || countInt > 10000 {
-			return []string{"Invalid count parameter - must be a number between 1 and 10000"}
-		}
-
-		// Validate level parameter - only allow valid syslog levels
-		validLevels := map[string]bool{
-			"0": true, "emerg": true,
-			"1": true, "alert": true,
-			"2": true, "crit": true,
-			"3": true, "err": true,
-			"4": true, "warning": true,
-			"5": true, "notice": true,
-			"6": true, "info": true,
-			"7": true, "debug": true,
-		}
-		if !validLevels[level] {
-			return []string{"Invalid level parameter - must be a valid syslog level"}
-		}
-
-		// Use hardcoded command with validated parameters
-		cmd := exec.Command("journalctl", "-u", "x-ui", "--no-pager", "-n", strconv.Itoa(countInt), "-p", level)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		err = cmd.Run()
-		if err != nil {
-			return []string{"Failed to run journalctl command! Make sure systemd is available and x-ui service is registered."}
-		}
-		lines = strings.Split(out.String(), "\n")
-	} else {
-		lines = logger.GetLogs(c, level)
-	}
+	lines := logger.GetLogs(c, level)
 
 	if lines == nil {
 		return []string{}
 	}
 	return lines
+}
+
+// GetUnifiedLogs returns normalized dashboard logs across panel/xray/node sources.
+// It always reads with debug verbosity and relies on UI for filtering.
+func (s *ServerService) GetUnifiedLogs(count int) []websocket.UnifiedLogEntry {
+	lines := logger.GetLogsFromFile(count, "debug")
+	if len(lines) == 0 {
+		lines = logger.GetLogs(count, "debug")
+	}
+	if len(lines) == 0 {
+		return []websocket.UnifiedLogEntry{}
+	}
+
+	entries := make([]websocket.UnifiedLogEntry, 0, len(lines))
+	for i := len(lines) - 1; i >= 0; i-- {
+		entry, ok := parseUnifiedLogLine(lines[i])
+		if !ok {
+			continue
+		}
+		entries = append(entries, entry)
+	}
+	return entries
+}
+
+func parseUnifiedLogLine(line string) (websocket.UnifiedLogEntry, bool) {
+	// Structured-only: every buffered line is NDJSON logger.Entry.
+	var e logger.Entry
+	if err := json.Unmarshal([]byte(line), &e); err != nil {
+		return websocket.UnifiedLogEntry{}, false
+	}
+	if strings.TrimSpace(e.Msg) == "" {
+		return websocket.UnifiedLogEntry{}, false
+	}
+
+	// Parse TS (logger uses "2006/01/02 15:04:05").
+	ts := time.Now().UnixMilli()
+	if raw := strings.TrimSpace(e.Ts); raw != "" {
+		if t0, err := time.ParseInLocation("2006/01/02 15:04:05", raw, time.Local); err == nil {
+			ts = t0.UnixMilli()
+		}
+	}
+
+	src := strings.ToLower(strings.TrimSpace(e.Source))
+	source := websocket.LogStreamSourcePanel
+	switch src {
+	case "xray":
+		source = websocket.LogStreamSourceXray
+	case "node":
+		source = websocket.LogStreamSourceNode
+	default:
+		source = websocket.LogStreamSourcePanel
+	}
+
+	level := strings.ToLower(strings.TrimSpace(e.Level))
+	if level == "" {
+		level = "info"
+	}
+
+	channel := strings.TrimSpace(e.Channel)
+	if channel == "" {
+		if source == websocket.LogStreamSourceXray {
+			channel = "access"
+		} else {
+			channel = "service"
+		}
+	}
+
+	msg := strings.TrimSpace(e.Msg)
+	nodeName := strings.TrimSpace(e.NodeName)
+	// If node logs were persisted with a "[Node: ...]" prefix, extract it for UI.
+	if source == websocket.LogStreamSourceNode && strings.HasPrefix(msg, "[Node:") {
+		if end := strings.Index(msg, "]"); end > len("[Node:") {
+			nodeName = strings.TrimSpace(msg[len("[Node:"):end])
+			msg = strings.TrimSpace(msg[end+1:])
+		}
+	}
+
+	return websocket.UnifiedLogEntry{
+		Source:   source,
+		Level:    level,
+		Channel:  channel,
+		Message:  msg,
+		Ts:       ts,
+		NodeID:   strings.TrimSpace(e.NodeID),
+		NodeName: nodeName,
+	}, true
 }
 
 func (s *ServerService) GetXrayLogs(
@@ -1662,6 +1736,363 @@ func (s *ServerService) IsValidGeofileName(filename string) bool {
 	validGeofilePattern := `^[a-zA-Z0-9._-]+\.dat$`
 	matched, _ := regexp.MatchString(validGeofilePattern, filename)
 	return matched
+}
+
+func isUserGeofileAllowed(filename string) bool {
+	switch filename {
+	case "geoip.dat", "geosite.dat":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *ServerService) geofilePath(name string) string {
+	return filepath.Join(config.GetDataFolderPath(), filepath.Base(name))
+}
+
+func (s *ServerService) geofileFallbackSourcePath(name string) string {
+	// If no custom geofile exists in data yet, preserve currently active default from bin.
+	return filepath.Join(config.GetBinFolderPath(), filepath.Base(name))
+}
+
+func (s *ServerService) saveGeofileWithBackup(fileName string, reader io.Reader) ([]byte, error) {
+	if !s.IsValidGeofileName(fileName) || !isUserGeofileAllowed(fileName) {
+		return nil, common.NewErrorf("invalid geofile name: %s", fileName)
+	}
+	limited := io.LimitReader(reader, maxGeoFileUploadSize+1)
+	content, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, common.NewErrorf("read geofile upload: %v", err)
+	}
+	if len(content) == 0 {
+		return nil, common.NewError("empty geofile upload")
+	}
+	if len(content) > maxGeoFileUploadSize {
+		return nil, common.NewErrorf("geofile too large: max %d bytes", maxGeoFileUploadSize)
+	}
+
+	dataFolderPath := config.GetDataFolderPath()
+	if err := os.MkdirAll(dataFolderPath, 0755); err != nil {
+		return nil, common.NewErrorf("create data folder: %v", err)
+	}
+	destPath := s.geofilePath(fileName)
+	backupPath := destPath + ".bak"
+	tmpPath := fmt.Sprintf("%s.tmp.%d", destPath, time.Now().UnixNano())
+
+	tmpFile, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return nil, common.NewErrorf("create temp geofile: %v", err)
+	}
+	if _, err := tmpFile.Write(content); err != nil {
+		tmpFile.Close()
+		_ = os.Remove(tmpPath)
+		return nil, common.NewErrorf("write temp geofile: %v", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, common.NewErrorf("close temp geofile: %v", err)
+	}
+
+	if _, err := os.Stat(destPath); err == nil {
+		_ = os.Remove(backupPath)
+		if err := os.Rename(destPath, backupPath); err != nil {
+			_ = os.Remove(tmpPath)
+			return nil, common.NewErrorf("backup previous geofile: %v", err)
+		}
+	} else {
+		// First custom upload: keep rollback target from default bin geofile if present.
+		fallbackPath := s.geofileFallbackSourcePath(fileName)
+		if st, statErr := os.Stat(fallbackPath); statErr == nil && !st.IsDir() {
+			fallbackBytes, readErr := os.ReadFile(fallbackPath)
+			if readErr != nil {
+				_ = os.Remove(tmpPath)
+				return nil, common.NewErrorf("read fallback geofile for backup: %v", readErr)
+			}
+			if writeErr := os.WriteFile(backupPath, fallbackBytes, 0644); writeErr != nil {
+				_ = os.Remove(tmpPath)
+				return nil, common.NewErrorf("write backup geofile: %v", writeErr)
+			}
+		}
+	}
+	if err := os.Rename(tmpPath, destPath); err != nil {
+		_ = os.Remove(tmpPath)
+		return nil, common.NewErrorf("replace geofile atomically: %v", err)
+	}
+	return content, nil
+}
+
+func (s *ServerService) rollbackLocalGeofile(fileName string) error {
+	destPath := s.geofilePath(fileName)
+	backupPath := destPath + ".bak"
+	if _, err := os.Stat(backupPath); err != nil {
+		return common.NewErrorf("backup not found for %s", fileName)
+	}
+	swapPath := fmt.Sprintf("%s.swap.%d", destPath, time.Now().UnixNano())
+	destExists := true
+	if _, err := os.Stat(destPath); err != nil {
+		destExists = false
+	}
+	if destExists {
+		if err := os.Rename(destPath, swapPath); err != nil {
+			return common.NewErrorf("prepare rollback swap: %v", err)
+		}
+	}
+	if err := os.Rename(backupPath, destPath); err != nil {
+		if destExists {
+			_ = os.Rename(swapPath, destPath)
+		}
+		return common.NewErrorf("activate geofile backup: %v", err)
+	}
+	if destExists {
+		if err := os.Rename(swapPath, backupPath); err != nil {
+			return common.NewErrorf("finalize rollback backup swap: %v", err)
+		}
+	}
+	return nil
+}
+
+func (s *ServerService) uploadGeofileToEnabledNodes(fileName string, content []byte) (success []string, errorsOut []string) {
+	settingService := SettingService{}
+	multiMode, err := settingService.GetMultiNodeMode()
+	if err != nil || !multiMode {
+		return nil, nil
+	}
+	nodeService := NodeService{}
+	nodes, err := nodeService.GetAllNodes()
+	if err != nil {
+		return nil, []string{fmt.Sprintf("load nodes: %v", err)}
+	}
+	for _, node := range nodes {
+		if node == nil || !node.Enable {
+			continue
+		}
+		if err := nodeService.UploadGeofileToNode(node, fileName, content); err != nil {
+			errorsOut = append(errorsOut, fmt.Sprintf("Node %d (%s): %v", node.Id, node.Name, err))
+			continue
+		}
+		success = append(success, fmt.Sprintf("Node %d (%s)", node.Id, node.Name))
+	}
+	return success, errorsOut
+}
+
+func (s *ServerService) rollbackGeofileOnEnabledNodes(fileName string) (success []string, errorsOut []string) {
+	settingService := SettingService{}
+	multiMode, err := settingService.GetMultiNodeMode()
+	if err != nil || !multiMode {
+		return nil, nil
+	}
+	nodeService := NodeService{}
+	nodes, err := nodeService.GetAllNodes()
+	if err != nil {
+		return nil, []string{fmt.Sprintf("load nodes: %v", err)}
+	}
+	for _, node := range nodes {
+		if node == nil || !node.Enable {
+			continue
+		}
+		if err := nodeService.RollbackGeofileOnNode(node, fileName); err != nil {
+			errorsOut = append(errorsOut, fmt.Sprintf("Node %d (%s): %v", node.Id, node.Name, err))
+			continue
+		}
+		success = append(success, fmt.Sprintf("Node %d (%s)", node.Id, node.Name))
+	}
+	return success, errorsOut
+}
+
+func (s *ServerService) UploadGeofile(fileName string, data io.Reader) (*GeofileApplyResult, error) {
+	result := &GeofileApplyResult{FileName: fileName}
+	content, err := s.saveGeofileWithBackup(fileName, data)
+	if err != nil {
+		return result, err
+	}
+	result.LocalOK = true
+	if err := s.RestartXrayService(); err != nil {
+		return result, common.NewErrorf("local geofile updated but xray restart failed: %v", err)
+	}
+	nodeSuccess, nodeErrors := s.uploadGeofileToEnabledNodes(fileName, content)
+	result.NodeSuccess = nodeSuccess
+	result.NodeErrors = nodeErrors
+	if len(nodeErrors) > 0 {
+		return result, common.NewErrorf("updated locally with node errors")
+	}
+	return result, nil
+}
+
+func (s *ServerService) RollbackGeofile(fileName string) (*GeofileApplyResult, error) {
+	result := &GeofileApplyResult{FileName: fileName}
+	if !s.IsValidGeofileName(fileName) || !isUserGeofileAllowed(fileName) {
+		return result, common.NewErrorf("invalid geofile name: %s", fileName)
+	}
+	if err := s.rollbackLocalGeofile(fileName); err != nil {
+		return result, err
+	}
+	result.LocalOK = true
+	if err := s.RestartXrayService(); err != nil {
+		return result, common.NewErrorf("local geofile rollback done but xray restart failed: %v", err)
+	}
+	nodeSuccess, nodeErrors := s.rollbackGeofileOnEnabledNodes(fileName)
+	result.NodeSuccess = nodeSuccess
+	result.NodeErrors = nodeErrors
+	if len(nodeErrors) > 0 {
+		return result, common.NewErrorf("rolled back locally with node errors")
+	}
+	return result, nil
+}
+
+func (s *ServerService) initGeofileTasksIfNeeded() {
+	s.geofileTaskMu.Lock()
+	defer s.geofileTaskMu.Unlock()
+	if s.geofileTasks == nil {
+		s.geofileTasks = make(map[string]*GeofileDownloadTask)
+	}
+}
+
+func (s *ServerService) getGeofileTask(taskID string) *GeofileDownloadTask {
+	s.geofileTaskMu.Lock()
+	defer s.geofileTaskMu.Unlock()
+	task := s.geofileTasks[taskID]
+	if task == nil {
+		return nil
+	}
+	c := *task
+	return &c
+}
+
+func (s *ServerService) setGeofileTask(task *GeofileDownloadTask) {
+	s.geofileTaskMu.Lock()
+	defer s.geofileTaskMu.Unlock()
+	if s.geofileTasks == nil {
+		s.geofileTasks = make(map[string]*GeofileDownloadTask)
+	}
+	s.geofileTasks[task.ID] = task
+}
+
+func (s *ServerService) updateGeofileTask(taskID string, fn func(*GeofileDownloadTask)) {
+	s.geofileTaskMu.Lock()
+	defer s.geofileTaskMu.Unlock()
+	if s.geofileTasks == nil {
+		return
+	}
+	task := s.geofileTasks[taskID]
+	if task == nil {
+		return
+	}
+	fn(task)
+	task.UpdatedAtMs = time.Now().UnixMilli()
+}
+
+func (s *ServerService) StartGeofileDownloadTask(fileName, rawURL string) (string, error) {
+	if !s.IsValidGeofileName(fileName) || !isUserGeofileAllowed(fileName) {
+		return "", common.NewErrorf("invalid geofile name: %s", fileName)
+	}
+	parsedURL, err := url.Parse(strings.TrimSpace(rawURL))
+	if err != nil || parsedURL == nil || parsedURL.Host == "" {
+		return "", common.NewError("invalid source URL")
+	}
+	if parsedURL.Scheme != "http" && parsedURL.Scheme != "https" {
+		return "", common.NewError("source URL must use http or https")
+	}
+	s.initGeofileTasksIfNeeded()
+	taskID := fmt.Sprintf("geo-%d", time.Now().UnixNano())
+	now := time.Now().UnixMilli()
+	task := &GeofileDownloadTask{
+		ID:          taskID,
+		FileName:    fileName,
+		SourceURL:   parsedURL.String(),
+		Status:      "downloading",
+		CreatedAtMs: now,
+		UpdatedAtMs: now,
+	}
+	s.setGeofileTask(task)
+
+	go func() {
+		client := &http.Client{Timeout: 5 * time.Minute}
+		resp, err := client.Get(parsedURL.String())
+		if err != nil {
+			s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+				t.Status = "error"
+				t.Error = fmt.Sprintf("download failed: %v", err)
+			})
+			return
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+				t.Status = "error"
+				t.Error = fmt.Sprintf("download failed with status %d", resp.StatusCode)
+			})
+			return
+		}
+		s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+			t.Total = resp.ContentLength
+		})
+
+		var out bytes.Buffer
+		chunk := make([]byte, 32*1024)
+		var downloaded int64
+		for {
+			n, readErr := resp.Body.Read(chunk)
+			if n > 0 {
+				if int64(out.Len()+n) > maxGeoFileUploadSize {
+					s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+						t.Status = "error"
+						t.Error = fmt.Sprintf("file too large: max %d bytes", maxGeoFileUploadSize)
+					})
+					return
+				}
+				if _, err := out.Write(chunk[:n]); err != nil {
+					s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+						t.Status = "error"
+						t.Error = fmt.Sprintf("buffer write failed: %v", err)
+					})
+					return
+				}
+				downloaded += int64(n)
+				s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+					t.Downloaded = downloaded
+				})
+			}
+			if readErr == io.EOF {
+				break
+			}
+			if readErr != nil {
+				s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+					t.Status = "error"
+					t.Error = fmt.Sprintf("download stream failed: %v", readErr)
+				})
+				return
+			}
+		}
+
+		s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+			t.Status = "applying"
+		})
+		res, applyErr := s.UploadGeofile(fileName, bytes.NewReader(out.Bytes()))
+		if applyErr != nil {
+			s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+				t.Status = "error"
+				t.Error = applyErr.Error()
+				t.Result = res
+			})
+			return
+		}
+		s.updateGeofileTask(taskID, func(t *GeofileDownloadTask) {
+			t.Status = "done"
+			t.Result = res
+			t.Downloaded = downloaded
+		})
+	}()
+
+	return taskID, nil
+}
+
+func (s *ServerService) GetGeofileDownloadTask(taskID string) (*GeofileDownloadTask, error) {
+	task := s.getGeofileTask(taskID)
+	if task == nil {
+		return nil, common.NewErrorf("task not found: %s", taskID)
+	}
+	return task, nil
 }
 
 func (s *ServerService) UpdateGeofile(fileName string) error {

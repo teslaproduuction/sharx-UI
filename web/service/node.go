@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -2500,5 +2501,70 @@ func (s *NodeService) InstallXrayVersion(node *model.Node, version string) error
 		return fmt.Errorf("node returned status %d: %s", resp.StatusCode, string(body))
 	}
 
+	return nil
+}
+
+func (s *NodeService) UploadGeofileToNode(node *model.Node, fileName string, fileData []byte) error {
+	client, err := s.createHTTPClient(node, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("file", fileName)
+	if err != nil {
+		return fmt.Errorf("create multipart file: %w", err)
+	}
+	if _, err := part.Write(fileData); err != nil {
+		return fmt.Errorf("write multipart file: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return fmt.Errorf("close multipart writer: %w", err)
+	}
+
+	u := fmt.Sprintf("%s/api/v1/geofile/upload/%s", nodeRequestBaseURL(node), url.PathEscape(fileName))
+	req, err := http.NewRequest(http.MethodPost, u, &body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("node returned %d: %s", resp.StatusCode, string(b))
+	}
+	return nil
+}
+
+func (s *NodeService) RollbackGeofileOnNode(node *model.Node, fileName string) error {
+	client, err := s.createHTTPClient(node, 60*time.Second)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %w", err)
+	}
+	u := fmt.Sprintf("%s/api/v1/geofile/rollback/%s", nodeRequestBaseURL(node), url.PathEscape(fileName))
+	req, err := http.NewRequest(http.MethodPost, u, nil)
+	if err != nil {
+		return err
+	}
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("node returned %d: %s", resp.StatusCode, string(b))
+	}
 	return nil
 }

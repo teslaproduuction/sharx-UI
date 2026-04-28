@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -237,7 +236,12 @@ func (lc *LokiClient) flush() {
 	// Marshal to JSON
 	jsonData, err := json.Marshal(request)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to marshal Loki request: %v\n", err)
+		writeDirect(Entry{
+			Level:     "error",
+			Source:    defaultSource,
+			Msg:       fmt.Sprintf("loki: failed to marshal push request: %v", err),
+			Component: "loki",
+		})
 		return
 	}
 
@@ -260,7 +264,12 @@ func (lc *LokiClient) sendWithRetry(jsonData []byte) {
 		// Create request with timeout context
 		req, err := http.NewRequest("POST", lc.url, bytes.NewBuffer(jsonData))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to create Loki request: %v\n", err)
+			writeDirect(Entry{
+				Level:     "error",
+				Source:    defaultSource,
+				Msg:       fmt.Sprintf("loki: failed to create request: %v", err),
+				Component: "loki",
+			})
 			lc.recordFailure()
 			return
 		}
@@ -317,7 +326,12 @@ func (lc *LokiClient) recordFailure() {
 	if lc.consecutiveFailures >= lokiCircuitBreakerFail {
 		lc.circuitOpen = true
 		lc.circuitOpenTime = time.Now()
-		fmt.Fprintf(os.Stderr, "Loki circuit breaker opened after %d consecutive failures\n", lokiCircuitBreakerFail)
+		writeDirect(Entry{
+			Level:     "error",
+			Source:    defaultSource,
+			Msg:       fmt.Sprintf("loki: circuit breaker opened after %d consecutive failures", lokiCircuitBreakerFail),
+			Component: "loki",
+		})
 	}
 }
 

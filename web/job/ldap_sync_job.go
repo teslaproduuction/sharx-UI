@@ -23,39 +23,6 @@ type LdapSyncJob struct {
 	xrayService    service.XrayService
 }
 
-// --- Helper functions for mustGet ---
-func mustGetString(fn func() (string, error)) string {
-	v, err := fn()
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func mustGetInt(fn func() (int, error)) int {
-	v, err := fn()
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func mustGetBool(fn func() (bool, error)) bool {
-	v, err := fn()
-	if err != nil {
-		panic(err)
-	}
-	return v
-}
-
-func mustGetStringOr(fn func() (string, error), fallback string) string {
-	v, err := fn()
-	if err != nil || v == "" {
-		return fallback
-	}
-	return v
-}
-
 func NewLdapSyncJob() *LdapSyncJob {
 	return new(LdapSyncJob)
 }
@@ -70,18 +37,82 @@ func (j *LdapSyncJob) Run() {
 	}
 
 	// --- LDAP fetch ---
+	host, err := j.settingService.GetLdapHost()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapHost:", err)
+		return
+	}
+	port, err := j.settingService.GetLdapPort()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapPort:", err)
+		return
+	}
+	useTLS, err := j.settingService.GetLdapUseTLS()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapUseTLS:", err)
+		return
+	}
+	bindDN, err := j.settingService.GetLdapBindDN()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapBindDN:", err)
+		return
+	}
+	password, err := j.settingService.GetLdapPassword()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapPassword:", err)
+		return
+	}
+	baseDN, err := j.settingService.GetLdapBaseDN()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapBaseDN:", err)
+		return
+	}
+	userFilter, err := j.settingService.GetLdapUserFilter()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapUserFilter:", err)
+		return
+	}
+	userAttr, err := j.settingService.GetLdapUserAttr()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapUserAttr:", err)
+		return
+	}
+
+	flagField, err := j.settingService.GetLdapFlagField()
+	if err != nil || strings.TrimSpace(flagField) == "" {
+		// Backwards-compatible fallback to the legacy vless field name
+		flagField, err = j.settingService.GetLdapVlessField()
+		if err != nil {
+			logger.Warning("LDAP setting read failed: ldapFlagField/ldapVlessField:", err)
+			return
+		}
+	}
+
+	truthyCSV, err := j.settingService.GetLdapTruthyValues()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapTruthyValues:", err)
+		return
+	}
+	truthyVals := splitCsv(truthyCSV)
+
+	invert, err := j.settingService.GetLdapInvertFlag()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapInvertFlag:", err)
+		return
+	}
+
 	cfg := ldaputil.Config{
-		Host:       mustGetString(j.settingService.GetLdapHost),
-		Port:       mustGetInt(j.settingService.GetLdapPort),
-		UseTLS:     mustGetBool(j.settingService.GetLdapUseTLS),
-		BindDN:     mustGetString(j.settingService.GetLdapBindDN),
-		Password:   mustGetString(j.settingService.GetLdapPassword),
-		BaseDN:     mustGetString(j.settingService.GetLdapBaseDN),
-		UserFilter: mustGetString(j.settingService.GetLdapUserFilter),
-		UserAttr:   mustGetString(j.settingService.GetLdapUserAttr),
-		FlagField:  mustGetStringOr(j.settingService.GetLdapFlagField, mustGetString(j.settingService.GetLdapVlessField)),
-		TruthyVals: splitCsv(mustGetString(j.settingService.GetLdapTruthyValues)),
-		Invert:     mustGetBool(j.settingService.GetLdapInvertFlag),
+		Host:       host,
+		Port:       port,
+		UseTLS:     useTLS,
+		BindDN:     bindDN,
+		Password:   password,
+		BaseDN:     baseDN,
+		UserFilter: userFilter,
+		UserAttr:   userAttr,
+		FlagField:  flagField,
+		TruthyVals: truthyVals,
+		Invert:     invert,
 	}
 
 	flags, err := ldaputil.FetchVlessFlags(cfg)
@@ -92,7 +123,12 @@ func (j *LdapSyncJob) Run() {
 	logger.Infof("Fetched %d LDAP flags", len(flags))
 
 	// --- Load all inbounds and all clients once ---
-	inboundTags := splitCsv(mustGetString(j.settingService.GetLdapInboundTags))
+	inboundTagsCSV, err := j.settingService.GetLdapInboundTags()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapInboundTags:", err)
+		return
+	}
+	inboundTags := splitCsv(inboundTagsCSV)
 	inbounds, err := j.inboundService.GetAllInbounds()
 	if err != nil {
 		logger.Warning("Failed to get inbounds:", err)
@@ -110,9 +146,21 @@ func (j *LdapSyncJob) Run() {
 	}
 
 	// --- Prepare batch operations ---
-	autoCreate := mustGetBool(j.settingService.GetLdapAutoCreate)
-	defGB := mustGetInt(j.settingService.GetLdapDefaultTotalGB)
-	defExpiryDays := mustGetInt(j.settingService.GetLdapDefaultExpiryDays)
+	autoCreate, err := j.settingService.GetLdapAutoCreate()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapAutoCreate:", err)
+		return
+	}
+	defGB, err := j.settingService.GetLdapDefaultTotalGB()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapDefaultTotalGB:", err)
+		return
+	}
+	defExpiryDays, err := j.settingService.GetLdapDefaultExpiryDays()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapDefaultExpiryDays:", err)
+		return
+	}
 	// defLimitIP removed - using HWID only
 
 	clientsToCreate := map[string][]model.Client{} // tag -> []new clients
@@ -159,7 +207,11 @@ func (j *LdapSyncJob) Run() {
 	}
 
 	// --- Auto delete clients not in LDAP ---
-	autoDelete := mustGetBool(j.settingService.GetLdapAutoDelete)
+	autoDelete, err := j.settingService.GetLdapAutoDelete()
+	if err != nil {
+		logger.Warning("LDAP setting read failed: ldapAutoDelete:", err)
+		return
+	}
 	if autoDelete {
 		ldapEmailSet := map[string]struct{}{}
 		for e := range flags {

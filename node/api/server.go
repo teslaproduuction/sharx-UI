@@ -14,21 +14,22 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/konstpic/sharx-code/v2/conndrop"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/auth"
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
-	"github.com/konstpic/sharx-code/v2/conndrop"
 	"github.com/konstpic/sharx-code/v2/node/geopush"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
-	"github.com/gin-gonic/gin"
 )
 
 // try executes a function and recovers from panics, logging them as warnings
@@ -114,20 +115,20 @@ func (s *Server) Start() error {
 	gin.SetMode(gin.ReleaseMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
-	
+
 	// Add request logging middleware
 	router.Use(func(c *gin.Context) {
 		start := time.Now()
 		path := c.Request.URL.Path
 		method := c.Request.Method
-		
+
 		c.Next()
-		
+
 		latency := time.Since(start)
 		status := c.Writer.Status()
 		logger.Debugf("%s %s - %d - %v", method, path, status, latency)
 	})
-	
+
 	router.Use(s.authMiddleware())
 
 	// Health check endpoint (no auth required)
@@ -154,6 +155,8 @@ func (s *Server) Start() error {
 		api.POST("/update-inbound", s.updateInbound)
 		api.POST("/remove-inbound", s.removeInbound)
 		api.POST("/session-ip-block-routing", s.sessionIPBlockRouting)
+		api.POST("/geofile/upload/:fileName", s.uploadGeofile)
+		api.POST("/geofile/rollback/:fileName", s.rollbackGeofile)
 	}
 
 	s.httpServer = &http.Server{
@@ -212,7 +215,7 @@ func (s *Server) Start() error {
 		logger.Infof("API server listening on port %d with HTTPS (cert: %s, key: %s)", s.port, s.certFile, s.keyFile)
 		return s.httpServer.Serve(tlsLn)
 	}
-	
+
 	logger.Infof("API server listening on port %d", s.port)
 	return s.httpServer.ListenAndServe()
 }
@@ -283,18 +286,18 @@ func verifyBearerJWT(authHeader string, pub *rsa.PublicKey) error {
 func (s *Server) health(c *gin.Context) {
 	st := s.xrayManager.GetStatus()
 	c.JSON(http.StatusOK, gin.H{
-		"status":        "ok",
-		"service":       "sharx-node",
-		"xrayRunning":   st["running"],
-		"xrayVersion":   st["version"],
-		"xrayUptime":    st["uptime"],
+		"status":      "ok",
+		"service":     "sharx-node",
+		"xrayRunning": st["running"],
+		"xrayVersion": st["version"],
+		"xrayUptime":  st["uptime"],
 	})
 }
 
 // applyConfig applies a new XRAY configuration.
 func (s *Server) applyConfig(c *gin.Context) {
 	logger.Infof("Apply config request received")
-	
+
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		logger.Errorf("Failed to read request body: %v", err)
@@ -360,12 +363,12 @@ func (s *Server) applyConfig(c *gin.Context) {
 	st := s.xrayManager.GetStatus()
 	appliedAt := time.Now().Unix()
 	resp := gin.H{
-		"message":        "Configuration applied successfully",
-		"appliedAt":      appliedAt,
-		"configSha256":   cfgHashHex,
-		"xrayVersion":    st["version"],
-		"xrayUptime":     st["uptime"],
-		"xrayRunning":    st["running"],
+		"message":      "Configuration applied successfully",
+		"appliedAt":    appliedAt,
+		"configSha256": cfgHashHex,
+		"xrayVersion":  st["version"],
+		"xrayUptime":   st["uptime"],
+		"xrayRunning":  st["running"],
 	}
 	logger.Infof("Configuration applied successfully, sending response")
 	c.JSON(http.StatusOK, resp)
@@ -414,7 +417,7 @@ func (s *Server) status(c *gin.Context) {
 // stats returns traffic and online clients statistics from XRAY.
 func (s *Server) stats(c *gin.Context) {
 	logger.Debugf("Stats request received")
-	
+
 	// Get reset parameter (default: false)
 	reset := c.DefaultQuery("reset", "false") == "true"
 	logger.Debugf("Getting stats (reset=%v)", reset)
@@ -596,6 +599,146 @@ func (s *Server) installXray(c *gin.Context) {
 		"message": fmt.Sprintf("Xray version %s installed successfully", version),
 		"version": version,
 	})
+}
+
+func isNodeGeofileAllowed(name string) bool {
+	switch strings.TrimSpace(name) {
+	case "geoip.dat", "geosite.dat":
+		return true
+	default:
+		return false
+	}
+}
+
+func resolveNodeBinDir() (string, error) {
+	candidates := []string{"bin", "/app/bin", "./bin"}
+	for _, p := range candidates {
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p, nil
+		}
+	}
+	return "", fmt.Errorf("bin directory not found")
+}
+
+func writeNodeGeofileWithBackup(fileName string, content []byte) error {
+	if len(content) == 0 {
+		return fmt.Errorf("empty geofile payload")
+	}
+	binDir, err := resolveNodeBinDir()
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(binDir, fileName)
+	backup := dest + ".bak"
+	tmp := fmt.Sprintf("%s.tmp.%d", dest, time.Now().UnixNano())
+
+	if err := os.WriteFile(tmp, content, 0644); err != nil {
+		return err
+	}
+	if _, err := os.Stat(dest); err == nil {
+		_ = os.Remove(backup)
+		if err := os.Rename(dest, backup); err != nil {
+			_ = os.Remove(tmp)
+			return err
+		}
+	}
+	if err := os.Rename(tmp, dest); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func rollbackNodeGeofile(fileName string) error {
+	binDir, err := resolveNodeBinDir()
+	if err != nil {
+		return err
+	}
+	dest := filepath.Join(binDir, fileName)
+	backup := dest + ".bak"
+	if _, err := os.Stat(backup); err != nil {
+		return fmt.Errorf("backup not found for %s", fileName)
+	}
+	swap := fmt.Sprintf("%s.swap.%d", dest, time.Now().UnixNano())
+	destExists := true
+	if _, err := os.Stat(dest); err != nil {
+		destExists = false
+	}
+	if destExists {
+		if err := os.Rename(dest, swap); err != nil {
+			return err
+		}
+	}
+	if err := os.Rename(backup, dest); err != nil {
+		if destExists {
+			_ = os.Rename(swap, dest)
+		}
+		return err
+	}
+	if destExists {
+		if err := os.Rename(swap, backup); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Server) restartXrayIfRunning() error {
+	st := s.xrayManager.GetStatus()
+	running, _ := st["running"].(bool)
+	if !running {
+		return nil
+	}
+	return s.xrayManager.ForceReload()
+}
+
+func (s *Server) uploadGeofile(c *gin.Context) {
+	fileName := strings.TrimSpace(c.Param("fileName"))
+	if !isNodeGeofileAllowed(fileName) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid geofile name"})
+		return
+	}
+	file, _, err := c.Request.FormFile("file")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file is required"})
+		return
+	}
+	defer file.Close()
+	content, err := io.ReadAll(io.LimitReader(file, 64*1024*1024+1))
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	if len(content) > 64*1024*1024 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "file too large"})
+		return
+	}
+	if err := writeNodeGeofileWithBackup(fileName, content); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.restartXrayIfRunning(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "geofile uploaded"})
+}
+
+func (s *Server) rollbackGeofile(c *gin.Context) {
+	fileName := strings.TrimSpace(c.Param("fileName"))
+	if !isNodeGeofileAllowed(fileName) {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid geofile name"})
+		return
+	}
+	if err := rollbackNodeGeofile(fileName); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if err := s.restartXrayIfRunning(); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "geofile rolled back"})
 }
 
 // sessionIPBlockRouting adds or removes one session-IP routing rule via Xray RoutingService (no core restart).

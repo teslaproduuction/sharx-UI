@@ -25,8 +25,8 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
 
   return (
     <div className="space-y-4 rounded-2xl border border-[var(--border)] bg-[var(--surface)]/60 p-4 sm:p-5">
-      <div className="flex flex-col gap-5 lg:flex-row lg:items-start">
-        <div className="shrink-0 space-y-1.5">
+      <div className="flex flex-col gap-4 sm:gap-5 lg:flex-row lg:items-start">
+        <div className="shrink-0 space-y-1.5 lg:min-w-[5.5rem]">
           <label
             className="block text-xs font-medium text-[var(--fg-subtle)]"
             htmlFor="remark-model-sep"
@@ -35,7 +35,7 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
           </label>
           <Input
             id="remark-model-sep"
-            className="h-10 w-14 text-center font-mono text-base tabular-nums"
+            className="h-10 w-full max-w-[5rem] text-center font-mono text-base tabular-nums"
             maxLength={1}
             autoComplete="off"
             spellCheck={false}

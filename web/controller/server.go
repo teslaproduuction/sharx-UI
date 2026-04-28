@@ -13,9 +13,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/global"
 	"github.com/konstpic/sharx-code/v2/web/service"
+	"github.com/konstpic/sharx-code/v2/web/session"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
 
 	"github.com/gin-gonic/gin"
@@ -67,11 +69,119 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/installXrayOnNodes/:version", a.installXrayOnNodes)
 	g.POST("/updateGeofile", a.updateGeofile)
 	g.POST("/updateGeofile/:fileName", a.updateGeofile)
+	g.POST("/uploadGeofile/:fileName", a.uploadGeofile)
+	g.POST("/rollbackGeofile/:fileName", a.rollbackGeofile)
+	g.POST("/downloadGeofileByUrl/:fileName", a.downloadGeofileByURL)
+	g.GET("/downloadGeofileTask/:taskID", a.downloadGeofileTask)
+	g.GET("/geofileAssets/:fileName", a.listGeofileAssets)
+	g.POST("/geofileAssets/upload/:fileName", a.uploadGeofileAsset)
+	g.POST("/geofileAssets/download/:fileName", a.downloadGeofileAsset)
+	g.POST("/geofileAssets/apply/:id", a.applyGeofileAsset)
+	g.POST("/geofileAssets/delete/:id", a.deleteGeofileAsset)
 	g.POST("/logs/:count", a.getLogs)
+	g.GET("/logs/unified/:count", a.getUnifiedLogs)
 	g.POST("/xraylogs/:count", a.getXrayLogs)
 	g.POST("/importDB", a.importDB)
 	g.POST("/getNewEchCert", a.getNewEchCert)
 	g.GET("/metrics", a.getMetrics)
+}
+
+func (a *ServerController) listGeofileAssets(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	fileName := strings.TrimSpace(c.Param("fileName"))
+	rows, err := a.serverService.ListGeofileAssets(user.Id, fileName)
+	if err != nil {
+		jsonMsg(c, "failed to list geofile assets", err)
+		return
+	}
+	jsonObj(c, rows, nil)
+}
+
+func (a *ServerController) uploadGeofileAsset(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	fileName := strings.TrimSpace(c.Param("fileName"))
+	formFile, _, err := c.Request.FormFile("file")
+	if err != nil {
+		jsonMsg(c, "failed to read uploaded geofile", err)
+		return
+	}
+	defer formFile.Close()
+	displayName := strings.TrimSpace(c.PostForm("displayName"))
+	row, err := a.serverService.UploadGeofileAsset(user.Id, fileName, formFile, displayName, "")
+	if err != nil {
+		jsonMsg(c, "failed to store geofile asset", err)
+		return
+	}
+	jsonObj(c, row, nil)
+}
+
+func (a *ServerController) downloadGeofileAsset(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	fileName := strings.TrimSpace(c.Param("fileName"))
+	srcURL := strings.TrimSpace(c.PostForm("url"))
+	displayName := strings.TrimSpace(c.PostForm("displayName"))
+	if srcURL == "" {
+		var body struct {
+			URL         string `json:"url"`
+			DisplayName string `json:"displayName"`
+		}
+		if err := c.ShouldBindJSON(&body); err == nil {
+			srcURL = strings.TrimSpace(body.URL)
+			if displayName == "" {
+				displayName = strings.TrimSpace(body.DisplayName)
+			}
+		}
+	}
+	if srcURL == "" {
+		jsonMsg(c, "url is required", fmt.Errorf("empty url"))
+		return
+	}
+	row, err := a.serverService.DownloadGeofileAssetFromURL(user.Id, fileName, srcURL, displayName)
+	if err != nil {
+		jsonMsg(c, "failed to download geofile asset", err)
+		return
+	}
+	jsonObj(c, row, nil)
+}
+
+type geofileAssetApplyResponse struct {
+	Asset  *model.GeofileAsset         `json:"asset"`
+	Result *service.GeofileApplyResult `json:"result"`
+}
+
+func (a *ServerController) applyGeofileAsset(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	id, err := strconv.Atoi(strings.TrimSpace(c.Param("id")))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid asset id", fmt.Errorf("bad id"))
+		return
+	}
+	result, asset, applyErr := a.serverService.ApplyGeofileAsset(user.Id, id)
+	msg := "Apply geofile asset"
+	if asset != nil {
+		if fileName, mapErr := service.GeofileNameFromType(asset.FileType); mapErr == nil {
+			msg = geofileMessageFromResult(c, "Apply", fileName, result)
+		}
+	}
+	if applyErr != nil {
+		jsonMsgObj(c, msg, geofileAssetApplyResponse{Asset: asset, Result: result}, applyErr)
+		return
+	}
+	jsonMsgObj(c, msg, geofileAssetApplyResponse{Asset: asset, Result: result}, nil)
+}
+
+func (a *ServerController) deleteGeofileAsset(c *gin.Context) {
+	user := session.GetLoginUser(c)
+	id, err := strconv.Atoi(strings.TrimSpace(c.Param("id")))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid asset id", fmt.Errorf("bad id"))
+		return
+	}
+	if err := a.serverService.DeleteGeofileAsset(user.Id, id); err != nil {
+		jsonMsg(c, "failed to delete geofile asset", err)
+		return
+	}
+	jsonMsg(c, "geofile asset deleted", nil)
 }
 
 // refreshStatus updates the cached server status and collects CPU history.
@@ -176,16 +286,16 @@ func (a *ServerController) installXray(c *gin.Context) {
 // installXrayOnNodes installs Xray version on selected nodes.
 func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 	version := c.Param("version")
-	
+
 	// Log request details for debugging
 	contentType := c.ContentType()
 	logger.Debugf("installXrayOnNodes: Content-Type=%s, version=%s", contentType, version)
-	
+
 	// Try to get nodeIds from JSON body first (if Content-Type is application/json)
 	// This must be done BEFORE ShouldBind, which reads the body
 	var nodeIdsFromJSON []int
 	var hasNodeIdsInJSON bool
-	
+
 	if contentType == "application/json" {
 		// Read raw body to extract nodeIds
 		bodyBytes, err := c.GetRawData()
@@ -216,10 +326,10 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	var nodeIds []int
 	var formBodyBytes []byte
-	
+
 	if hasNodeIdsInJSON {
 		// Use nodeIds from JSON
 		nodeIds = nodeIdsFromJSON
@@ -232,7 +342,7 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 			// Restore body for form parsing
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(formBodyBytes))
 		}
-		
+
 		// Parse form
 		if err := c.Request.ParseForm(); err == nil {
 			logger.Debugf("installXrayOnNodes: Form values: %+v", c.Request.PostForm)
@@ -240,21 +350,21 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 		} else {
 			logger.Warningf("installXrayOnNodes: Failed to parse form: %v", err)
 		}
-		
+
 		// Get from form-urlencoded data (nodeIds=1&nodeIds=2 format)
 		// First check if the field exists
 		_, hasNodeIds := c.GetPostForm("nodeIds")
 		logger.Debugf("installXrayOnNodes: Has nodeIds in form: %v", hasNodeIds)
-		
+
 		nodeIdsStr := c.PostFormArray("nodeIds")
 		logger.Debugf("installXrayOnNodes: Received nodeIds from form: %v (count: %d)", nodeIdsStr, len(nodeIdsStr))
-		
+
 		// Also try QueryArray in case it's in query string
 		if len(nodeIdsStr) == 0 {
 			nodeIdsStr = c.QueryArray("nodeIds")
 			logger.Debugf("installXrayOnNodes: Received nodeIds from query: %v (count: %d)", nodeIdsStr, len(nodeIdsStr))
 		}
-		
+
 		// If still empty, try to parse from raw body manually (for form-urlencoded)
 		if len(nodeIdsStr) == 0 && len(formBodyBytes) > 0 {
 			bodyStr := string(formBodyBytes)
@@ -289,25 +399,25 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 		}
 		logger.Debugf("installXrayOnNodes: Final parsed nodeIds: %v", nodeIds)
 	}
-	
+
 	if len(nodeIds) == 0 {
 		jsonMsg(c, "No nodes selected", nil)
 		return
 	}
-	
+
 	logger.Debugf("Installing Xray version %s on nodes: %v", version, nodeIds)
-	
+
 	nodeService := service.NodeService{}
 	var errors []string
 	var success []string
-	
+
 	for _, nodeId := range nodeIds {
 		node, err := nodeService.GetNode(nodeId)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("Node %d: %v", nodeId, err))
 			continue
 		}
-		
+
 		err = nodeService.InstallXrayVersion(node, version)
 		if err != nil {
 			errors = append(errors, fmt.Sprintf("Node %d (%s): %v", nodeId, node.Name, err))
@@ -315,7 +425,7 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 			success = append(success, fmt.Sprintf("Node %d (%s)", nodeId, node.Name))
 		}
 	}
-	
+
 	var message string
 	if len(success) > 0 && len(errors) == 0 {
 		message = fmt.Sprintf("Xray version %s installed successfully on %d node(s)", version, len(success))
@@ -324,14 +434,14 @@ func (a *ServerController) installXrayOnNodes(c *gin.Context) {
 	} else {
 		message = fmt.Sprintf("Failed to install on all nodes")
 	}
-	
+
 	if len(errors) > 0 {
 		message += ": " + errors[0] // Show first error
 		if len(errors) > 1 {
 			message += fmt.Sprintf(" (and %d more)", len(errors)-1)
 		}
 	}
-	
+
 	if len(errors) > 0 && len(success) == 0 {
 		jsonMsg(c, message, fmt.Errorf("installation failed"))
 	} else {
@@ -352,6 +462,109 @@ func (a *ServerController) updateGeofile(c *gin.Context) {
 
 	err := a.serverService.UpdateGeofile(fileName)
 	jsonMsg(c, I18nWeb(c, "pages.index.geofileUpdatePopover"), err)
+}
+
+func geofileActionLabel(c *gin.Context, action string) string {
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "upload":
+		return I18nWeb(c, "pages.index.geofileActionUpload")
+	case "rollback":
+		return I18nWeb(c, "pages.index.geofileActionRollback")
+	case "apply":
+		return I18nWeb(c, "pages.index.geofileActionApply")
+	default:
+		return action
+	}
+}
+
+func geofileMessageFromResult(c *gin.Context, action, fileName string, result *service.GeofileApplyResult) string {
+	actionLabel := geofileActionLabel(c, action)
+	if result == nil || !result.LocalOK {
+		return fmt.Sprintf("%s %s %s", actionLabel, fileName, I18nWeb(c, "pages.index.geofileResultFailedLocallyTail"))
+	}
+	nodeSuccess := len(result.NodeSuccess)
+	nodeErrors := len(result.NodeErrors)
+	if nodeSuccess == 0 && nodeErrors == 0 {
+		return fmt.Sprintf("%s %s %s", actionLabel, fileName, I18nWeb(c, "pages.index.geofileResultCompletedLocallyTail"))
+	}
+	if nodeErrors == 0 {
+		return fmt.Sprintf("%s %s: %s + %d %s", actionLabel, fileName, I18nWeb(c, "pages.index.localNodeLabel"), nodeSuccess, I18nWeb(c, "pages.index.nodeSuffix"))
+	}
+	if nodeSuccess == 0 {
+		return fmt.Sprintf("%s %s: %s; %s %d %s", actionLabel, fileName, I18nWeb(c, "pages.index.localCompletedLabel"), I18nWeb(c, "pages.index.failedOnLabel"), nodeErrors, I18nWeb(c, "pages.index.nodeSuffix"))
+	}
+	return fmt.Sprintf("%s %s: %d %s, %d %s", actionLabel, fileName, nodeSuccess, I18nWeb(c, "pages.index.nodesSuccessLabel"), nodeErrors, I18nWeb(c, "pages.index.nodesFailedLabel"))
+}
+
+func (a *ServerController) uploadGeofile(c *gin.Context) {
+	fileName := c.Param("fileName")
+	if !a.serverService.IsValidGeofileName(fileName) {
+		jsonMsg(c, "invalid geofile name", fmt.Errorf("invalid filename"))
+		return
+	}
+	formFile, _, err := c.Request.FormFile("file")
+	if err != nil {
+		jsonMsg(c, "failed to read uploaded geofile", err)
+		return
+	}
+	defer formFile.Close()
+	result, err := a.serverService.UploadGeofile(fileName, formFile)
+	if err != nil {
+		jsonMsgObj(c, geofileMessageFromResult(c, "Upload", fileName, result), result, err)
+		return
+	}
+	jsonMsgObj(c, geofileMessageFromResult(c, "Upload", fileName, result), result, nil)
+}
+
+func (a *ServerController) rollbackGeofile(c *gin.Context) {
+	fileName := c.Param("fileName")
+	if !a.serverService.IsValidGeofileName(fileName) {
+		jsonMsg(c, "invalid geofile name", fmt.Errorf("invalid filename"))
+		return
+	}
+	result, err := a.serverService.RollbackGeofile(fileName)
+	if err != nil {
+		jsonMsgObj(c, geofileMessageFromResult(c, "Rollback", fileName, result), result, err)
+		return
+	}
+	jsonMsgObj(c, geofileMessageFromResult(c, "Rollback", fileName, result), result, nil)
+}
+
+func (a *ServerController) downloadGeofileByURL(c *gin.Context) {
+	fileName := c.Param("fileName")
+	if !a.serverService.IsValidGeofileName(fileName) {
+		jsonMsg(c, "invalid geofile name", fmt.Errorf("invalid filename"))
+		return
+	}
+	srcURL := strings.TrimSpace(c.PostForm("url"))
+	if srcURL == "" {
+		var body struct {
+			URL string `json:"url"`
+		}
+		if err := c.ShouldBindJSON(&body); err == nil {
+			srcURL = strings.TrimSpace(body.URL)
+		}
+	}
+	if srcURL == "" {
+		jsonMsg(c, "url is required", fmt.Errorf("empty url"))
+		return
+	}
+	taskID, err := a.serverService.StartGeofileDownloadTask(fileName, srcURL)
+	if err != nil {
+		jsonMsg(c, "failed to start geofile download", err)
+		return
+	}
+	jsonObj(c, gin.H{"taskId": taskID}, nil)
+}
+
+func (a *ServerController) downloadGeofileTask(c *gin.Context) {
+	taskID := strings.TrimSpace(c.Param("taskID"))
+	task, err := a.serverService.GetGeofileDownloadTask(taskID)
+	if err != nil {
+		jsonMsg(c, "failed to get geofile task", err)
+		return
+	}
+	jsonObj(c, task, nil)
 }
 
 // stopXrayService stops the Xray service.
@@ -400,8 +613,24 @@ func (a *ServerController) restartXrayService(c *gin.Context) {
 func (a *ServerController) getLogs(c *gin.Context) {
 	count := c.Param("count")
 	level := c.PostForm("level")
-	syslog := c.PostForm("syslog")
-	logs := a.serverService.GetLogs(count, level, syslog)
+	logs := a.serverService.GetLogs(count, level)
+	jsonObj(c, logs, nil)
+}
+
+func (a *ServerController) getUnifiedLogs(c *gin.Context) {
+	countStr := c.Param("count")
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		count = 0
+	}
+	// 0 means "all available history". Positive counts are bounded for safety.
+	if count < 0 {
+		count = 0
+	}
+	if count > 200000 {
+		count = 200000
+	}
+	logs := a.serverService.GetUnifiedLogs(count)
 	jsonObj(c, logs, nil)
 }
 
@@ -498,20 +727,20 @@ func (a *ServerController) importDB(c *gin.Context) {
 		return
 	}
 	defer file.Close()
-	
+
 	// Import database
 	err = a.serverService.ImportDB(file)
 	if err != nil {
 		jsonMsg(c, I18nWeb(c, "pages.index.importDatabaseError"), err)
 		return
 	}
-	
+
 	// Restart container after successful import to ensure all services use new database
 	if err := a.panelService.RestartContainer(time.Second * 3); err != nil {
 		logger.Warningf("Failed to restart container after DB import: %v", err)
 		// Don't fail the import if container restart fails, but log it
 	}
-	
+
 	jsonObj(c, I18nWeb(c, "pages.index.importDatabaseSuccess"), nil)
 }
 

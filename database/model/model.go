@@ -489,3 +489,21 @@ type ClientGroup struct {
 	// Relations (not stored in DB, loaded via queries)
 	ClientCount int `json:"clientCount,omitempty" form:"-" gorm:"-"` // Number of clients in this group (computed)
 }
+
+// GeofileAsset is a stored geofile in the panel library.
+type GeofileAsset struct {
+	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
+	UserId      int    `json:"userId" gorm:"column:user_id;index"`
+	FileType    string `json:"fileType" gorm:"column:file_type;index"` // geoip | geosite
+	DisplayName string `json:"displayName" gorm:"column:display_name"`
+	SourceURL   string `json:"sourceUrl" gorm:"column:source_url"`
+	FilePath    string `json:"filePath" gorm:"column:file_path;uniqueIndex"`
+	SizeBytes   int64  `json:"sizeBytes" gorm:"column:size_bytes"`
+	Sha256      string `json:"sha256" gorm:"column:sha256;type:varchar(64)"`
+	IsActive    bool   `json:"isActive" gorm:"column:is_active;default:false;index"`
+	CreatedAt   int64  `json:"createdAt" gorm:"column:created_at;index"`
+}
+
+func (GeofileAsset) TableName() string {
+	return "geofile_assets"
+}

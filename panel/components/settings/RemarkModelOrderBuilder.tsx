@@ -66,16 +66,14 @@ export function RemarkModelOrderBuilder({ sep, order, onCommit }: Props) {
                   <span className="h-px min-w-[1.25rem] flex-1 bg-[var(--border)]" />
                 </div>
               ) : null}
-              <div
-                className="flex min-w-0 items-center gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-2 pl-3 pr-1.5 shadow-sm"
-              >
+              <div className="flex min-w-0 flex-wrap items-start gap-2 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] py-2 pl-3 pr-2 shadow-sm sm:flex-nowrap sm:items-center sm:pr-1.5">
                 <span className="shrink-0 rounded-md bg-[var(--accent)]/15 px-1.5 py-0.5 font-mono text-xs font-semibold text-[var(--accent)]">
                   {letter}
                 </span>
-                <span className="min-w-0 flex-1 text-xs text-[var(--fg-muted)]">
+                <span className="min-w-0 flex-[1_1_12rem] text-xs text-[var(--fg-muted)] sm:flex-1">
                   {t(`pages.settings.remarkModelField.${letter}`)}
                 </span>
-                <div className="flex shrink-0 items-center gap-0.5">
+                <div className="ml-auto flex w-full shrink-0 items-center justify-end gap-0.5 sm:w-auto">
                   <IconButton
                     type="button"
                     label={t("moveUp")}

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"embed"
+	"encoding/json"
 	"io"
 	"io/fs"
 	"net"
@@ -305,6 +306,8 @@ func (s *Server) startTask() {
 	}
 	// Check whether xray is running every second
 	s.cron.AddJob("@every 1s", job.NewCheckXrayRunningJob())
+	// Tail Xray file logs (access/error) into unified WS stream.
+	s.cron.AddJob("@every 1s", job.NewXrayLogTailJob())
 
 	// Check if xray needs to be restarted every 30 seconds
 	s.cron.AddFunc("@every 30s", func() {
@@ -449,6 +452,41 @@ func (s *Server) Start() (err error) {
 	go func() {
 		s.httpServer.Serve(listener)
 	}()
+
+	// Forward panel process logs into unified WS logs stream.
+	// Node-forwarded lines are emitted separately in APIController with node metadata.
+	logger.SetLogPusher(func(logLine string) {
+		var e logger.Entry
+		if err := json.Unmarshal([]byte(logLine), &e); err == nil && strings.TrimSpace(e.Msg) != "" {
+			src := strings.ToLower(strings.TrimSpace(e.Source))
+			if src == "node" {
+				// Node logs are emitted separately in APIController with node metadata.
+				return
+			}
+
+			e.Source = src
+			e.Level = strings.ToLower(strings.TrimSpace(e.Level))
+			e.Msg = strings.TrimSpace(e.Msg)
+			if e.TsUnixMs == 0 {
+				e.TsUnixMs = time.Now().UnixMilli()
+				if raw := strings.TrimSpace(e.Ts); raw != "" {
+					if t0, err := time.ParseInLocation("2006/01/02 15:04:05", raw, time.Local); err == nil {
+						e.TsUnixMs = t0.UnixMilli()
+					}
+				}
+			}
+			e.Channel = strings.TrimSpace(e.Channel)
+			if e.Channel == "" {
+				e.Channel = "service"
+			}
+			if src == "xray" && e.Channel == "service" {
+				e.Channel = "access"
+			}
+
+			websocket.BroadcastLogsStream(e)
+			return
+		}
+	})
 
 	// Start Telegram before background jobs so outbound alerts see isRunning=true (OnReceive sets it early).
 	isTgbotenabled, err := s.settingService.GetTgbotEnabled()

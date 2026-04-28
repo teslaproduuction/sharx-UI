@@ -24,7 +24,7 @@ import {
   Wrench,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson, api } from "@/lib/api";
 import { formatSecond, sizeFormat, toFixed } from "@/lib/format";
@@ -39,6 +39,7 @@ import {
   ConfirmDialog,
   IconButton,
   IconTile,
+  Input,
   LinearProgress,
   Modal,
   PillTag,
@@ -93,24 +94,25 @@ type StatusData = {
   usersOnline?: number;
 };
 
+type UnifiedLogEntry = {
+  source: "panel" | "xray" | "node";
+  channel?: string;
+  level: string;
+  message: string;
+  ts: number;
+  nodeId?: number | string;
+  nodeName?: string;
+};
+
+type IncomingUnifiedLogEntry = Partial<UnifiedLogEntry> & {
+  msg?: string;
+  tsUnixMs?: number;
+};
+
 function metricColor(percent: number, accent: string) {
   if (percent < 80) return accent;
   if (percent < 90) return "#f59e0b";
   return "#ef4444";
-}
-
-/** SVG polyline points for 0–100 series in viewBox 0 0 840 220 (matches CPU/memory modals). */
-function resourceHistoryPolylinePoints(values: number[]): string {
-  return values
-    .map((raw, i, a) => {
-      const n = a.length;
-      if (!n) return "";
-      const y = Math.max(0, Math.min(100, raw));
-      const x = 40 + (i / (n - 1 || 1)) * 760;
-      const yy = 200 - (y / 100) * 180;
-      return `${x},${yy}`;
-    })
-    .join(" ");
 }
 
 function pct(cur: number, tot: number) {
@@ -163,6 +165,30 @@ function xrayTagClass(color: string) {
 
 const SPARK_W = 200;
 const SPARK_H = 36;
+const HISTORY_W = 840;
+const HISTORY_H = 220;
+const HISTORY_PAD_L = 40;
+const HISTORY_PAD_R = 40;
+const HISTORY_PAD_T = 20;
+const HISTORY_PAD_B = 20;
+
+type ResourceHistoryPoint = {
+  value: number;
+  ts: number;
+};
+
+type DashboardClientHwid = {
+  userAgent?: string;
+};
+
+type DashboardClientRow = {
+  hwids?: DashboardClientHwid[];
+};
+
+function toUnixMs(ts: number) {
+  // API may return unix seconds for historical points.
+  return ts > 0 && ts < 1_000_000_000_000 ? ts * 1000 : ts;
+}
 
 function ResourceSparkline({ data, stroke }: { data: number[]; stroke: string }) {
   if (data.length < 2) {
@@ -196,6 +222,121 @@ function ResourceSparkline({ data, stroke }: { data: number[]; stroke: string })
   );
 }
 
+function ResourceHistoryChart({
+  points,
+  stroke,
+  gradientId,
+  hoverIndex,
+  onHoverIndex,
+  onLeave,
+}: {
+  points: ResourceHistoryPoint[];
+  stroke: string;
+  gradientId: string;
+  hoverIndex: number | null;
+  onHoverIndex: (idx: number | null) => void;
+  onLeave: () => void;
+}) {
+  if (points.length < 2) {
+    return <div className="h-[220px] w-full rounded-lg bg-[var(--border)]/20" aria-hidden />;
+  }
+  const innerW = HISTORY_W - HISTORY_PAD_L - HISTORY_PAD_R;
+  const innerH = HISTORY_H - HISTORY_PAD_T - HISTORY_PAD_B;
+  const stepX = innerW / Math.max(1, points.length - 1);
+  const chartPoints = points.map((p0, i) => {
+    const value = Math.max(0, Math.min(100, p0.value));
+    const x = HISTORY_PAD_L + i * stepX;
+    const y = HISTORY_H - HISTORY_PAD_B - (value / 100) * innerH;
+    return { ...p0, value, x, y };
+  });
+  const linePoints = chartPoints.map((p0) => `${p0.x},${p0.y}`).join(" ");
+  const areaPath = [
+    `M ${chartPoints[0].x} ${HISTORY_H - HISTORY_PAD_B}`,
+    ...chartPoints.map((p0) => `L ${p0.x} ${p0.y}`),
+    `L ${chartPoints[chartPoints.length - 1].x} ${HISTORY_H - HISTORY_PAD_B}`,
+    "Z",
+  ].join(" ");
+  const activePoint = hoverIndex != null ? chartPoints[hoverIndex] : null;
+
+  return (
+    <div className="relative h-[220px] w-full" onMouseLeave={onLeave}>
+      <svg
+        viewBox={`0 0 ${HISTORY_W} ${HISTORY_H}`}
+        width="100%"
+        height="100%"
+        preserveAspectRatio="none"
+        onMouseMove={(e) => {
+          const rect = e.currentTarget.getBoundingClientRect();
+          const relX = ((e.clientX - rect.left) / Math.max(1, rect.width)) * HISTORY_W;
+          const idx = Math.round((relX - HISTORY_PAD_L) / stepX);
+          onHoverIndex(Math.max(0, Math.min(chartPoints.length - 1, idx)));
+        }}
+      >
+        <defs>
+          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={stroke} stopOpacity="0.45" />
+            <stop offset="100%" stopColor={stroke} stopOpacity="0.04" />
+          </linearGradient>
+        </defs>
+        {[0, 25, 50, 75, 100].map((v) => {
+          const y = HISTORY_H - HISTORY_PAD_B - (v / 100) * innerH;
+          return (
+            <line
+              key={v}
+              x1={HISTORY_PAD_L}
+              y1={y}
+              x2={HISTORY_W - HISTORY_PAD_R}
+              y2={y}
+              stroke="var(--border)"
+              strokeOpacity="0.35"
+              strokeDasharray="4 5"
+            />
+          );
+        })}
+        <path d={areaPath} fill={`url(#${gradientId})`} />
+        <polyline
+          fill="none"
+          stroke={stroke}
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          points={linePoints}
+        />
+        {chartPoints.map((p0, i) => (
+          <circle
+            key={`${p0.ts}-${i}`}
+            cx={p0.x}
+            cy={p0.y}
+            r={hoverIndex === i ? 3.4 : 1.9}
+            fill={stroke}
+            opacity={hoverIndex === i ? 1 : 0.45}
+          />
+        ))}
+        {activePoint ? (
+          <>
+            <line
+              x1={activePoint.x}
+              y1={HISTORY_PAD_T}
+              x2={activePoint.x}
+              y2={HISTORY_H - HISTORY_PAD_B}
+              stroke={stroke}
+              strokeOpacity="0.5"
+              strokeDasharray="4 5"
+            />
+            <circle cx={activePoint.x} cy={activePoint.y} r={4.5} fill={stroke} />
+          </>
+        ) : null}
+      </svg>
+      {activePoint ? (
+        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/95 px-2 py-1 text-xs shadow-lg backdrop-blur">
+          <p className="font-medium text-[var(--fg)]">{toFixed(activePoint.value, 1)}%</p>
+          <p className="text-[var(--fg-muted)]">{new Date(activePoint.ts).toLocaleString()}</p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function DashboardPage() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -211,29 +352,53 @@ export function DashboardPage() {
   const [verList, setVerList] = useState<string[]>([]);
   const [pendingVersion, setPendingVersion] = useState<string | null>(null);
   const [versionInstalling, setVersionInstalling] = useState(false);
-  const [logOpen, setLogOpen] = useState(false);
-  const [xlogOpen, setXlogOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [backupOpen, setBackupOpen] = useState(false);
   const [configOpen, setConfigOpen] = useState(false);
   const [configText, setConfigText] = useState("");
   const [cpuOpen, setCpuOpen] = useState(false);
   const [memOpen, setMemOpen] = useState(false);
-  const [logRows, setLogRows] = useState(20);
   const [logLevel, setLogLevel] = useState("info");
-  const [logSys, setLogSys] = useState(false);
-  const [logText, setLogText] = useState("");
-  const [xlogHtml, setXlogHtml] = useState("");
+  const [logSource, setLogSource] = useState("all");
+  const [logSearch, setLogSearch] = useState("");
+  const [logAuto, setLogAuto] = useState(true);
+  const [logEntries, setLogEntries] = useState<UnifiedLogEntry[]>([]);
+  const logsBodyRef = useRef<HTMLDivElement | null>(null);
   const [cpuBucket, setCpuBucket] = useState(2);
-  const [cpuLong, setCpuLong] = useState<number[]>([]);
+  const [cpuLong, setCpuLong] = useState<ResourceHistoryPoint[]>([]);
   /** Last points for dashboard sparklines (CPU from API, RAM from status samples). */
   const [cpuPreview, setCpuPreview] = useState<number[]>([]);
-  const [memHistory, setMemHistory] = useState<number[]>([]);
+  const [memHistory, setMemHistory] = useState<ResourceHistoryPoint[]>([]);
+  const [cpuHoverIndex, setCpuHoverIndex] = useState<number | null>(null);
+  const [memHoverIndex, setMemHoverIndex] = useState<number | null>(null);
   const [nodes, setNodes] = useState<{ id: number; name: string }[]>([]);
-  const [xNode, setXNode] = useState("");
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [enabledWidgets, setEnabledWidgets] = useState<DashboardWidgetId[]>(() => loadDashboardWidgets());
+  const [dashboardHwidUserAgentStats, setDashboardHwidUserAgentStats] = useState<
+    { label: string; count: number; percentRaw: number; percentLabel: string }[]
+  >([]);
 
   const ws = usePanelWebSocket();
+
+  const normalizeLogEntry = useCallback((raw: unknown): UnifiedLogEntry | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const entry = raw as IncomingUnifiedLogEntry;
+    const message = String(entry.message ?? entry.msg ?? "").trim();
+    if (!message) return null;
+    const sourceRaw = String(entry.source ?? "panel").toLowerCase();
+    const source: UnifiedLogEntry["source"] =
+      sourceRaw === "xray" || sourceRaw === "node" ? sourceRaw : "panel";
+    const ts = Number(entry.tsUnixMs ?? entry.ts ?? Date.now());
+    return {
+      source,
+      channel: entry.channel ? String(entry.channel) : undefined,
+      level: String(entry.level ?? "info").toLowerCase(),
+      message,
+      ts: Number.isFinite(ts) ? ts : Date.now(),
+      nodeId: entry.nodeId,
+      nodeName: entry.nodeName ? String(entry.nodeName) : undefined,
+    };
+  }, []);
 
   useEffect(() => {
     saveDashboardWidgets(enabledWidgets);
@@ -252,6 +417,36 @@ export function DashboardPage() {
     }
   }, []);
 
+  const pullDashboardHwidUserAgentStats = useCallback(async () => {
+    const unknownLabel = t("pages.clients.hwidUserAgentUnknown", {
+      defaultValue: "Unknown",
+    });
+    const r = await getJson<DashboardClientRow[]>(panel("client/list"));
+    if (!r.success || !r.obj) {
+      setDashboardHwidUserAgentStats([]);
+      return;
+    }
+    const byUserAgent = new Map<string, number>();
+    let total = 0;
+    for (const client of r.obj) {
+      const hwids = Array.isArray(client.hwids) ? client.hwids : [];
+      for (const hwidRow of hwids) {
+        const label = hwidRow.userAgent?.trim() ? hwidRow.userAgent.trim() : unknownLabel;
+        byUserAgent.set(label, (byUserAgent.get(label) ?? 0) + 1);
+        total += 1;
+      }
+    }
+    const stats = Array.from(byUserAgent.entries())
+      .map(([label, count]) => {
+        const percentRaw = total > 0 ? (count / total) * 100 : 0;
+        const percentRounded = Math.round(percentRaw * 10) / 10;
+        const percentLabel = `${Number.isInteger(percentRounded) ? percentRounded.toFixed(0) : percentRounded.toFixed(1)}%`;
+        return { label, count, percentRaw, percentLabel };
+      })
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+    setDashboardHwidUserAgentStats(stats);
+  }, [t]);
+
   useEffect(() => {
     (async () => {
       try {
@@ -264,9 +459,10 @@ export function DashboardPage() {
         /* ignore */
       }
       await pull();
+      await pullDashboardHwidUserAgentStats();
       setLoading(false);
     })();
-  }, [pull]);
+  }, [pull, pullDashboardHwidUserAgentStats]);
 
   useEffect(() => {
     if (!ws) return;
@@ -287,13 +483,20 @@ export function DashboardPage() {
         };
       });
     };
+    const onLog = (payload: unknown) => {
+      const entry = normalizeLogEntry(payload);
+      if (!entry) return;
+      setLogEntries((prev) => [entry, ...prev]);
+    };
     ws.on("status", onStatus);
     ws.on("xray_state", onXray);
+    ws.on("logs_stream", onLog);
     return () => {
       ws.off("status", onStatus);
       ws.off("xray_state", onXray);
+      ws.off("logs_stream", onLog);
     };
-  }, [ws]);
+  }, [ws, normalizeLogEntry]);
 
   useEffect(() => {
     if (!multi) return;
@@ -326,7 +529,12 @@ export function DashboardPage() {
       const r = await getJson<{ t: number; cpu: number }[]>(panel(`api/server/cpuHistory/${cpuBucket}`));
       setSpin(false);
       if (r.success && r.obj) {
-        setCpuLong(r.obj.map((p0) => Math.max(0, Math.min(100, p0.cpu))));
+        setCpuLong(
+          r.obj.map((p0) => ({
+            value: Math.max(0, Math.min(100, p0.cpu)),
+            ts: toUnixMs(Number(p0.t || Date.now())),
+          }))
+        );
       }
     })();
   }, [cpuOpen, cpuBucket]);
@@ -336,8 +544,48 @@ export function DashboardPage() {
 
   useEffect(() => {
     if (memCurrent == null || memTotal == null) return;
-    setMemHistory((prev) => [...prev, pct(memCurrent, memTotal)].slice(-48));
+    setMemHistory((prev) => [...prev, { value: pct(memCurrent, memTotal), ts: Date.now() }].slice(-120));
   }, [memCurrent, memTotal]);
+
+  useEffect(() => {
+    if (!logsOpen || !logAuto) return;
+    const el = logsBodyRef.current;
+    if (!el) return;
+    el.scrollTop = 0;
+  }, [logsOpen, logAuto, logEntries.length, logSearch, logSource]);
+
+  const dashboardHwidUserAgentPie = useMemo(() => {
+    const palette = [
+      "#3b82f6",
+      "#8b5cf6",
+      "#14b8a6",
+      "#f59e0b",
+      "#ef4444",
+      "#10b981",
+      "#06b6d4",
+      "#a855f7",
+      "#f97316",
+      "#84cc16",
+    ];
+    let current = 0;
+    const parts = dashboardHwidUserAgentStats.map((item, index) => {
+      const start = current;
+      current += item.percentRaw;
+      return {
+        ...item,
+        color: palette[index % palette.length],
+        start,
+        end: current,
+      };
+    });
+    const gradient =
+      parts.length > 0
+        ? `conic-gradient(${parts
+            .map((part) => `${part.color} ${part.start}% ${part.end}%`)
+            .join(", ")})`
+        : "conic-gradient(var(--border) 0% 100%)";
+    return { parts, gradient };
+  }, [dashboardHwidUserAgentStats]);
 
   if (loading) {
     return (
@@ -401,6 +649,44 @@ export function DashboardPage() {
       ? `${toFixed(st.cpuSpeedMhz / 1000, 2)} GHz`
       : `${toFixed(st.cpuSpeedMhz, 0)} MHz`
     : "—";
+  const levelRank = (lvl: string) => {
+    const k = String(lvl || "").toLowerCase();
+    if (k.startsWith("err") || k === "error") return 40;
+    if (k.startsWith("warn") || k === "warning") return 30;
+    if (k === "notice") return 25;
+    if (k === "info") return 20;
+    if (k === "debug") return 10;
+    return 0;
+  };
+  const levelBadgeClass = (lvl: string) => {
+    const k = String(lvl || "").toLowerCase();
+    if (k.startsWith("err") || k === "error") {
+      return "border-red-500/40 bg-red-500/10 text-red-300";
+    }
+    if (k.startsWith("warn") || k === "warning") {
+      return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    }
+    if (k === "info" || k === "notice") {
+      return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+    }
+    if (k === "debug") {
+      return "border-violet-500/35 bg-violet-500/10 text-violet-200";
+    }
+    return "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-muted)]";
+  };
+  const filteredLogs = logEntries.filter((row) => {
+    if (logSource !== "all" && row.source !== logSource) return false;
+    // Display filter: show selected level and above (e.g. info => info+notice+warning+error).
+    if (logLevel !== "all" && levelRank(row.level) < levelRank(logLevel)) return false;
+    if (!logSearch.trim()) return true;
+    const q = logSearch.toLowerCase();
+    return (
+      row.message.toLowerCase().includes(q) ||
+      row.level.toLowerCase().includes(q) ||
+      (row.nodeName || "").toLowerCase().includes(q)
+    );
+  }).sort((a, b) => b.ts - a.ts);
+  const visibleLogs = filteredLogs;
 
   const stopX = async () => {
     setSpin(true);
@@ -450,39 +736,18 @@ export function DashboardPage() {
   };
 
   const openLogs = async () => {
+    // Always open logs modal in "info and above" mode.
+    setLogLevel("info");
     setSpin(true);
     try {
-      const r = await postJson<string[]>(panel(`api/server/logs/${logRows}`), {
-        level: logLevel,
-        syslog: logSys,
-      });
+      // 0 = full available history from backend storage.
+      const r = await getJson<unknown[]>(panel("api/server/logs/unified/0"));
       if (r.success) {
-        const lines = Array.isArray(r.obj) ? r.obj : [];
-        setLogText(lines.join("\n"));
-        setLogOpen(true);
-      } else {
-        toast.error(r.msg || t("fail"));
-      }
-    } catch {
-      toast.error(t("fail"));
-    } finally {
-      setSpin(false);
-    }
-  };
-  const openXrayLogs = async () => {
-    setSpin(true);
-    try {
-      const r = await postJson<Record<string, unknown>[]>(panel(`api/server/xraylogs/${logRows}`), {
-        filter: "",
-        showDirect: true,
-        showBlocked: true,
-        showProxy: true,
-        nodeId: xNode || undefined,
-      });
-      if (r.success) {
-        const rows = Array.isArray(r.obj) ? r.obj : [];
-        setXlogHtml(xrayLogTable(rows as Record<string, unknown>[]));
-        setXlogOpen(true);
+        const rows = Array.isArray(r.obj)
+          ? r.obj.map((x) => normalizeLogEntry(x)).filter((x): x is UnifiedLogEntry => Boolean(x))
+          : [];
+        setLogEntries(rows.sort((a, b) => b.ts - a.ts));
+        setLogsOpen(true);
       } else {
         toast.error(r.msg || t("fail"));
       }
@@ -626,7 +891,7 @@ export function DashboardPage() {
                     {sizeFormat(st.mem.current)} / {sizeFormat(st.mem.total)}
                   </p>
                   <div className="mt-1 opacity-90 transition group-hover:opacity-100">
-                    <ResourceSparkline data={memHistory} stroke={ramSparkColor} />
+                    <ResourceSparkline data={memHistory.map((p0) => p0.value)} stroke={ramSparkColor} />
                   </div>
                 </button>
                 <div className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left">
@@ -724,9 +989,6 @@ export function DashboardPage() {
                 {st.xray?.errorMsg ? ` — ${st.xray.errorMsg}` : ""}
               </p>
               <div className="mt-2.5 flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
-                <IconButton label={t("pages.index.logs")} onClick={openXrayLogs}>
-                  <History size={14} />
-                </IconButton>
                 <IconButton label={t("pages.index.stopXray")} onClick={stopX}>
                   <Power size={14} />
                 </IconButton>
@@ -817,6 +1079,60 @@ export function DashboardPage() {
           </Surface>
         </Reveal>
         )}
+
+        <Reveal className="mt-4">
+          <Surface>
+            <div className="mb-2 flex items-center gap-2">
+              <IconTile icon={Users} tone="info" size="sm" />
+              <h3 className="text-sm font-semibold text-[var(--fg)]">
+                {t("pages.clients.hwidUserAgentShareTitle", {
+                  defaultValue: "User-Agent distribution by HWID",
+                })}
+              </h3>
+            </div>
+            <p className="mb-3 text-xs text-[var(--fg-muted)]">
+              {t("pages.index.hwidUserAgentDashboardHint", {
+                defaultValue: "Overall share of registered devices across all clients.",
+              })}
+            </p>
+            {dashboardHwidUserAgentPie.parts.length === 0 ? (
+              <p className="text-sm text-[var(--fg-muted)]">{t("noData")}</p>
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-[auto,1fr] sm:items-start">
+                <div className="mx-auto w-fit">
+                  <div
+                    className="relative h-40 w-40 rounded-full border border-[var(--border)]"
+                    style={{ background: dashboardHwidUserAgentPie.gradient }}
+                    aria-label={t("pages.clients.hwidUserAgentShareTitle", {
+                      defaultValue: "User-Agent distribution by HWID",
+                    })}
+                  >
+                    <div className="absolute inset-[22%] rounded-full bg-[var(--bg-elevated)]" />
+                  </div>
+                </div>
+                <div className="max-h-48 space-y-2 overflow-auto pr-1">
+                  {dashboardHwidUserAgentPie.parts.map((item) => (
+                    <div key={item.label} className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 truncate font-mono text-[var(--fg-muted)]">
+                          {item.label}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-semibold text-[var(--fg)]">
+                        {item.percentLabel}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </Surface>
+        </Reveal>
 
         {showDatabase && (
         <Reveal className="mt-4">
@@ -1040,112 +1356,68 @@ export function DashboardPage() {
         </ul>
       </Modal>
 
-      <Modal open={logOpen} onClose={() => setLogOpen(false)} title={t("pages.index.logs")} width={800}>
+      <Modal open={logsOpen} onClose={() => setLogsOpen(false)} title={t("pages.index.logs")} width={900}>
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <SelectNative
-            className="w-24"
-            value={String(logRows)}
-            onChange={(e) => setLogRows(Number(e.target.value))}
-          >
-            {[10, 20, 50, 100, 500].map((n) => (
-              <option key={n} value={n}>
-                {n}
-              </option>
-            ))}
-          </SelectNative>
-          <SelectNative
-            className="w-36"
-            value={logLevel}
-            onChange={(e) => setLogLevel(e.target.value)}
-          >
-            {["debug", "info", "notice", "warning", "err"].map((x) => (
+          <SelectNative className="w-36" value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+            {["all", "debug", "info", "notice", "warning", "error"].map((x) => (
               <option key={x} value={x}>
                 {x}
               </option>
             ))}
           </SelectNative>
-          <CheckboxField label="SysLog" checked={logSys} onChange={(e) => setLogSys(e.target.checked)} />
-          <Button
-            variant="secondary"
-            onClick={async () => {
-              setSpin(true);
-              try {
-                const r = await postJson<string[]>(panel(`api/server/logs/${logRows}`), {
-                  level: logLevel,
-                  syslog: logSys,
-                });
-                if (r.success) {
-                  const lines = Array.isArray(r.obj) ? r.obj : [];
-                  setLogText(lines.join("\n"));
-                } else {
-                  toast.error(r.msg || t("fail"));
-                }
-              } catch {
-                toast.error(t("fail"));
-              } finally {
-                setSpin(false);
-              }
-            }}
-          >
+          <SelectNative className="w-32" value={logSource} onChange={(e) => setLogSource(e.target.value)}>
+            <option value="all">{t("all")}</option>
+            <option value="panel">panel</option>
+            <option value="xray">xray</option>
+            <option value="node">node</option>
+          </SelectNative>
+          <Input
+            className="min-w-[200px] flex-1"
+            value={logSearch}
+            onChange={(e) => setLogSearch(e.target.value)}
+            placeholder={t("search")}
+          />
+          <Button variant={logAuto ? "primary" : "secondary"} onClick={() => setLogAuto((v) => !v)}>
+            {t("pages.index.toggleAutoScroll", { defaultValue: "Auto-scroll" })}
+          </Button>
+          <Button variant="secondary" onClick={openLogs}>
             {t("refresh")}
           </Button>
         </div>
-        <pre className="mt-2 max-h-[400px] overflow-auto whitespace-pre-wrap text-xs text-[var(--fg-muted)]">
-          {logText}
-        </pre>
-      </Modal>
-
-      <Modal open={xlogOpen} onClose={() => setXlogOpen(false)} title="Xray logs" width="80vw">
-        {multi && (
-          <div className="mb-3 flex flex-wrap items-end gap-2">
-            <div>
-              <label className="mb-1 block text-xs text-[var(--fg-subtle)]">Node</label>
-              <SelectNative
-                className="min-w-[200px]"
-                value={xNode}
-                onChange={(e) => setXNode(e.target.value)}
-              >
-                <option value="">—</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={String(n.id)}>
-                    {n.name}
-                  </option>
-                ))}
-              </SelectNative>
-            </div>
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                setSpin(true);
-                try {
-                  const r = await postJson<Record<string, unknown>[]>(panel(`api/server/xraylogs/${logRows}`), {
-                    filter: "",
-                    showDirect: true,
-                    showBlocked: true,
-                    showProxy: true,
-                    nodeId: xNode || undefined,
-                  });
-                  if (r.success) {
-                    const rows = Array.isArray(r.obj) ? r.obj : [];
-                    setXlogHtml(xrayLogTable(rows as Record<string, unknown>[]));
-                  } else {
-                    toast.error(r.msg || t("fail"));
-                  }
-                } catch {
-                  toast.error(t("fail"));
-                } finally {
-                  setSpin(false);
-                }
-              }}
-            >
-              {t("refresh")}
-            </Button>
-          </div>
-        )}
         <div
-          className="xlog-html max-h-[70vh] overflow-auto text-sm"
-          dangerouslySetInnerHTML={{ __html: xlogHtml }}
-        />
+          ref={logsBodyRef}
+          className="max-h-[45vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]"
+        >
+          <div className="sticky top-0 z-20 grid grid-cols-[150px_90px_120px_1fr] gap-2 border-b border-[var(--border)] bg-[var(--surface)]/95 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)] backdrop-blur supports-[backdrop-filter]:bg-[var(--surface)]/80">
+            <span>{t("pages.index.logTime", { defaultValue: "Time" })}</span>
+            <span>{t("pages.index.logLevel", { defaultValue: "Level" })}</span>
+            <span>{t("pages.index.logSource", { defaultValue: "Source" })}</span>
+            <span>{t("pages.index.logMessage", { defaultValue: "Message" })}</span>
+          </div>
+          <div className="font-mono text-xs">
+            {visibleLogs.map((row, i) => (
+              <div key={`${row.ts}-${i}`} className="grid grid-cols-[150px_90px_120px_1fr] gap-2 border-b border-[var(--border)]/50 px-3 py-1.5 text-[var(--fg-muted)] last:border-b-0">
+                <span>{new Date(row.ts || Date.now()).toLocaleTimeString()}</span>
+                <span
+                  className={`inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${levelBadgeClass(
+                    row.level
+                  )}`}
+                >
+                  {row.level}
+                </span>
+                <span>{row.source === "node" && row.nodeName ? `node:${row.nodeName}` : row.source}</span>
+                <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--fg)]">
+                  {row.message}
+                </span>
+              </div>
+            ))}
+            {visibleLogs.length === 0 ? (
+              <p className="px-3 py-3 text-[var(--fg-subtle)]">
+                {t("pages.index.noLogs", { defaultValue: "No logs" })}
+              </p>
+            ) : null}
+          </div>
+        </div>
       </Modal>
 
       <Modal
@@ -1185,7 +1457,10 @@ export function DashboardPage() {
             setSpin(false);
             if (r.success && r.obj) {
               setCpuLong(
-                r.obj.map((p0) => Math.max(0, Math.min(100, p0.cpu)))
+                r.obj.map((p0) => ({
+                  value: Math.max(0, Math.min(100, p0.cpu)),
+                  ts: toUnixMs(Number(p0.t || Date.now())),
+                }))
               );
             }
           }}
@@ -1203,41 +1478,25 @@ export function DashboardPage() {
             </option>
           ))}
         </SelectNative>
-        <div className="h-[220px] w-full">
-          <svg
-            viewBox="0 0 840 220"
-            width="100%"
-            height="100%"
-            preserveAspectRatio="none"
-            className="text-[var(--accent)]"
-          >
-            <polyline
-              fill="none"
-              stroke={accent}
-              strokeWidth="2"
-              points={resourceHistoryPolylinePoints(cpuLong)}
-            />
-          </svg>
-        </div>
+        <ResourceHistoryChart
+          points={cpuLong}
+          stroke={accent}
+          gradientId="cpuHistoryAreaGradient"
+          hoverIndex={cpuHoverIndex}
+          onHoverIndex={setCpuHoverIndex}
+          onLeave={() => setCpuHoverIndex(null)}
+        />
       </Modal>
 
       <Modal open={memOpen} onClose={() => setMemOpen(false)} title={t("pages.index.memoryHistory")} width={900}>
-        <div className="h-[220px] w-full">
-          <svg
-            viewBox="0 0 840 220"
-            width="100%"
-            height="100%"
-            preserveAspectRatio="none"
-            className="text-[var(--accent)]"
-          >
-            <polyline
-              fill="none"
-              stroke={ramSparkColor}
-              strokeWidth="2"
-              points={resourceHistoryPolylinePoints(memHistory)}
-            />
-          </svg>
-        </div>
+        <ResourceHistoryChart
+          points={memHistory}
+          stroke={ramSparkColor}
+          gradientId="memHistoryAreaGradient"
+          hoverIndex={memHoverIndex}
+          onHoverIndex={setMemHoverIndex}
+          onLeave={() => setMemHoverIndex(null)}
+        />
       </Modal>
 
       <Modal
@@ -1299,21 +1558,3 @@ export function DashboardPage() {
   );
 }
 
-function xrayLogTable(logs: Record<string, unknown>[]) {
-  if (!logs.length) return "<p>No data</p>";
-  let h =
-    "<table class=\"w-full border-collapse text-sm\"><tr><th class=\"border border-[var(--border)] p-2 text-left\">Date</th><th class=\"border border-[var(--border)] p-2\">From</th><th class=\"border border-[var(--border)] p-2\">To</th><th class=\"border border-[var(--border)] p-2\">Inbound</th><th class=\"border border-[var(--border)] p-2\">Outbound</th><th class=\"border border-[var(--border)] p-2\">Email</th></tr>";
-  for (const log of logs.slice().reverse()) {
-    const e = (log.Event as number) || 0;
-    const c = e === 1 ? ' style="color:#e04141"' : e === 2 ? ' style="color:#3c89e8"' : "";
-    h += `<tr${c}><td class="border border-[var(--border)] p-2">${String(log.DateTime ?? "")}</td><td class="border border-[var(--border)] p-2">${String(
-      log.FromAddress ?? ""
-    )}</td><td class="border border-[var(--border)] p-2">${String(
-      log.ToAddress ?? ""
-    )}</td><td class="border border-[var(--border)] p-2">${String(log.Inbound ?? "")}</td><td class="border border-[var(--border)] p-2">${String(
-      log.Outbound ?? ""
-    )}</td><td class="border border-[var(--border)] p-2">${String(log.Email ?? "")}</td></tr>`;
-  }
-  h += "</table>";
-  return h;
-}
