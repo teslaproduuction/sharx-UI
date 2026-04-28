@@ -500,15 +500,23 @@ export function SettingsPage() {
                 </span>
               </div>
             </Row>
-            <Row
-              label={t("pages.settings.remarkModel")}
-              hint={t("pages.settings.remarkModelDesc")}
-            >
+            <div className="space-y-2 px-4 py-3">
+              <div className="text-sm font-medium text-[var(--fg-muted)]">
+                {t("pages.settings.remarkModelLegendTitle", {
+                  defaultValue: "Модель примечания и символ разделения",
+                })}
+              </div>
+              <div className="text-xs leading-relaxed text-[var(--fg-subtle)]">
+                {t("pages.settings.remarkModelLegendIntro", {
+                  defaultValue:
+                    "Первый символ — разделитель частей в названии (подписка/QR). Остальное — порядок полей: i = имя подключения, e = email, o = remark клиента, n = нода, p = хост ноды, r = порт.",
+                })}
+              </div>
               <RemarkModelConstructor
                 value={form.remarkModel}
                 onChange={(model) => patch("remarkModel", model)}
               />
-            </Row>
+            </div>
             <Row label={t("pages.settings.datepicker")} hint={t("pages.settings.datepickerDescription")}>
               <SelectNative
                 className="max-w-md"
@@ -582,6 +590,19 @@ export function SettingsPage() {
                   }
                 }}
                 ariaLabel={t("pages.settings.enableMultiNodeMode", { defaultValue: "Enable multi-node mode" })}
+              />
+            </Row>
+            <Row
+              label={t("pages.settings.enableIPv6", { defaultValue: "Enable IPv6 in dashboard" })}
+              hint={t("pages.settings.enableIPv6Desc", {
+                defaultValue:
+                  "When disabled, dashboard public IPv6 detection is turned off and IPv6 is hidden.",
+              })}
+            >
+              <Switch
+                checked={form.enableIPv6}
+                onChange={(on) => patch("enableIPv6", on)}
+                ariaLabel={t("pages.settings.enableIPv6", { defaultValue: "Enable IPv6 in dashboard" })}
               />
             </Row>
             {form.multiNodeMode ? (

@@ -117,6 +117,8 @@ var defaultValueMap = map[string]string{
 	"ldapDefaultLimitIP":    "0",
 	// Multi-node mode
 	"multiNodeMode": "false", // "true" for multi-mode, "false" for single-mode
+	// Dashboard public IPv6 detection
+	"enableIPv6": "false",
 	"nodeStatsCollectionIntervalSec":       "3",
 	"nodeHealthCheckIntervalSec":           "15",
 	"nodeHealthCheckDegradedIntervalSec":   "5",
@@ -995,6 +997,11 @@ func (s *SettingService) GetMultiNodeMode() (bool, error) {
 // SetMultiNodeMode sets the multi-node mode setting.
 func (s *SettingService) SetMultiNodeMode(enabled bool) error {
 	return s.setBool("multiNodeMode", enabled)
+}
+
+// GetEnableIPv6 returns whether public IPv6 detection is enabled for dashboard status.
+func (s *SettingService) GetEnableIPv6() (bool, error) {
+	return s.getBool("enableIPv6")
 }
 
 const (

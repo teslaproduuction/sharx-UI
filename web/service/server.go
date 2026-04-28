@@ -450,6 +450,11 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		"https://ipv6.myexternalip.com/raw",
 		"https://6.ident.me",
 	}
+	settingService := SettingService{}
+	ipv6Enabled, err := settingService.GetEnableIPv6()
+	if err != nil {
+		ipv6Enabled = false
+	}
 
 	if s.cachedIPv4 == "" {
 		for _, ip4Service := range showIp4ServiceLists {
@@ -460,17 +465,23 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 		}
 	}
 
-	if s.cachedIPv6 == "" && !s.noIPv6 {
-		for _, ip6Service := range showIp6ServiceLists {
-			s.cachedIPv6 = getPublicIP(ip6Service)
-			if s.cachedIPv6 != "N/A" {
-				break
+	if !ipv6Enabled {
+		// Explicitly disabled by panel settings: don't expose/refresh IPv6.
+		s.cachedIPv6 = ""
+		s.noIPv6 = false
+	} else {
+		if s.cachedIPv6 == "" && !s.noIPv6 {
+			for _, ip6Service := range showIp6ServiceLists {
+				s.cachedIPv6 = getPublicIP(ip6Service)
+				if s.cachedIPv6 != "N/A" {
+					break
+				}
 			}
 		}
-	}
 
-	if s.cachedIPv6 == "N/A" {
-		s.noIPv6 = true
+		if s.cachedIPv6 == "N/A" {
+			s.noIPv6 = true
+		}
 	}
 
 	status.PublicIP.IPv4 = s.cachedIPv4
@@ -503,7 +514,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	}
 
 	// Node statistics (only if multi-node mode is enabled)
-	settingService := SettingService{}
+	settingService = SettingService{}
 	allSetting, err := settingService.GetAllSetting()
 	if err == nil && allSetting != nil && allSetting.MultiNodeMode {
 		nodeService := NodeService{}
