@@ -6,16 +6,13 @@ import (
 	"context"
 	"crypto/tls"
 	"io"
-	"io/fs"
 	"net"
 	"net/http"
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
-	webpkg "github.com/konstpic/sharx-code/v2/web"
 	"github.com/konstpic/sharx-code/v2/web/locale"
 	"github.com/konstpic/sharx-code/v2/web/middleware"
 	"github.com/konstpic/sharx-code/v2/web/network"
@@ -104,78 +101,8 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	engine.SetFuncMap(map[string]any{"i18n": i18nWebFunc})
 
-	// Legacy subpage.html removed: HTML requests redirect to the React panel page.
-
-	// Assets: use disk if present, fallback to embedded
-	// Serve under both root (/assets) and under the subscription path prefix (LinksPath + "assets")
-	// so reverse proxies with a URI prefix can load assets correctly.
-	// Determine LinksPath earlier to compute prefixed assets mount.
-	// Note: LinksPath always starts and ends with "/" (validated in settings).
-	var linksPathForAssets string
-	if LinksPath == "/" {
-		linksPathForAssets = "/assets"
-	} else {
-		// ensure single slash join
-		linksPathForAssets = strings.TrimRight(LinksPath, "/") + "/assets"
-	}
-
-	// Mount assets in multiple paths to handle different URL patterns
-	var assetsFS http.FileSystem
-	if _, err := os.Stat("web/assets"); err == nil {
-		assetsFS = http.FS(os.DirFS("web/assets"))
-	} else {
-		if subFS, err := fs.Sub(webpkg.EmbeddedAssets(), "assets"); err == nil {
-			assetsFS = http.FS(subFS)
-		} else {
-			logger.Error("sub: failed to mount embedded assets:", err)
-		}
-	}
-
-	if assetsFS != nil {
-		engine.StaticFS("/assets", assetsFS)
-		if linksPathForAssets != "/assets" {
-			engine.StaticFS(linksPathForAssets, assetsFS)
-		}
-
-		// Add middleware to handle dynamic asset paths with subid
-		// This handles both LinksPath == "/" (pattern: /{subid}/assets/...) and LinksPath != "/" (pattern: /sub/path/{subid}/assets/...)
-		engine.Use(func(c *gin.Context) {
-			path := c.Request.URL.Path
-			
-			// Pattern 1: LinksPath == "/" -> /{subid}/assets/...
-			if LinksPath == "/" {
-				// Match pattern: /{subid}/assets/...
-				// Extract subid and asset path
-				parts := strings.Split(path, "/")
-				if len(parts) >= 4 && parts[1] != "" && parts[2] == "assets" {
-					// parts[0] is "", parts[1] is subid, parts[2] is "assets", parts[3:] is asset path
-					assetPath := strings.Join(parts[3:], "/")
-					if assetPath != "" {
-						c.FileFromFS(assetPath, assetsFS)
-						c.Abort()
-						return
-					}
-				}
-			} else {
-				// Pattern 2: LinksPath != "/" -> /sub/path/{subid}/assets/...
-				pathPrefix := strings.TrimRight(LinksPath, "/") + "/"
-				if strings.HasPrefix(path, pathPrefix) && strings.Contains(path, "/assets/") {
-					// Extract the asset path after /assets/
-					assetsIndex := strings.Index(path, "/assets/")
-					if assetsIndex != -1 {
-						assetPath := path[assetsIndex+8:] // +8 to skip "/assets/"
-						if assetPath != "" {
-							// Serve the asset file
-							c.FileFromFS(assetPath, assetsFS)
-							c.Abort()
-							return
-						}
-					}
-				}
-			}
-			c.Next()
-		})
-	}
+	// Legacy subpage.html and legacy assets were removed:
+	// browser requests are redirected to the React public subscription page.
 
 	g := engine.Group("/")
 
