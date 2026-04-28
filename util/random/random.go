@@ -4,6 +4,11 @@ package random
 import (
 	"crypto/rand"
 	"math/big"
+	mrand "math/rand"
+	"sync"
+	"time"
+
+	"github.com/konstpic/sharx-code/v2/logger"
 )
 
 var (
@@ -13,6 +18,9 @@ var (
 	numLowerSeq [36]rune
 	numUpperSeq [36]rune
 	allSeq      [62]rune
+
+	fallbackMu sync.Mutex
+	fallbackR  = mrand.New(mrand.NewSource(time.Now().UnixNano()))
 )
 
 // init initializes the character sequences used for random string generation.
@@ -43,7 +51,16 @@ func Seq(n int) string {
 	for i := range n {
 		idx, err := rand.Int(rand.Reader, big.NewInt(int64(len(allSeq))))
 		if err != nil {
-			panic("crypto/rand failed: " + err.Error())
+			logger.Emit(logger.Entry{
+				Level:     "error",
+				Component: "random",
+				Msg:       "random: crypto/rand failed; falling back to PRNG: " + err.Error(),
+			})
+			fallbackMu.Lock()
+			j := fallbackR.Intn(len(allSeq))
+			fallbackMu.Unlock()
+			runes[i] = allSeq[j]
+			continue
 		}
 		runes[i] = allSeq[idx.Int64()]
 	}
@@ -55,7 +72,18 @@ func Num(n int) int {
 	bn := big.NewInt(int64(n))
 	r, err := rand.Int(rand.Reader, bn)
 	if err != nil {
-		panic("crypto/rand failed: " + err.Error())
+		logger.Emit(logger.Entry{
+			Level:     "error",
+			Component: "random",
+			Msg:       "random: crypto/rand failed; falling back to PRNG: " + err.Error(),
+		})
+		if n <= 0 {
+			return 0
+		}
+		fallbackMu.Lock()
+		v := fallbackR.Intn(n)
+		fallbackMu.Unlock()
+		return v
 	}
 	return int(r.Int64())
 }

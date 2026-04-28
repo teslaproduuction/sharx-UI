@@ -1,6 +1,7 @@
 package xray
 
 import (
+	"net"
 	"regexp"
 	"runtime"
 	"strings"
@@ -16,6 +17,34 @@ func NewLogWriter() *LogWriter {
 // LogWriter processes and filters log output from the Xray process, handling crash detection and message filtering.
 type LogWriter struct {
 	lastLine string
+}
+
+var (
+	xrayStructuredLineRegex = regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6}) \[([^\]]+)\] (.+)$`)
+	xrayFromRegex           = regexp.MustCompile(`(?i)\sfrom\s+([^\s]+)`)
+	xrayEmailRegex          = regexp.MustCompile(`(?i)\bemail:\s*([^\s]+)`)
+)
+
+func normalizeXrayInfoMessage(msg string) (string, bool) {
+	raw := strings.TrimSpace(msg)
+	if raw == "" {
+		return raw, false
+	}
+	fromMatch := xrayFromRegex.FindStringSubmatch(raw)
+	emailMatch := xrayEmailRegex.FindStringSubmatch(raw)
+	if len(fromMatch) < 2 || len(emailMatch) < 2 {
+		return raw, false
+	}
+	ip := strings.TrimSpace(strings.TrimPrefix(fromMatch[1], "/"))
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		ip = host
+	}
+	ip = strings.Trim(ip, "[]")
+	email := strings.TrimSpace(emailMatch[1])
+	if ip == "" || email == "" {
+		return raw, false
+	}
+	return "user-connected email=" + email + " ip=" + ip, true
 }
 
 // Write processes and filters log output from the Xray process, handling crash detection and message filtering.
@@ -42,46 +71,101 @@ func (lw *LogWriter) Write(m []byte) (n int, err error) {
 		return len(m), nil
 	}
 
-	regex := regexp.MustCompile(`^(\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2}\.\d{6}) \[([^\]]+)\] (.+)$`)
 	messages := strings.SplitSeq(message, "\n")
 
 	for msg := range messages {
-		matches := regex.FindStringSubmatch(msg)
+		matches := xrayStructuredLineRegex.FindStringSubmatch(msg)
 
 		if len(matches) > 3 {
 			level := matches[2]
 			msgBody := matches[3]
 			msgBodyLower := strings.ToLower(msgBody)
+			normalizedMsg, hasUserConn := normalizeXrayInfoMessage(msgBody)
 
 			if strings.Contains(msgBodyLower, "tls handshake error") ||
 				strings.Contains(msgBodyLower, "connection ends") {
-				logger.Debug("XRAY: " + msgBody)
+				logger.Emit(logger.Entry{
+					Level:     "debug",
+					Source:    "xray",
+					Msg:       msgBody,
+					Channel:   "access",
+					Component: "xray",
+				})
 				lw.lastLine = ""
 				continue
 			}
 
 			// Determine log level for xray
 			var logLevel string
+			if hasUserConn {
+				logLevel = "info"
+				logger.Emit(logger.Entry{
+					Level:     logLevel,
+					Source:    "xray",
+					Msg:       normalizedMsg,
+					Channel:   "access",
+					Component: "xray",
+				})
+				logger.PushLogToLokiWithComponent(logLevel, normalizedMsg, "xray", "")
+				lw.lastLine = ""
+				continue
+			}
 			if strings.Contains(msgBodyLower, "failed") {
-				logLevel = "ERROR"
-				logger.Error("XRAY: " + msgBody)
+				logLevel = "error"
+				logger.Emit(logger.Entry{
+					Level:     logLevel,
+					Source:    "xray",
+					Msg:       msgBody,
+					Channel:   "access",
+					Component: "xray",
+				})
 			} else {
 				switch level {
 				case "Debug":
-					logLevel = "DEBUG"
-					logger.Debug("XRAY: " + msgBody)
+					logLevel = "debug"
+					logger.Emit(logger.Entry{
+						Level:     logLevel,
+						Source:    "xray",
+						Msg:       msgBody,
+						Channel:   "access",
+						Component: "xray",
+					})
 				case "Info":
-					logLevel = "INFO"
-					logger.Info("XRAY: " + msgBody)
+					logLevel = "info"
+					logger.Emit(logger.Entry{
+						Level:     logLevel,
+						Source:    "xray",
+						Msg:       msgBody,
+						Channel:   "access",
+						Component: "xray",
+					})
 				case "Warning":
-					logLevel = "WARNING"
-					logger.Warning("XRAY: " + msgBody)
+					logLevel = "warn"
+					logger.Emit(logger.Entry{
+						Level:     logLevel,
+						Source:    "xray",
+						Msg:       msgBody,
+						Channel:   "access",
+						Component: "xray",
+					})
 				case "Error":
-					logLevel = "ERROR"
-					logger.Error("XRAY: " + msgBody)
+					logLevel = "error"
+					logger.Emit(logger.Entry{
+						Level:     logLevel,
+						Source:    "xray",
+						Msg:       msgBody,
+						Channel:   "access",
+						Component: "xray",
+					})
 				default:
-					logLevel = "DEBUG"
-					logger.Debug("XRAY: " + msg)
+					logLevel = "debug"
+					logger.Emit(logger.Entry{
+						Level:     logLevel,
+						Source:    "xray",
+						Msg:       msg,
+						Channel:   "access",
+						Component: "xray",
+					})
 				}
 			}
 			// Also send directly to Loki with xray component
@@ -89,21 +173,53 @@ func (lw *LogWriter) Write(m []byte) (n int, err error) {
 			lw.lastLine = ""
 		} else if msg != "" {
 			msgLower := strings.ToLower(msg)
+			normalizedMsg, hasUserConn := normalizeXrayInfoMessage(msg)
 
 			if strings.Contains(msgLower, "tls handshake error") ||
 				strings.Contains(msgLower, "connection ends") {
-				logger.Debug("XRAY: " + msg)
+				logger.Emit(logger.Entry{
+					Level:     "debug",
+					Source:    "xray",
+					Msg:       msg,
+					Channel:   "access",
+					Component: "xray",
+				})
 				lw.lastLine = msg
 				continue
 			}
 
 			var logLevel string
+			if hasUserConn {
+				logLevel = "info"
+				logger.Emit(logger.Entry{
+					Level:     logLevel,
+					Source:    "xray",
+					Msg:       normalizedMsg,
+					Channel:   "access",
+					Component: "xray",
+				})
+				logger.PushLogToLokiWithComponent(logLevel, normalizedMsg, "xray", "")
+				lw.lastLine = msg
+				continue
+			}
 			if strings.Contains(msgLower, "failed") {
-				logLevel = "ERROR"
-				logger.Error("XRAY: " + msg)
+				logLevel = "error"
+				logger.Emit(logger.Entry{
+					Level:     logLevel,
+					Source:    "xray",
+					Msg:       msg,
+					Channel:   "access",
+					Component: "xray",
+				})
 			} else {
-				logLevel = "DEBUG"
-				logger.Debug("XRAY: " + msg)
+				logLevel = "debug"
+				logger.Emit(logger.Entry{
+					Level:     logLevel,
+					Source:    "xray",
+					Msg:       msg,
+					Channel:   "access",
+					Component: "xray",
+				})
 			}
 			// Also send directly to Loki with xray component
 			logger.PushLogToLokiWithComponent(logLevel, msg, "xray", "")

@@ -118,15 +118,17 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
     () => p("panel/xray-core-config-profiles").replace(/\/$/, ""),
     [],
   );
+  const xrayGeoHref = useMemo(() => p("panel/xray/geo").replace(/\/$/, ""), []);
   const inXray = useMemo(() => {
     const u = (pathname || "").replace(/\/$/, "") || "/";
     return (
       u === xrayListHref ||
       u.startsWith(`${xrayListHref}/`) ||
       u === xrayProfilesHref ||
-      u.startsWith(`${xrayProfilesHref}/`)
+      u.startsWith(`${xrayProfilesHref}/`) ||
+      u === xrayGeoHref
     );
-  }, [pathname, xrayListHref, xrayProfilesHref]);
+  }, [pathname, xrayListHref, xrayProfilesHref, xrayGeoHref]);
 
   useEffect(() => {
     if (inSettings && !prevInSettings.current) {
@@ -313,6 +315,7 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
                 const isTemplate = u === xrayListHref;
                 const isProfiles =
                   u === xrayProfilesHref || u.startsWith(`${xrayProfilesHref}/`);
+                const isGeo = u === xrayGeoHref || u.startsWith(`${xrayGeoHref}/`);
                 return (
                   <div key="nav-xray" className="flex flex-col gap-0.5">
                     <div className="flex w-full min-w-0 items-stretch gap-0.5">
@@ -347,6 +350,15 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
                           onClick={closeMobile}
                         >
                           <span className="min-w-0 pl-0.5">{t("menu.xrayTemplate")}</span>
+                        </Link>
+                        <Link
+                          href={linkP("panel/xray/geo")}
+                          className={`${navLinkClass(isGeo)} panel-menu-link--sub`}
+                          onClick={closeMobile}
+                        >
+                          <span className="min-w-0 pl-0.5">
+                            {t("menu.xrayGeoFiles", { defaultValue: "Geo-files" })}
+                          </span>
                         </Link>
                         {multi ? (
                           <Link

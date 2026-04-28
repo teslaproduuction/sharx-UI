@@ -31,6 +31,32 @@ var ErrXrayNotReady = errors.New("XRAY is not running")
 
 const sessionIPBlockRoutingOutboundTag = "blocked"
 
+const (
+	nodeXrayAccessLogPath = "/dev/stderr"
+	nodeXrayErrorLogPath  = "/dev/stderr"
+)
+
+func ensureNodeXrayLoggingDefaults(cfg *xray.Config) {
+	if cfg == nil {
+		return
+	}
+	logObj := map[string]any{}
+	if len(cfg.LogConfig) > 0 {
+		_ = json.Unmarshal(cfg.LogConfig, &logObj)
+	}
+	if logObj == nil {
+		logObj = map[string]any{}
+	}
+
+	logObj["loglevel"] = "debug"
+	logObj["access"] = nodeXrayAccessLogPath
+	logObj["error"] = nodeXrayErrorLogPath
+
+	if b, err := json.Marshal(logObj); err == nil {
+		cfg.LogConfig = json_util.RawMessage(b)
+	}
+}
+
 // NodeStats represents traffic and online clients statistics from a node.
 type NodeStats struct {
 	Traffic       []*xray.Traffic       `json:"traffic"`
@@ -263,6 +289,7 @@ func (m *Manager) ApplyConfig(configJSON []byte) error {
 	if err := json.Unmarshal(configJSON, &newConfig); err != nil {
 		return fmt.Errorf("failed to parse config: %w", err)
 	}
+	ensureNodeXrayLoggingDefaults(&newConfig)
 	xray.EnsureAPIServicesRoutingService(&newConfig)
 	xray.EnsureAPIRoutingOutbound(&newConfig)
 

@@ -16,6 +16,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
+	"github.com/konstpic/sharx-code/v2/web/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -127,8 +128,8 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 	const sigHeader = "X-Sharx-Signature"
 
 	type PushLogRequest struct {
-		NodeAddress string   `json:"nodeAddress,omitempty"`
-		Logs        []string `json:"logs" binding:"required"`
+		NodeAddress string         `json:"nodeAddress,omitempty"`
+		Entries     []logger.Entry `json:"entries,omitempty"`
 	}
 
 	body, err := io.ReadAll(c.Request.Body)
@@ -144,8 +145,8 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
 		return
 	}
-	if len(req.Logs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "logs is required"})
+	if len(req.Entries) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "entries is required"})
 		return
 	}
 
@@ -190,57 +191,58 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 
 	// Log which node is sending logs (for debugging)
 	logger.Debugf("Received %d logs from node: %s (ID: %d, Address: %s)",
-		len(req.Logs), node.Name, node.Id, node.Address)
+		len(req.Entries), node.Name, node.Id, node.Address)
 
-	// Process and add logs to panel buffer
-	for _, logLine := range req.Logs {
-		if logLine == "" {
-			continue
-		}
-
-		// Parse log line: format is "timestamp level - message"
-		var level string
-		var message string
-
-		if idx := strings.Index(logLine, " - "); idx != -1 {
-			parts := strings.SplitN(logLine, " - ", 2)
-			if len(parts) == 2 {
-				levelPart := strings.TrimSpace(parts[0])
-				levelFields := strings.Fields(levelPart)
-				if len(levelFields) >= 2 {
-					level = strings.ToUpper(levelFields[len(levelFields)-1])
-					message = parts[1]
-				} else {
-					level = "INFO"
-					message = parts[1]
-				}
-			} else {
-				level = "INFO"
-				message = logLine
-			}
-		} else {
-			level = "INFO"
-			message = logLine
-		}
-
-		// Add log to panel buffer with node prefix
-		formattedMessage := fmt.Sprintf("[Node: %s] %s", node.Name, message)
-		switch level {
-		case "DEBUG":
-			logger.Debugf("%s", formattedMessage)
-		case "WARNING":
-			logger.Warningf("%s", formattedMessage)
-		case "ERROR":
-			logger.Errorf("%s", formattedMessage)
-		case "NOTICE":
-			logger.Noticef("%s", formattedMessage)
+	normalizeLevel := func(level string) string {
+		l := strings.ToLower(strings.TrimSpace(level))
+		switch l {
+		case "debug":
+			return "debug"
+		case "info":
+			return "info"
+		case "warn", "warning":
+			return "warn"
+		case "error":
+			return "error"
+		case "notice":
+			// Keep UI level-set stable (notice behaves like info).
+			return "info"
 		default:
-			logger.Infof("%s", formattedMessage)
+			return "info"
 		}
+	}
 
-		// Also send to Loki with node component and node ID
+	emitFromNode := func(level string, message string, ts string) {
+		message = strings.TrimSpace(message)
+		if message == "" {
+			return
+		}
+		level = normalizeLevel(level)
 		nodeIDStr := fmt.Sprintf("%d", node.Id)
-		logger.PushLogToLokiWithComponent(level, message, "node", nodeIDStr)
+		logger.Emit(logger.Entry{
+			Ts:        strings.TrimSpace(ts),
+			Level:     level,
+			Source:    "node",
+			Msg:       fmt.Sprintf("[Node: %s] %s", node.Name, message),
+			NodeID:    nodeIDStr,
+			Channel:   "service",
+			Component: "node",
+		})
+
+		websocket.BroadcastLogsStream(logger.Entry{
+			Ts:        strings.TrimSpace(ts),
+			Level:     level,
+			Source:    websocket.LogStreamSourceNode,
+			Msg:       message,
+			NodeID:    nodeIDStr,
+			NodeName:  node.Name,
+			Channel:   "service",
+			Component: "node",
+		})
+	}
+
+	for _, e := range req.Entries {
+		emitFromNode(e.Level, e.Msg, e.Ts)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Logs received"})

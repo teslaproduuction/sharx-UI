@@ -4,12 +4,13 @@ package database
 import (
 	"embed"
 	"fmt"
-	"log"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/konstpic/sharx-code/v2/logger"
 
 	"gorm.io/gorm"
 )
@@ -93,13 +94,13 @@ func (m *Migrator) LoadMigrations() ([]MigrationFile, error) {
 		baseName := strings.TrimSuffix(entry.Name(), ".sql")
 		parts := strings.SplitN(baseName, "_", 2)
 		if len(parts) < 2 {
-			log.Printf("Warning: skipping migration file with invalid name format: %s", entry.Name())
+			logger.Warningf("DB migrations: skipping migration file with invalid name format: %s", entry.Name())
 			continue
 		}
 
 		version, err := strconv.ParseInt(parts[0], 10, 64)
 		if err != nil {
-			log.Printf("Warning: skipping migration file with invalid version: %s", entry.Name())
+			logger.Warningf("DB migrations: skipping migration file with invalid version: %s", entry.Name())
 			continue
 		}
 
@@ -151,7 +152,7 @@ func (m *Migrator) ApplyMigration(migration MigrationFile) error {
 		}
 		// If migration already exists, just continue (it's already recorded)
 
-		log.Printf("Applied migration: %s (version %d)", migration.Name, migration.Version)
+		logger.Infof("DB migrations: applied %s (version %d)", migration.Name, migration.Version)
 		return nil
 	})
 }
@@ -189,14 +190,14 @@ func (m *Migrator) Migrate() error {
 		if !applied[migration.Version] {
 			appliedCount++
 		} else {
-			log.Printf("Re-applied migration: %s (version %d) - ensuring consistency", migration.Name, migration.Version)
+			logger.Infof("DB migrations: re-applied %s (version %d) - ensuring consistency", migration.Name, migration.Version)
 		}
 	}
 
 	if appliedCount > 0 {
-		log.Printf("Applied %d migration(s)", appliedCount)
+		logger.Infof("DB migrations: applied %d migration(s)", appliedCount)
 	} else {
-		log.Printf("Database is up to date, no migrations to apply")
+		logger.Info("DB migrations: database is up to date, no migrations to apply")
 	}
 
 	return nil

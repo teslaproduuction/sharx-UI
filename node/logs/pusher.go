@@ -22,13 +22,17 @@ type LogPusher struct {
 	panelURL    string
 	hmacKey     [32]byte
 	nodeAddress string // Node's own address for identification
-	logBuffer  []string
-	bufferMu   sync.Mutex
+	logBuffer []nodeLogItem
+	bufferMu  sync.Mutex
 	client     *http.Client
 	enabled    bool
 	lastPush   time.Time
 	pushTicker *time.Ticker
 	stopCh     chan struct{}
+}
+
+type nodeLogItem struct {
+	Entry logger.Entry
 }
 
 var (
@@ -79,7 +83,7 @@ func InitLogPusher(nodeAddress string) {
 			panelURL:    panelURL,
 			hmacKey:     hmacK,
 			nodeAddress: nodeAddress,
-			logBuffer:   make([]string, 0, 10),
+			logBuffer:   make([]nodeLogItem, 0, 10),
 			client: &http.Client{
 				Timeout: 5 * time.Second,
 			},
@@ -160,7 +164,7 @@ func SetPanelURL(url string) {
 		pusher = &LogPusher{
 			hmacKey:     hk,
 			nodeAddress: nodeAddress,
-			logBuffer:   make([]string, 0, 10),
+			logBuffer:   make([]nodeLogItem, 0, 10),
 			client: &http.Client{
 				Timeout: 5 * time.Second,
 			},
@@ -192,7 +196,6 @@ func SetPanelURL(url string) {
 	}
 }
 
-
 // PushLog adds a log entry to the buffer for sending to panel.
 func PushLog(logLine string) {
 	pusherMu.RLock()
@@ -223,10 +226,25 @@ func PushLog(logLine string) {
 		return
 	}
 
+	// Prefer structured JSON line produced by logger.Emit (NDJSON).
+	var e logger.Entry
+	if err := json.Unmarshal([]byte(logLine), &e); err != nil {
+		// Node log pusher is structured-only. Ignore non-JSON lines to avoid
+		// reintroducing legacy parsing across the system.
+		return
+	}
+	if strings.TrimSpace(e.Source) == "" {
+		e.Source = "node"
+	}
+
+	item := nodeLogItem{
+		Entry: e,
+	}
+
 	pusherLocal.bufferMu.Lock()
 	defer pusherLocal.bufferMu.Unlock()
 
-	pusherLocal.logBuffer = append(pusherLocal.logBuffer, logLine)
+	pusherLocal.logBuffer = append(pusherLocal.logBuffer, item)
 
 	// If buffer is getting large, push immediately
 	if len(pusherLocal.logBuffer) >= 10 {
@@ -241,12 +259,12 @@ func (lp *LogPusher) run() {
 		case <-lp.pushTicker.C:
 			lp.bufferMu.Lock()
 			if len(lp.logBuffer) > 0 {
-				logsToPush := make([]string, len(lp.logBuffer))
-				copy(logsToPush, lp.logBuffer)
+				itemsToPush := make([]nodeLogItem, len(lp.logBuffer))
+				copy(itemsToPush, lp.logBuffer)
 				lp.logBuffer = lp.logBuffer[:0]
 				lp.bufferMu.Unlock()
 
-				go lp.pushLogs(logsToPush)
+				go lp.pushLogs(itemsToPush)
 			} else {
 				lp.bufferMu.Unlock()
 			}
@@ -264,17 +282,17 @@ func (lp *LogPusher) push() {
 		return
 	}
 
-	logsToPush := make([]string, len(lp.logBuffer))
-	copy(logsToPush, lp.logBuffer)
+	itemsToPush := make([]nodeLogItem, len(lp.logBuffer))
+	copy(itemsToPush, lp.logBuffer)
 	lp.logBuffer = lp.logBuffer[:0]
 	lp.bufferMu.Unlock()
 
-	lp.pushLogs(logsToPush)
+	lp.pushLogs(itemsToPush)
 }
 
 // pushLogs sends logs to the panel.
-func (lp *LogPusher) pushLogs(logs []string) {
-	if len(logs) == 0 || strings.TrimSpace(lp.nodeAddress) == "" {
+func (lp *LogPusher) pushLogs(items []nodeLogItem) {
+	if len(items) == 0 || strings.TrimSpace(lp.nodeAddress) == "" {
 		return
 	}
 
@@ -287,17 +305,38 @@ func (lp *LogPusher) pushLogs(logs []string) {
 
 	// Don't log here to avoid recursion - this function is called from logger
 
-	reqBody := map[string]interface{}{"logs": logs, "nodeAddress": lp.nodeAddress}
+	entries := make([]logger.Entry, 0, len(items))
+	for _, it := range items {
+		entries = append(entries, it.Entry)
+	}
+
+	// Structured-only: unified logger across node -> panel.
+	reqBody := map[string]interface{}{
+		"nodeAddress": lp.nodeAddress,
+		"entries":     entries,
+	}
 
 	jsonData, err := json.Marshal(reqBody)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to marshal log push request: %v\n", err)
+		logger.Emit(logger.Entry{
+			Level:     "error",
+			Source:    "node",
+			Component: "log_pusher",
+			Channel:   "service",
+			Msg:       fmt.Sprintf("log_pusher: failed to marshal push request: %v", err),
+		})
 		return
 	}
 
 	req, err := http.NewRequest("POST", panelEndpoint, bytes.NewBuffer(jsonData))
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create log push request: %v\n", err)
+		logger.Emit(logger.Entry{
+			Level:     "error",
+			Source:    "node",
+			Component: "log_pusher",
+			Channel:   "service",
+			Msg:       fmt.Sprintf("log_pusher: failed to create push request: %v", err),
+		})
 		return
 	}
 

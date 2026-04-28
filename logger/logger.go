@@ -3,10 +3,10 @@
 package logger
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 
@@ -24,13 +24,38 @@ var (
 	logger  *logging.Logger
 	logFile *os.File
 
-	// logBuffer maintains recent log entries in memory for web UI retrieval
-	logBuffer []struct {
-		time  string
-		level logging.Level
-		log   string
-	}
+	// defaultSource is emitted in every log entry unless overridden.
+	// Values: panel|node|xray
+	defaultSource = "panel"
+
+	// logBuffer maintains recent log entries in memory for web UI retrieval.
+	// It stores structured entries; GetLogs serializes them as NDJSON.
+	logBuffer []Entry
 )
+
+// Entry is the single-source-of-truth structured log record (NDJSON on disk/wire).
+// One Entry must serialize to exactly one JSON object per line.
+type Entry struct {
+	Ts        string `json:"ts"`
+	TsUnixMs  int64  `json:"tsUnixMs,omitempty"`
+	Level     string `json:"level"`  // debug|info|warn|error
+	Source    string `json:"source"` // panel|node|xray
+	Msg       string `json:"msg"`
+	NodeID    string `json:"nodeId,omitempty"`
+	NodeName  string `json:"nodeName,omitempty"`
+	Channel   string `json:"channel,omitempty"`
+	Component string `json:"component,omitempty"`
+}
+
+// SetSource sets the default `source` field for subsequent logs from this process.
+// Expected values: panel|node|xray. Unknown values are accepted but discouraged.
+func SetSource(source string) {
+	source = strings.TrimSpace(strings.ToLower(source))
+	if source == "" {
+		return
+	}
+	defaultSource = source
+}
 
 // InitLogger initializes dual logging backends: console/syslog and file.
 // Console logging uses the specified level, file logging always uses DEBUG level.
@@ -50,7 +75,12 @@ func InitLoggerWithLoki(level logging.Level, lokiURL string, grafanaEnabled bool
 	if grafanaEnabled && lokiURL != "" {
 		err := InitLokiClient(lokiURL, "x-ui", nodeID)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to initialize Loki client: %v\n", err)
+			writeDirect(Entry{
+				Level:     "error",
+				Source:    defaultSource,
+				Msg:       fmt.Sprintf("logger: failed to initialize Loki client: %v", err),
+				Component: "loki",
+			})
 		} else {
 			// When Grafana is enabled, disable file and console logging
 			// Only use minimal console for critical errors
@@ -86,36 +116,11 @@ func InitLoggerWithLoki(level logging.Level, lokiURL string, grafanaEnabled bool
 	logger = newLogger
 }
 
-// initDefaultBackend creates the console/syslog logging backend.
-// Windows: Uses stderr directly (no syslog support)
-// Unix-like: Attempts syslog, falls back to stderr
+// initDefaultBackend creates the console logging backend.
+// We intentionally avoid syslog to keep log lines as machine-parseable NDJSON.
 func initDefaultBackend() logging.Backend {
-	var backend logging.Backend
-	includeTime := false
-
-	if runtime.GOOS == "windows" {
-		// Windows: Use stderr directly (no syslog support)
-		backend = logging.NewLogBackend(os.Stderr, "", 0)
-		includeTime = true
-	} else {
-		// Unix-like: Try syslog, fallback to stderr
-		// Try syslog with "x-ui" tag first
-		if syslogBackend, err := logging.NewSyslogBackend("x-ui"); err == nil {
-			backend = syslogBackend
-		} else {
-			// Try with empty tag as fallback
-			if syslogBackend2, err2 := logging.NewSyslogBackend(""); err2 == nil {
-				backend = syslogBackend2
-			} else {
-				// Syslog unavailable - use stderr (normal in containers/Docker)
-				// In containers, syslog is often not configured - this is normal and expected
-				backend = logging.NewLogBackend(os.Stderr, "", 0)
-				includeTime = os.Getppid() > 0
-			}
-		}
-	}
-
-	return logging.NewBackendFormatter(backend, newFormatter(includeTime))
+	backend := logging.NewLogBackend(os.Stderr, "", 0)
+	return logging.NewBackendFormatter(backend, newFormatter(false))
 }
 
 // initFileBackend creates the file logging backend.
@@ -123,14 +128,24 @@ func initDefaultBackend() logging.Backend {
 func initFileBackend() logging.Backend {
 	logDir := config.GetLogFolder()
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
-		fmt.Fprintf(os.Stderr, "failed to create log folder %s: %v\n", logDir, err)
+		writeDirect(Entry{
+			Level:     "error",
+			Source:    defaultSource,
+			Msg:       fmt.Sprintf("logger: failed to create log folder %s: %v", logDir, err),
+			Component: "logger",
+		})
 		return nil
 	}
 
 	logPath := filepath.Join(logDir, logFileName)
 	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o660)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "failed to open log file %s: %v\n", logPath, err)
+		writeDirect(Entry{
+			Level:     "error",
+			Source:    defaultSource,
+			Msg:       fmt.Sprintf("logger: failed to open log file %s: %v", logPath, err),
+			Component: "logger",
+		})
 		return nil
 	}
 
@@ -146,11 +161,12 @@ func initFileBackend() logging.Backend {
 
 // newFormatter creates a log formatter with optional timestamp.
 func newFormatter(withTime bool) logging.Formatter {
-	format := `%{level} - %{message}`
-	if withTime {
-		format = `%{time:` + timeFormat + `} %{level} - %{message}`
-	}
-	return logging.MustStringFormatter(format)
+	// We emit structured JSON as the log message, so the formatter must not prepend
+	// its own timestamp/level, otherwise the log stops being machine-parseable NDJSON.
+	//
+	// Some backends (e.g. syslog) may add their own metadata regardless; that's fine.
+	_ = withTime
+	return logging.MustStringFormatter(`%{message}`)
 }
 
 // CloseLogger closes the log file and cleans up resources.
@@ -162,93 +178,205 @@ func CloseLogger() {
 	}
 }
 
+func ensureLogger() {
+	if logger != nil {
+		return
+	}
+	// Safe fallback: stderr backend, debug level.
+	newLogger := logging.MustGetLogger("x-ui")
+	if consoleBackend := initDefaultBackend(); consoleBackend != nil {
+		leveledBackend := logging.AddModuleLevel(consoleBackend)
+		leveledBackend.SetLevel(logging.DEBUG, "x-ui")
+		newLogger.SetBackend(leveledBackend)
+	}
+	logger = newLogger
+}
+
+func normalizeLevel(level string) string {
+	l := strings.TrimSpace(strings.ToLower(level))
+	switch l {
+	case "debug":
+		return "debug"
+	case "info":
+		return "info"
+	case "warn", "warning":
+		return "warn"
+	case "error":
+		return "error"
+	case "notice":
+		return "info"
+	default:
+		// Best-effort: map unknown to info to avoid dropping logs.
+		return "info"
+	}
+}
+
+func levelRank(level string) int {
+	switch normalizeLevel(level) {
+	case "debug":
+		return 10
+	case "info":
+		return 20
+	case "warn":
+		return 30
+	case "error":
+		return 40
+	default:
+		return 20
+	}
+}
+
+func encodeEntry(e Entry) (string, error) {
+	b, err := json.Marshal(e)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func writeDirect(e Entry) {
+	// Direct JSON write for early init / recursion-sensitive paths.
+	if strings.TrimSpace(e.Ts) == "" {
+		e.Ts = time.Now().Format(timeFormat)
+	}
+	if e.TsUnixMs == 0 {
+		e.TsUnixMs = time.Now().UnixMilli()
+	}
+	e.Level = normalizeLevel(e.Level)
+	if strings.TrimSpace(e.Source) == "" {
+		e.Source = defaultSource
+	}
+	if b, err := json.Marshal(e); err == nil {
+		_, _ = os.Stderr.Write(append(b, '\n'))
+		return
+	}
+	_, _ = os.Stderr.Write([]byte(`{"level":"error","source":"logger","msg":"logger: failed to marshal direct log entry"}` + "\n"))
+}
+
+// Emit writes a structured log Entry as one JSON line and adds it to the buffer.
+// Level/source are normalized; Ts is set if missing.
+func Emit(e Entry) {
+	ensureLogger()
+
+	if strings.TrimSpace(e.Ts) == "" {
+		e.Ts = time.Now().Format(timeFormat)
+	}
+	if e.TsUnixMs == 0 {
+		e.TsUnixMs = time.Now().UnixMilli()
+	}
+	e.Level = normalizeLevel(e.Level)
+	if strings.TrimSpace(e.Source) == "" {
+		e.Source = defaultSource
+	}
+	e.Source = strings.ToLower(strings.TrimSpace(e.Source))
+	if e.Source == "" {
+		e.Source = "panel"
+	}
+
+	line, err := encodeEntry(e)
+	if err != nil {
+		// Last-resort: log the marshal error as plain text (still a JSON entry).
+		fallback := Entry{
+			Ts:     time.Now().Format(timeFormat),
+			Level:  "error",
+			Source: defaultSource,
+			Msg:    fmt.Sprintf("logger: failed to marshal entry: %v", err),
+		}
+		if fb, fbErr := encodeEntry(fallback); fbErr == nil {
+			logger.Error(fb)
+		} else {
+			logger.Error(fallback.Msg)
+		}
+		return
+	}
+
+	switch e.Level {
+	case "debug":
+		logger.Debug(line)
+	case "info":
+		logger.Info(line)
+	case "warn":
+		logger.Warning(line)
+	case "error":
+		logger.Error(line)
+	default:
+		logger.Info(line)
+	}
+
+	addToBufferEntry(e, line)
+}
+
+func addToBufferEntry(e Entry, line string) {
+	if len(logBuffer) >= maxLogBufferSize {
+		logBuffer = logBuffer[1:]
+	}
+	logBuffer = append(logBuffer, e)
+
+	// Push to Loki if enabled (keep the exact JSON line for consistency).
+	PushLogToLokiWithComponent(e.Level, line, e.ComponentOrDefault(), e.NodeID)
+
+	// If running on node, push log to panel in real-time.
+	// pushLogToPanel is set by node package if log pusher is initialized.
+	pushLogToPanel(line)
+}
+
+func (e Entry) ComponentOrDefault() string {
+	if strings.TrimSpace(e.Component) != "" {
+		return e.Component
+	}
+	// Preserve previous behavior: panel component is "x-ui".
+	// For xray/node, callers should set Component explicitly when needed.
+	return "x-ui"
+}
+
 // Debug logs a debug message and adds it to the log buffer.
 func Debug(args ...any) {
-	logger.Debug(args...)
-	addToBuffer("DEBUG", fmt.Sprint(args...))
+	Emit(Entry{Level: "debug", Msg: fmt.Sprint(args...)})
 }
 
 // Debugf logs a formatted debug message and adds it to the log buffer.
 func Debugf(format string, args ...any) {
-	logger.Debugf(format, args...)
-	addToBuffer("DEBUG", fmt.Sprintf(format, args...))
+	Emit(Entry{Level: "debug", Msg: fmt.Sprintf(format, args...)})
 }
 
 // Info logs an info message and adds it to the log buffer.
 func Info(args ...any) {
-	logger.Info(args...)
-	addToBuffer("INFO", fmt.Sprint(args...))
+	Emit(Entry{Level: "info", Msg: fmt.Sprint(args...)})
 }
 
 // Infof logs a formatted info message and adds it to the log buffer.
 func Infof(format string, args ...any) {
-	logger.Infof(format, args...)
-	addToBuffer("INFO", fmt.Sprintf(format, args...))
+	Emit(Entry{Level: "info", Msg: fmt.Sprintf(format, args...)})
 }
 
 // Notice logs a notice message and adds it to the log buffer.
 func Notice(args ...any) {
-	logger.Notice(args...)
-	addToBuffer("NOTICE", fmt.Sprint(args...))
+	Emit(Entry{Level: "notice", Msg: fmt.Sprint(args...)})
 }
 
 // Noticef logs a formatted notice message and adds it to the log buffer.
 func Noticef(format string, args ...any) {
-	logger.Noticef(format, args...)
-	addToBuffer("NOTICE", fmt.Sprintf(format, args...))
+	Emit(Entry{Level: "notice", Msg: fmt.Sprintf(format, args...)})
 }
 
 // Warning logs a warning message and adds it to the log buffer.
 func Warning(args ...any) {
-	logger.Warning(args...)
-	addToBuffer("WARNING", fmt.Sprint(args...))
+	Emit(Entry{Level: "warn", Msg: fmt.Sprint(args...)})
 }
 
 // Warningf logs a formatted warning message and adds it to the log buffer.
 func Warningf(format string, args ...any) {
-	logger.Warningf(format, args...)
-	addToBuffer("WARNING", fmt.Sprintf(format, args...))
+	Emit(Entry{Level: "warn", Msg: fmt.Sprintf(format, args...)})
 }
 
 // Error logs an error message and adds it to the log buffer.
 func Error(args ...any) {
-	logger.Error(args...)
-	addToBuffer("ERROR", fmt.Sprint(args...))
+	Emit(Entry{Level: "error", Msg: fmt.Sprint(args...)})
 }
 
 // Errorf logs a formatted error message and adds it to the log buffer.
 func Errorf(format string, args ...any) {
-	logger.Errorf(format, args...)
-	addToBuffer("ERROR", fmt.Sprintf(format, args...))
-}
-
-// addToBuffer adds a log entry to the in-memory ring buffer for web UI retrieval.
-func addToBuffer(level string, newLog string) {
-	t := time.Now()
-	if len(logBuffer) >= maxLogBufferSize {
-		logBuffer = logBuffer[1:]
-	}
-
-	logLevel, _ := logging.LogLevel(level)
-	logBuffer = append(logBuffer, struct {
-		time  string
-		level logging.Level
-		log   string
-	}{
-		time:  t.Format(timeFormat),
-		level: logLevel,
-		log:   newLog,
-	})
-
-	// Push to Loki if enabled
-	PushLogToLoki(level, newLog)
-
-	// If running on node, push log to panel in real-time
-	// pushLogToPanel is set by node package if log pusher is initialized
-	// Always call it - it will check internally if pusher is enabled
-	// Format log line as "timestamp level - message" for panel
-	logLine := fmt.Sprintf("%s %s - %s", t.Format(timeFormat), strings.ToUpper(level), newLog)
-	pushLogToPanel(logLine)
+	Emit(Entry{Level: "error", Msg: fmt.Sprintf(format, args...)})
 }
 
 // pushLogToPanel pushes a log line to the panel (called from node mode only).
@@ -265,12 +393,50 @@ func SetLogPusher(pusher func(string)) {
 // GetLogs retrieves up to c log entries from the buffer that are at or below the specified level.
 func GetLogs(c int, level string) []string {
 	var output []string
-	logLevel, _ := logging.LogLevel(level)
+	minRank := levelRank(level)
 
-	for i := len(logBuffer) - 1; i >= 0 && len(output) <= c; i-- {
-		if logBuffer[i].level <= logLevel {
-			output = append(output, fmt.Sprintf("%s %s - %s", logBuffer[i].time, logBuffer[i].level, logBuffer[i].log))
+	for i := len(logBuffer) - 1; i >= 0; i-- {
+		if c > 0 && len(output) >= c {
+			break
+		}
+		if levelRank(logBuffer[i].Level) >= minRank {
+			if line, err := encodeEntry(logBuffer[i]); err == nil {
+				output = append(output, line)
+			}
 		}
 	}
 	return output
+}
+
+// GetLogsFromFile reads structured NDJSON logs from disk and returns newest-first lines.
+// If c <= 0, all matched lines are returned.
+func GetLogsFromFile(c int, level string) []string {
+	minRank := levelRank(level)
+	logPath := filepath.Join(config.GetLogFolder(), logFileName)
+	data, err := os.ReadFile(logPath)
+	if err != nil || len(data) == 0 {
+		return []string{}
+	}
+
+	lines := strings.Split(string(data), "\n")
+	out := make([]string, 0, len(lines))
+	for i := len(lines) - 1; i >= 0; i-- {
+		if c > 0 && len(out) >= c {
+			break
+		}
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			continue
+		}
+
+		var e Entry
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		if levelRank(e.Level) < minRank {
+			continue
+		}
+		out = append(out, line)
+	}
+	return out
 }

@@ -2828,6 +2828,60 @@ export function ClientsPage() {
     };
   }, [rows, displayedRows.length]);
 
+  const hwidUserAgentStats = useMemo(() => {
+    const unknownLabel = t("pages.clients.hwidUserAgentUnknown", {
+      defaultValue: "Unknown",
+    });
+    const byUserAgent = new Map<string, number>();
+    let total = 0;
+    for (const row of hwidRows) {
+      const label = row.userAgent?.trim() ? row.userAgent.trim() : unknownLabel;
+      byUserAgent.set(label, (byUserAgent.get(label) ?? 0) + 1);
+      total += 1;
+    }
+    return Array.from(byUserAgent.entries())
+      .map(([label, count]) => {
+        const percentRaw = total > 0 ? (count / total) * 100 : 0;
+        const percentRounded = Math.round(percentRaw * 10) / 10;
+        const percentLabel = `${Number.isInteger(percentRounded) ? percentRounded.toFixed(0) : percentRounded.toFixed(1)}%`;
+        return { label, count, percentRaw, percentLabel };
+      })
+      .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+  }, [hwidRows, t]);
+
+  const hwidUserAgentPieData = useMemo(() => {
+    const palette = [
+      "#3b82f6",
+      "#8b5cf6",
+      "#14b8a6",
+      "#f59e0b",
+      "#ef4444",
+      "#10b981",
+      "#06b6d4",
+      "#a855f7",
+      "#f97316",
+      "#84cc16",
+    ];
+    let current = 0;
+    const parts = hwidUserAgentStats.map((item, index) => {
+      const start = current;
+      current += item.percentRaw;
+      return {
+        ...item,
+        color: palette[index % palette.length],
+        start,
+        end: current,
+      };
+    });
+    const gradient =
+      parts.length > 0
+        ? `conic-gradient(${parts
+            .map((part) => `${part.color} ${part.start}% ${part.end}%`)
+            .join(", ")})`
+        : "conic-gradient(var(--border) 0% 100%)";
+    return { parts, gradient };
+  }, [hwidUserAgentStats]);
+
   const selectedOnPage = useMemo(
     () => displayedIds.filter((id) => selectedIds.has(id)),
     [displayedIds, selectedIds],
@@ -4259,7 +4313,11 @@ export function ClientsPage() {
                       ? t("pages.clients.sessions.offlineBlockedGroup", {
                           defaultValue: "Blocked IPs (not in live stats)",
                         })
-                      : block.nodeName}
+                      : block.nodeName === "Local"
+                        ? t("pages.clients.sessions.localNode", {
+                            defaultValue: "Local",
+                          })
+                        : block.nodeName}
                   </span>
                   {!block.error && !block.dropAvailable ? (
                     <span className="text-[10px] text-amber-600 dark:text-amber-400">
@@ -4379,6 +4437,50 @@ export function ClientsPage() {
           <p className="text-sm text-[var(--fg-muted)]">{t("noData")}</p>
         ) : (
           <div className="max-h-[60vh] overflow-auto">
+            <div className="mb-3 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                {t("pages.clients.hwidUserAgentShareTitle", {
+                  defaultValue: "User-Agent distribution by HWID",
+                })}
+              </p>
+              <p className="mt-1 text-[11px] text-[var(--fg-muted)]">
+                {t("pages.clients.hwidUserAgentShareHint", {
+                  defaultValue: "Share of registered devices by User-Agent.",
+                })}
+              </p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-[auto,1fr] sm:items-start">
+                <div className="mx-auto w-fit">
+                  <div
+                    className="relative h-36 w-36 rounded-full border border-[var(--border)]"
+                    style={{ background: hwidUserAgentPieData.gradient }}
+                    aria-label={t("pages.clients.hwidUserAgentShareTitle", {
+                      defaultValue: "User-Agent distribution by HWID",
+                    })}
+                  >
+                    <div className="absolute inset-[22%] rounded-full bg-[var(--bg-elevated)]" />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {hwidUserAgentPieData.parts.map((item) => (
+                    <div key={item.label} className="flex items-center justify-between gap-2 text-[11px]">
+                      <span className="flex min-w-0 items-center gap-2">
+                        <span
+                          className="inline-block h-2.5 w-2.5 shrink-0 rounded-full"
+                          style={{ backgroundColor: item.color }}
+                          aria-hidden
+                        />
+                        <span className="min-w-0 truncate font-mono text-[var(--fg-muted)]">
+                          {item.label}
+                        </span>
+                      </span>
+                      <span className="shrink-0 font-semibold text-[var(--fg)]">
+                        {item.percentLabel}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
             <table className="w-full border-collapse text-left text-xs">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[var(--fg-subtle)]">

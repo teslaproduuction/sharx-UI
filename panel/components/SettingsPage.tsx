@@ -72,6 +72,7 @@ type ApiTokenRow = {
   lastUsedAt?: number | null;
 };
 
+
 function SettingsSection({
   title,
   hint,
@@ -269,6 +270,7 @@ export function SettingsPage() {
       toast.error(r.msg || t("fail"));
     }
   };
+
 
   const downloadGrafana = () => {
     window.location.href = p("panel/setting/grafana/dashboard");

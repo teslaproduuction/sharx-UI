@@ -1247,6 +1247,131 @@ curl -X POST "http://localhost:2053/panel/api/server/updateGeofile/geoip.dat" \
 
 ---
 
+### POST `/panel/api/server/uploadGeofile/{fileName}`
+
+Upload a custom geofile (`geoip.dat` or `geosite.dat`) with local backup and optional propagation to enabled nodes in multi-node mode.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fileName` | string | Allowed values: `geoip.dat`, `geosite.dat` |
+
+**Request Body** (`multipart/form-data`):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | file | Yes | `.dat` geofile content |
+
+**Response Object (`obj`) fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fileName` | string | Processed file name |
+| `localOk` | boolean | Local panel apply status |
+| `nodeSuccess` | string[] | List of successful node updates |
+| `nodeErrors` | string[] | List of node update errors |
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:2053/panel/api/server/uploadGeofile/geoip.dat" \
+  -b cookies.txt \
+  -F "file=@./geoip.dat"
+```
+
+---
+
+### POST `/panel/api/server/rollbackGeofile/{fileName}`
+
+Rollback a custom geofile from its `.bak` backup and optionally rollback on enabled nodes in multi-node mode.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fileName` | string | Allowed values: `geoip.dat`, `geosite.dat` |
+
+**Response Object (`obj`) fields:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `fileName` | string | Processed file name |
+| `localOk` | boolean | Local panel rollback status |
+| `nodeSuccess` | string[] | List of successful node rollbacks |
+| `nodeErrors` | string[] | List of node rollback errors |
+
+**Example Request:**
+
+```bash
+curl -X POST "http://localhost:2053/panel/api/server/rollbackGeofile/geosite.dat" \
+  -b cookies.txt
+```
+
+---
+
+### GET `/panel/api/server/geofileAssets/{fileName}`
+
+List stored geofile assets for a specific type (`geoip.dat` or `geosite.dat`).
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `fileName` | string | `geoip.dat` or `geosite.dat` |
+
+---
+
+### POST `/panel/api/server/geofileAssets/upload/{fileName}`
+
+Upload a geofile into storage library (does not apply automatically).
+
+**Request Body** (`multipart/form-data`):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | file | Yes | `.dat` geofile content |
+| `displayName` | string | No | Friendly display name |
+
+---
+
+### POST `/panel/api/server/geofileAssets/download/{fileName}`
+
+Download a geofile from URL directly into storage library (does not apply automatically).
+
+**Request Body** (JSON or form-urlencoded):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `url` | string | Yes | Source URL |
+| `displayName` | string | No | Friendly display name |
+
+---
+
+### POST `/panel/api/server/geofileAssets/apply/{id}`
+
+Apply a stored geofile asset by ID to local panel and enabled nodes (same behavior as regular geofile apply), and mark it as active for its type.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Geofile asset ID |
+
+---
+
+### POST `/panel/api/server/geofileAssets/delete/{id}`
+
+Delete a stored geofile asset from storage.
+
+**Path Parameters:**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `id` | integer | Geofile asset ID |
+
+---
+
 ### POST `/panel/api/server/logs/{count}`
 
 Get application logs.
@@ -4145,7 +4270,7 @@ Receive logs from a node (called by node applications).
 |-----------|------|----------|-------------|
 | `apiKey` | string | Yes | Node API key |
 | `nodeAddress` | string | No | Node's own address (for identification when multiple nodes share API key) |
-| `logs` | array | Yes | Array of log lines in format "timestamp level - message" |
+| `entries` | array | Yes | Array of structured log entries (`logger.Entry`), one object per log line |
 
 **Example Request:**
 
@@ -4155,9 +4280,9 @@ curl -X POST "http://localhost:2053/panel/api/node/push-logs" \
   -d '{
     "apiKey": "node-api-key",
     "nodeAddress": "http://192.168.1.100:8080",
-    "logs": [
-      "2024-01-01 12:00:00 INFO - Connection established",
-      "2024-01-01 12:00:01 DEBUG - Processing request"
+    "entries": [
+      { "ts": "2024/01/01 12:00:00", "level": "info", "source": "node", "msg": "Connection established", "channel": "service", "component": "node" },
+      { "ts": "2024/01/01 12:00:01", "level": "debug", "source": "node", "msg": "Processing request", "channel": "service", "component": "node" }
     ]
   }'
 ```

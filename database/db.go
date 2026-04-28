@@ -4,17 +4,17 @@ package database
 
 import (
 	"fmt"
-	"log"
 	"slices"
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/database/model"
+	appLogger "github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/crypto"
 
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormLogger "gorm.io/gorm/logger"
 )
 
 var db *gorm.DB
@@ -31,14 +31,14 @@ const (
 func initUser() error {
 	empty, err := isTableEmpty("users")
 	if err != nil {
-		log.Printf("Error checking if users table is empty: %v", err)
+		appLogger.Warningf("DB init: error checking if users table is empty: %v", err)
 		return err
 	}
 	if empty {
 		hashedPassword, err := crypto.HashPasswordAsBcrypt(defaultPassword)
 
 		if err != nil {
-			log.Printf("Error hashing default password: %v", err)
+			appLogger.Warningf("DB init: error hashing default password: %v", err)
 			return err
 		}
 
@@ -55,7 +55,7 @@ func initUser() error {
 func runSeeders(isUsersEmpty bool) error {
 	empty, err := isTableEmpty("history_of_seeders")
 	if err != nil {
-		log.Printf("Error checking if users table is empty: %v", err)
+		appLogger.Warningf("DB seeders: error checking if history_of_seeders is empty: %v", err)
 		return err
 	}
 
@@ -75,7 +75,7 @@ func runSeeders(isUsersEmpty bool) error {
 			for _, user := range users {
 				hashedPassword, err := crypto.HashPasswordAsBcrypt(user.Password)
 				if err != nil {
-					log.Printf("Error hashing password for user '%s': %v", user.Username, err)
+					appLogger.Warningf("DB seeders: error hashing password for user '%s': %v", user.Username, err)
 					return err
 				}
 				db.Model(&user).Update("password", hashedPassword)
@@ -111,15 +111,15 @@ func isTableEmpty(tableName string) (bool, error) {
 // 6. Runs seeders
 func InitDB(dbConnectionString string) error {
 	// Step 1: Establish database connection
-	var gormLogger logger.Interface
+	var gormLog gormLogger.Interface
 	if config.IsDebug() {
-		gormLogger = logger.Default
+		gormLog = gormLogger.Default
 	} else {
-		gormLogger = logger.Discard
+		gormLog = gormLogger.Discard
 	}
 
 	c := &gorm.Config{
-		Logger: gormLogger,
+		Logger: gormLog,
 	}
 
 	var err error
@@ -158,7 +158,7 @@ func InitDB(dbConnectionString string) error {
 		  AND group_id NOT IN (SELECT id FROM client_groups)
 	`).Error; err != nil {
 		// Log warning but don't fail - this is a data cleanup, not critical
-		log.Printf("Warning: failed to cleanup invalid group_id references: %v", err)
+		appLogger.Warningf("DB cleanup: failed to cleanup invalid group_id references: %v", err)
 	}
 
 	// Step 4: Check schema version compatibility

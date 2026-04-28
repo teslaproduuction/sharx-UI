@@ -1190,8 +1190,75 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	
 	// Initialize metrics exporter (metrics are exposed via /panel/metrics endpoint)
 	InitMetricsExporter()
+
+	// Capture-everything mode for Xray logs:
+	// keep debug verbosity and force access/error file outputs so history is always readable.
+	if err := s.ensureXrayLoggingDefaults(); err != nil {
+		logger.Warningf("ensure xray logging defaults: %v", err)
+	}
 	
 	return common.Combine(errs...)
+}
+
+func (s *SettingService) ensureXrayLoggingDefaults() error {
+	target := "debug"
+	accessPath := config.GetLogFolder() + "/xray-access.log"
+	errorPath := config.GetLogFolder() + "/xray-error.log"
+	raw, err := s.getString("xrayTemplateConfig")
+	if err != nil || strings.TrimSpace(raw) == "" {
+		return err
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal([]byte(raw), &cfg); err != nil {
+		return err
+	}
+
+	logObj, _ := cfg["log"].(map[string]any)
+	if logObj == nil {
+		logObj = map[string]any{}
+	}
+	changed := false
+
+	current, _ := logObj["loglevel"].(string)
+	if !strings.EqualFold(strings.TrimSpace(current), target) {
+		logObj["loglevel"] = target
+		changed = true
+	}
+
+	accessCurrent, _ := logObj["access"].(string)
+	if strings.TrimSpace(accessCurrent) != accessPath {
+		logObj["access"] = accessPath
+		changed = true
+	}
+
+	errorCurrent, _ := logObj["error"].(string)
+	if strings.TrimSpace(errorCurrent) != errorPath {
+		logObj["error"] = errorPath
+		changed = true
+	}
+
+	if !changed {
+		return nil
+	}
+
+	cfg["log"] = logObj
+	updated, err := json.Marshal(cfg)
+	if err != nil {
+		return err
+	}
+	if err := s.saveSetting("xrayTemplateConfig", string(updated)); err != nil {
+		return err
+	}
+
+	xrayService := NewXrayService()
+	xrayService.RestartXrayAsync(false)
+	return nil
+}
+
+// EnsureXrayLoggingDefaults ensures xrayTemplateConfig has persistent access/error paths and debug level.
+func (s *SettingService) EnsureXrayLoggingDefaults() error {
+	return s.ensureXrayLoggingDefaults()
 }
 
 func (s *SettingService) GetDefaultXrayConfig() (any, error) {

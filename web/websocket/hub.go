@@ -26,6 +26,7 @@ const (
 	MessageTypeNodes                MessageType = "nodes"                   // Nodes list update
 	MessageTypeClients              MessageType = "clients"                 // Clients list update
 	MessageTypeClientTrafficPerNode MessageType = "client_traffic_per_node" // Per-user client×node matrix (see GET /node/client-traffic-per-node)
+	MessageTypeLogsStream           MessageType = "logs_stream"             // Unified realtime logs stream (panel/xray/node)
 )
 
 // Message represents a WebSocket message

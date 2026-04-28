@@ -1,10 +1,10 @@
 "use client";
 
-import { RotateCcw, Save, Wand2, FileCode2, Radio, Wrench } from "lucide-react";
+import { RotateCcw, Save, Wand2, FileCode2, Radio, Wrench, Upload, Download } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getJson, postJson } from "@/lib/api";
+import { api, getJson, postJson } from "@/lib/api";
 import { patchSimpleCore, type XraySimpleCore } from "@/lib/xraySimpleCore";
 import {
   extractSectionJson,
@@ -23,10 +23,32 @@ import { XrayTemplateNav, type XrayTemplateNavId } from "@/components/XrayTempla
 import { sectionButtonLabel } from "@/components/xray/sectionButtonLabel";
 import { SimpleCoreForm } from "@/components/xray/SimpleCoreForm";
 import { XrayTemplateSectionContent } from "@/components/xray/XrayTemplateSectionContent";
-import { Button, ConfirmDialog, Spinner, Stepper, useToast } from "@/components/ui";
+import { Button, ConfirmDialog, Spinner, Stepper, useToast, Input, Modal } from "@/components/ui";
 
-type XrayView = "template" | "runtime";
+type XrayView = "template" | "runtime" | "geo";
 type SectionKey = "full" | string;
+type GeoFileName = "geoip.dat" | "geosite.dat";
+type GeofileApplyResult = {
+  fileName: string;
+  localOk: boolean;
+  nodeSuccess: string[];
+  nodeErrors: string[];
+};
+type GeofileAsset = {
+  id: number;
+  fileType: "geoip" | "geosite";
+  displayName: string;
+  sourceUrl: string;
+  filePath: string;
+  sizeBytes: number;
+  sha256: string;
+  isActive: boolean;
+  createdAt: number;
+};
+type GeofileAssetApplyResponse = {
+  asset?: GeofileAsset;
+  result?: GeofileApplyResult;
+};
 
 function parsePanelObj<T>(obj: unknown): T | null {
   let raw: unknown = obj;
@@ -52,10 +74,11 @@ function templateToString(xraySetting: unknown): string {
   return JSON.stringify(xraySetting, null, 2);
 }
 
-export function XrayPage() {
+export function XrayPage({ initialView = "template" }: { initialView?: XrayView }) {
+  const geoOnlyPage = initialView === "geo";
   const { t } = useTranslation();
   const toast = useToast();
-  const [view, setView] = useState<XrayView>("template");
+  const [view, setView] = useState<XrayView>(initialView);
   const [navId, setNavId] = useState<XrayTemplateNavId>("general");
   const [sectionDraft, setSectionDraft] = useState("{}");
   const [dataEpoch, setDataEpoch] = useState(0);
@@ -71,6 +94,17 @@ export function XrayPage() {
   const [resetting, setResetting] = useState(false);
   const [multi, setMulti] = useState(false);
   const [xrayState, setXrayState] = useState<string | null>(null);
+  const [geoBusy, setGeoBusy] = useState(false);
+  const [geoipUrl, setGeoipUrl] = useState("");
+  const [geositeUrl, setGeositeUrl] = useState("");
+  const [geoAssets, setGeoAssets] = useState<Record<GeoFileName, GeofileAsset[]>>({
+    "geoip.dat": [],
+    "geosite.dat": [],
+  });
+  const [geoAssetsLoading, setGeoAssetsLoading] = useState(false);
+  const [geoResultOpen, setGeoResultOpen] = useState(false);
+  const [geoResultTitle, setGeoResultTitle] = useState("");
+  const [geoResult, setGeoResult] = useState<GeofileApplyResult | null>(null);
 
   const sectionKey = useMemo<SectionKey>(() => (navId === "general" ? "full" : navId), [navId]);
 
@@ -144,6 +178,28 @@ export function XrayPage() {
       void loadRuntime();
     }
   }, [view, loadRuntime]);
+
+  const loadGeoAssets = useCallback(async () => {
+    setGeoAssetsLoading(true);
+    try {
+      const [geoipRes, geositeRes] = await Promise.all([
+        getJson<GeofileAsset[]>(panel("api/server/geofileAssets/geoip.dat")),
+        getJson<GeofileAsset[]>(panel("api/server/geofileAssets/geosite.dat")),
+      ]);
+      setGeoAssets({
+        "geoip.dat": geoipRes.success && Array.isArray(geoipRes.obj) ? geoipRes.obj : [],
+        "geosite.dat": geositeRes.success && Array.isArray(geositeRes.obj) ? geositeRes.obj : [],
+      });
+    } finally {
+      setGeoAssetsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (view === "geo") {
+      void loadGeoAssets();
+    }
+  }, [view, loadGeoAssets]);
 
   useEffect(() => {
     void loadXrayHint();
@@ -353,6 +409,116 @@ export function XrayPage() {
 
   const sectionLabel = useCallback((k: string) => sectionButtonLabel(t, k), [t]);
 
+  const showGeoResult = (title: string, res: GeofileApplyResult | null | undefined) => {
+    setGeoResultTitle(title);
+    setGeoResult(res ?? null);
+    setGeoResultOpen(true);
+  };
+
+  const uploadGeofileToStorage = async (fileName: GeoFileName) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".dat,application/octet-stream";
+    input.onchange = async (event) => {
+      const f = (event.target as HTMLInputElement).files?.[0];
+      if (!f) return;
+      const fd = new FormData();
+      fd.append("file", f);
+      fd.append("displayName", f.name || "");
+      setGeoBusy(true);
+      try {
+        const res = await api.post<{ success: boolean; msg: string }>(
+          panel(`api/server/geofileAssets/upload/${fileName}`),
+          fd,
+          { headers: { "Content-Type": "multipart/form-data" } },
+        );
+        if (res.data.success) {
+          toast.success(t("success"));
+          await loadGeoAssets();
+        } else {
+          toast.error(res.data.msg || t("fail"));
+        }
+      } catch {
+        toast.error(t("fail"));
+      } finally {
+        setGeoBusy(false);
+      }
+    };
+    input.click();
+  };
+
+  const rollbackGeofile = async (fileName: GeoFileName) => {
+    setGeoBusy(true);
+    try {
+      const r = await postJson<GeofileApplyResult>(panel(`api/server/rollbackGeofile/${fileName}`));
+      if (r.success) {
+        toast.success(r.msg || t("success"));
+      } else {
+        toast.error(r.msg || t("fail"));
+      }
+      showGeoResult(
+        t("pages.xray.geoRollbackTitle", { defaultValue: "Rollback {{file}}", file: fileName }),
+        r.obj || null,
+      );
+    } finally {
+      setGeoBusy(false);
+    }
+  };
+
+  const saveDownloadToStorage = async (fileName: GeoFileName, sourceURL: string) => {
+    if (!sourceURL.trim()) {
+      toast.error(t("pages.xray.geoUrlRequired", { defaultValue: "URL is required" }));
+      return;
+    }
+    setGeoBusy(true);
+    try {
+      const r = await postJson(
+        panel(`api/server/geofileAssets/download/${fileName}`),
+        { url: sourceURL.trim() },
+        true,
+      );
+      if (r.success) {
+        toast.success(t("success"));
+        await loadGeoAssets();
+      } else {
+        toast.error(r.msg || t("fail"));
+      }
+    } finally {
+      setGeoBusy(false);
+    }
+  };
+
+  const applyGeofileAsset = async (id: number) => {
+    setGeoBusy(true);
+    try {
+      const r = await postJson<GeofileAssetApplyResponse>(panel(`api/server/geofileAssets/apply/${id}`));
+      if (r.success) {
+        toast.success(r.msg || t("success"));
+      } else {
+        toast.error(r.msg || t("fail"));
+      }
+      showGeoResult(r.msg || "Apply geofile asset", r.obj?.result || null);
+      await loadGeoAssets();
+    } finally {
+      setGeoBusy(false);
+    }
+  };
+
+  const deleteGeofileAsset = async (id: number) => {
+    setGeoBusy(true);
+    try {
+      const r = await postJson(panel(`api/server/geofileAssets/delete/${id}`));
+      if (r.success) {
+        toast.success(r.msg || t("success"));
+        await loadGeoAssets();
+      } else {
+        toast.error(r.msg || t("fail"));
+      }
+    } finally {
+      setGeoBusy(false);
+    }
+  };
+
   const pageDescription = useMemo(() => {
     if (view === "template") {
       return standalone
@@ -361,6 +527,12 @@ export function XrayPage() {
               "Edit the JSON and save to apply the config to the local Xray core. In stand-alone mode there is no separate profile to publish — saving updates the server template used by the core.",
           })
         : t("pages.xray.TemplateDesc");
+    }
+    if (view === "geo") {
+      return t("pages.xray.geoSectionDesc", {
+        defaultValue:
+          "Manage geoip.dat and geosite.dat for the core: upload, rollback, or download by URL with progress.",
+      });
     }
     return standalone
       ? t("pages.xray.runtimeViewStandalone", {
@@ -379,28 +551,30 @@ export function XrayPage() {
         iconTone="accent"
         actions={
           <div className="flex w-full min-w-0 flex-wrap items-center justify-end gap-2">
-            <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
-              <Button
-                type="button"
-                variant={view === "template" ? "primary" : "secondary"}
-                onClick={() => setViewMode("template")}
-                className="!gap-2"
-              >
-                <FileCode2 size={16} />
-                {standalone
-                  ? t("pages.xray.configEditorTab", { defaultValue: "Core configuration" })
-                  : t("pages.xray.Template")}
-              </Button>
-              <Button
-                type="button"
-                variant={view === "runtime" ? "primary" : "secondary"}
-                onClick={() => setViewMode("runtime")}
-                className="!gap-2"
-              >
-                <Radio size={16} />
-                {t("pages.xray.runtimeViewTab", { defaultValue: "Effective config" })}
-              </Button>
-            </div>
+            {!geoOnlyPage ? (
+              <div className="inline-flex min-w-0 flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant={view === "template" ? "primary" : "secondary"}
+                  onClick={() => setViewMode("template")}
+                  className="!gap-2"
+                >
+                  <FileCode2 size={16} />
+                  {standalone
+                    ? t("pages.xray.configEditorTab", { defaultValue: "Core configuration" })
+                    : t("pages.xray.Template")}
+                </Button>
+                <Button
+                  type="button"
+                  variant={view === "runtime" ? "primary" : "secondary"}
+                  onClick={() => setViewMode("runtime")}
+                  className="!gap-2"
+                >
+                  <Radio size={16} />
+                  {t("pages.xray.runtimeViewTab", { defaultValue: "Effective config" })}
+                </Button>
+              </div>
+            ) : null}
             {view === "template" ? (
               <>
                 <span
@@ -484,7 +658,151 @@ export function XrayPage() {
         ) : null}
 
         <div className="min-w-0 flex-1 space-y-3">
-          {showGeneralUi ? (
+          {view === "geo" ? (
+          <Surface>
+            <div className="mb-3 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-[var(--fg)]">
+                {t("pages.xray.geoSectionTitle", { defaultValue: "Geo / Гео" })}
+              </h3>
+            </div>
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+                <p className="text-sm font-medium text-[var(--fg)]">geoip.dat</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={() => void rollbackGeofile("geoip.dat")} loading={geoBusy}>
+                    <RotateCcw size={16} />
+                    {t("pages.settings.geofileRollback", { defaultValue: "Rollback" })}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={geoipUrl}
+                    onChange={(e) => setGeoipUrl(e.target.value)}
+                    placeholder={t("pages.xray.geoUrlPlaceholder", { defaultValue: "https://.../geoip.dat" })}
+                  />
+                  <Button type="button" variant="secondary" onClick={() => void saveDownloadToStorage("geoip.dat", geoipUrl)} loading={geoBusy}>
+                    <Download size={16} />
+                    {t("download")}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={() => void uploadGeofileToStorage("geoip.dat")} loading={geoBusy}>
+                    <Upload size={16} />
+                    {t("pages.xray.geoStoreUploadDevice", { defaultValue: "Upload from device to storage" })}
+                  </Button>
+                </div>
+                <div className="space-y-2 rounded-md border border-[var(--border)]/80 p-2">
+                  <p className="text-xs text-[var(--fg-muted)]">
+                    {t("pages.xray.geoStorageList", { defaultValue: "Stored files" })}
+                  </p>
+                  {(() => {
+                    const active = (geoAssets["geoip.dat"] || []).find((x) => x.isActive);
+                    if (!active) return null;
+                    return (
+                      <div className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 p-2 text-xs">
+                        <p className="font-medium text-[var(--fg)]">
+                          {t("pages.xray.geoActiveApplied", { defaultValue: "Active applied file" })}: {active.displayName}
+                        </p>
+                        <p className="mt-1 text-[var(--fg-muted)] break-all">
+                          {active.sourceUrl || t("pages.xray.geoSourceManual", { defaultValue: "Source: manual upload" })}
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  {(geoAssets["geoip.dat"] || []).map((asset) => (
+                    <div key={asset.id} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)]/70 px-2 py-1">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs text-[var(--fg)]">
+                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive", { defaultValue: "active" })})` : ""}
+                        </p>
+                        <p className="text-[11px] text-[var(--fg-muted)]">
+                          {Math.max(1, Math.round(asset.sizeBytes / 1024))} KB • {new Date(asset.createdAt * 1000).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button type="button" variant="secondary" onClick={() => void applyGeofileAsset(asset.id)} loading={geoBusy}>
+                          {t("pages.xray.geoApply", { defaultValue: "Apply" })}
+                        </Button>
+                        <Button type="button" variant="secondary" onClick={() => void deleteGeofileAsset(asset.id)} loading={geoBusy}>
+                          {t("delete", { defaultValue: "Delete" })}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {geoAssetsLoading ? <Spinner size={18} /> : null}
+                </div>
+              </div>
+              <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+                <p className="text-sm font-medium text-[var(--fg)]">geosite.dat</p>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={() => void rollbackGeofile("geosite.dat")} loading={geoBusy}>
+                    <RotateCcw size={16} />
+                    {t("pages.settings.geofileRollback", { defaultValue: "Rollback" })}
+                  </Button>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={geositeUrl}
+                    onChange={(e) => setGeositeUrl(e.target.value)}
+                    placeholder={t("pages.xray.geoUrlPlaceholder2", { defaultValue: "https://.../geosite.dat" })}
+                  />
+                  <Button type="button" variant="secondary" onClick={() => void saveDownloadToStorage("geosite.dat", geositeUrl)} loading={geoBusy}>
+                    <Download size={16} />
+                    {t("download")}
+                  </Button>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="secondary" onClick={() => void uploadGeofileToStorage("geosite.dat")} loading={geoBusy}>
+                    <Upload size={16} />
+                    {t("pages.xray.geoStoreUploadDevice", { defaultValue: "Upload from device to storage" })}
+                  </Button>
+                </div>
+                <div className="space-y-2 rounded-md border border-[var(--border)]/80 p-2">
+                  <p className="text-xs text-[var(--fg-muted)]">
+                    {t("pages.xray.geoStorageList", { defaultValue: "Stored files" })}
+                  </p>
+                  {(() => {
+                    const active = (geoAssets["geosite.dat"] || []).find((x) => x.isActive);
+                    if (!active) return null;
+                    return (
+                      <div className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 p-2 text-xs">
+                        <p className="font-medium text-[var(--fg)]">
+                          {t("pages.xray.geoActiveApplied", { defaultValue: "Active applied file" })}: {active.displayName}
+                        </p>
+                        <p className="mt-1 text-[var(--fg-muted)] break-all">
+                          {active.sourceUrl || t("pages.xray.geoSourceManual", { defaultValue: "Source: manual upload" })}
+                        </p>
+                      </div>
+                    );
+                  })()}
+                  {(geoAssets["geosite.dat"] || []).map((asset) => (
+                    <div key={asset.id} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)]/70 px-2 py-1">
+                      <div className="min-w-0">
+                        <p className="truncate text-xs text-[var(--fg)]">
+                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive", { defaultValue: "active" })})` : ""}
+                        </p>
+                        <p className="text-[11px] text-[var(--fg-muted)]">
+                          {Math.max(1, Math.round(asset.sizeBytes / 1024))} KB • {new Date(asset.createdAt * 1000).toLocaleString()}
+                        </p>
+                      </div>
+                      <div className="flex shrink-0 gap-1">
+                        <Button type="button" variant="secondary" onClick={() => void applyGeofileAsset(asset.id)} loading={geoBusy}>
+                          {t("pages.xray.geoApply", { defaultValue: "Apply" })}
+                        </Button>
+                        <Button type="button" variant="secondary" onClick={() => void deleteGeofileAsset(asset.id)} loading={geoBusy}>
+                          {t("delete", { defaultValue: "Delete" })}
+                        </Button>
+                      </div>
+                    </div>
+                  ))}
+                  {geoAssetsLoading ? <Spinner size={18} /> : null}
+                </div>
+              </div>
+            </div>
+          </Surface>
+          ) : null}
+
+          {view !== "geo" && showGeneralUi ? (
             <SimpleCoreForm template={template} onPatch={patchSimpleCoreSafe} />
           ) : null}
 
@@ -533,6 +851,7 @@ export function XrayPage() {
             <p className="text-sm text-rose-300">{t("pages.xrayCoreConfigProfiles.invalidJson")}</p>
           ) : null}
 
+          {view !== "geo" ? (
           <Surface padding="sm" className="overflow-x-auto">
             {showSpinner ? (
               <div className="grid min-h-48 place-items-center">
@@ -554,6 +873,7 @@ export function XrayPage() {
               />
             )}
           </Surface>
+          ) : null}
         </div>
       </div>
 
@@ -568,6 +888,32 @@ export function XrayPage() {
         danger
         loading={resetting}
       />
+      <Modal
+        open={geoResultOpen}
+        onClose={() => setGeoResultOpen(false)}
+        title={geoResultTitle || t("pages.settings.geofileResultTitle", { defaultValue: "Geofile result" })}
+        width={640}
+      >
+        <div className="space-y-3 text-sm">
+          <p className="text-[var(--fg-muted)]">
+            {geoResult?.localOk
+              ? t("pages.settings.geofileLocalOk", { defaultValue: "Local panel update: success" })
+              : t("pages.settings.geofileLocalFail", { defaultValue: "Local panel update: failed" })}
+          </p>
+          <div>
+            <p className="mb-1 font-medium text-[var(--fg)]">
+              {t("pages.settings.geofileNodesSuccess", { defaultValue: "Nodes success" })}:{" "}
+              {geoResult?.nodeSuccess?.length ?? 0}
+            </p>
+          </div>
+          <div>
+            <p className="mb-1 font-medium text-[var(--fg)]">
+              {t("pages.settings.geofileNodesErrors", { defaultValue: "Nodes errors" })}:{" "}
+              {geoResult?.nodeErrors?.length ?? 0}
+            </p>
+          </div>
+        </div>
+      </Modal>
     </PageScaffold>
   );
 }
