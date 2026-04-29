@@ -62,6 +62,20 @@ func (a *SUBController) activeV2Config() *service.SharxSubpageConfigV2 {
 	return cfg
 }
 
+func (a *SUBController) refreshRemarkModel() {
+	settingService := service.SettingService{}
+	remarkModel, err := settingService.GetRemarkModel()
+	if err != nil {
+		a.subService.remarkModel = "-ieo"
+		return
+	}
+	remarkModel = strings.TrimSpace(remarkModel)
+	if remarkModel == "" {
+		remarkModel = "-ieo"
+	}
+	a.subService.remarkModel = remarkModel
+}
+
 // initRouter registers HTTP routes for subscription links and JSON endpoints
 // on the provided router group.
 func (a *SUBController) initRouter(g *gin.RouterGroup) {
@@ -132,18 +146,16 @@ func (a *SUBController) isAllowedUserAgent(c *gin.Context) bool {
 // redirect to the first-party React page or base64-encoded subscription data.
 func (a *SUBController) subs(c *gin.Context) {
 	subId := c.Param("subid")
+	a.refreshRemarkModel()
 
 	userAgent := c.GetHeader("User-Agent")
 	service.RecordUserAgent(userAgent)
 
 	cfg := a.activeV2Config()
 	subEncrypt := false
-	showInfo := false
 	if cfg != nil && cfg.AppSettings != nil {
 		subEncrypt = cfg.AppSettings.Encrypt
-		showInfo = cfg.AppSettings.ShowInfo
 	}
-	a.subService.showInfo = showInfo
 
 	// Route by User-Agent first so the response format/Content-Type matches
 	// the client's expectations (browser → UI redirect, Happ/v2rayTun →
@@ -231,6 +243,7 @@ func (a *SUBController) subs(c *gin.Context) {
 // subJsons handles HTTP requests for JSON subscription configurations.
 func (a *SUBController) subJsons(c *gin.Context) {
 	subId := c.Param("subid")
+	a.refreshRemarkModel()
 
 	userAgent := c.GetHeader("User-Agent")
 	service.RecordUserAgent(userAgent)
@@ -239,7 +252,6 @@ func (a *SUBController) subJsons(c *gin.Context) {
 	subEncrypt := false
 	if cfg != nil && cfg.AppSettings != nil {
 		subEncrypt = cfg.AppSettings.Encrypt
-		a.subService.showInfo = cfg.AppSettings.ShowInfo
 	}
 	if cfg != nil && cfg.JsonTemplates != nil {
 		a.subJsonService.applyTemplates(cfg.JsonTemplates.Fragment, cfg.JsonTemplates.Noises, cfg.JsonTemplates.Mux, cfg.JsonTemplates.Rules)

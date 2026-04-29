@@ -40,6 +40,7 @@ import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { copyTextToClipboard } from "@/lib/copyToClipboard";
 import { panelTimestampToMs, sizeFormat, speedMbpsFormat } from "@/lib/format";
 import { panel } from "@/lib/paths";
+import { getUiPref, setUiPref } from "@/lib/uiPrefs";
 import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
@@ -169,6 +170,7 @@ type ClientCard = {
   createdAt?: number;
   updatedAt?: number;
   lastOnline?: number;
+  lastConnectedNode?: string;
   upSpeed?: number;
   downSpeed?: number;
   /** Present from API: Xray session online (same as admin "online" list). */
@@ -228,6 +230,7 @@ function mergeClientWithEntity(row: ClientCard, e: WsClientEntity): ClientCard {
   if (typeof e.down === "number") next.down = e.down;
   if (typeof e.status === "string") next.status = e.status;
   if (typeof e.lastOnline === "number") next.lastOnline = e.lastOnline;
+  if (typeof e.lastConnectedNode === "string") next.lastConnectedNode = e.lastConnectedNode;
   if (typeof e.upSpeed === "number") next.upSpeed = e.upSpeed;
   if (typeof e.downSpeed === "number") next.downSpeed = e.downSpeed;
   if (typeof e.enable === "boolean") next.enable = e.enable;
@@ -432,6 +435,7 @@ const DATA_COLUMN_ORDER = [
   "totalGb",
   "expiry",
   "lastOnline",
+  "lastConnectedNode",
   "createdAt",
   "updatedAt",
   "speed",
@@ -470,6 +474,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<DataColumnId, boolean> = {
   totalGb: false,
   expiry: true,
   lastOnline: false,
+  lastConnectedNode: true,
   createdAt: false,
   updatedAt: false,
   speed: false,
@@ -496,6 +501,7 @@ function getDataColumnLabel(col: DataColumnId, t: TFunction): string {
     totalGb: { key: "pages.clients.colLimitGb", defaultValue: "Limit (GB)" },
     expiry: { key: "pages.clients.expiryTime", defaultValue: "Expiry" },
     lastOnline: { key: "pages.clients.cardLastOnline", defaultValue: "Last online" },
+    lastConnectedNode: { key: "pages.clients.lastConnectedNode", defaultValue: "Last connection node" },
     createdAt: { key: "pages.clients.colCreated", defaultValue: "Created" },
     updatedAt: { key: "pages.clients.colUpdated", defaultValue: "Updated" },
     speed: { key: "pages.clients.colSpeed", defaultValue: "Speed (Mbps)" },
@@ -523,7 +529,6 @@ function rowTsForSort(
 type FilterConn = "" | "online" | "offline";
 type FilterAcct = "" | "disabled" | "active" | "expired_traffic" | "expired_time";
 
-const CLIENTS_TABLE_PREFS_KEY = "sharx.panel.clients.tablePrefs";
 /** v1: only `columnVisibility`. v2: full table UI prefs. */
 const CLIENTS_TABLE_PREFS_V = 2 as const;
 
@@ -603,10 +608,8 @@ function isSortDirStored(s: string): s is SortDir {
   return s === "asc" || s === "desc";
 }
 
-function loadClientsTablePrefsFromStorage(): ClientsTablePrefsState {
-  if (typeof window === "undefined") return defaultClientsTablePrefs();
+function parseClientsTablePrefs(raw: string | null | undefined): ClientsTablePrefsState {
   try {
-    const raw = localStorage.getItem(CLIENTS_TABLE_PREFS_KEY);
     if (!raw) return defaultClientsTablePrefs();
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return defaultClientsTablePrefs();
@@ -664,16 +667,8 @@ function loadClientsTablePrefsFromStorage(): ClientsTablePrefsState {
   }
 }
 
-function saveClientsTablePrefsToStorage(prefs: ClientsTablePrefsState) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(
-      CLIENTS_TABLE_PREFS_KEY,
-      JSON.stringify({ v: CLIENTS_TABLE_PREFS_V, ...prefs }),
-    );
-  } catch {
-    /* quota / private mode */
-  }
+function encodeClientsTablePrefs(prefs: ClientsTablePrefsState): string {
+  return JSON.stringify({ v: CLIENTS_TABLE_PREFS_V, ...prefs });
 }
 
 function parseTrafficFilterBytes(input: string): number | null {
@@ -841,6 +836,11 @@ function compareClients(
       break;
     case "lastOnline":
       c = rowTsForSort(a, "lastOnline") - rowTsForSort(b, "lastOnline");
+      break;
+    case "lastConnectedNode":
+      c = (a.lastConnectedNode || "").localeCompare(b.lastConnectedNode || "", undefined, {
+        sensitivity: "base",
+      });
       break;
     case "createdAt":
       c = rowTsForSort(a, "createdAt") - rowTsForSort(b, "createdAt");
@@ -1013,6 +1013,15 @@ function ClientDataCell({
             r.lastOnline,
             t("pages.clients.cardNoDate", { defaultValue: "—" }),
           )}
+        </span>
+      );
+    case "lastConnectedNode":
+      return (
+        <span
+          className="block max-w-[12rem] truncate text-[var(--fg)]"
+          title={r.lastConnectedNode || undefined}
+        >
+          {r.lastConnectedNode?.trim() ? r.lastConnectedNode : "—"}
         </span>
       );
     case "createdAt":
@@ -2114,7 +2123,7 @@ export function ClientsPage() {
   const { t } = useTranslation();
   const toast = useToast();
   const ws = usePanelWebSocket();
-  const initialTablePrefs = useMemo(() => loadClientsTablePrefsFromStorage(), []);
+  const initialTablePrefs = useMemo(() => defaultClientsTablePrefs(), []);
   const resyncAfterDisconnect = useRef(false);
   /** key: client id — debounce offline after traffic drops the email from the online set. */
   const offlineStatusTimersRef = useRef<
@@ -2225,7 +2234,7 @@ export function ClientsPage() {
   }, []);
 
   useEffect(() => {
-    saveClientsTablePrefsToStorage({
+    void setUiPref("clientsTablePrefs", encodeClientsTablePrefs({
       columnVisibility,
       columnFilters,
       filtersVisible,
@@ -2237,7 +2246,7 @@ export function ClientsPage() {
       expiryCompareOp,
       sortKey,
       sortDir,
-    });
+    }));
   }, [
     columnVisibility,
     columnFilters,
@@ -2251,6 +2260,24 @@ export function ClientsPage() {
     sortKey,
     sortDir,
   ]);
+
+  useEffect(() => {
+    (async () => {
+      const raw = await getUiPref("clientsTablePrefs");
+      const prefs = parseClientsTablePrefs(raw);
+      setFiltersVisible(prefs.filtersVisible);
+      setColumnFilters(prefs.columnFilters);
+      setFilterConn(prefs.filterConn);
+      setFilterAcct(prefs.filterAcct);
+      setFilterInboundId(prefs.filterInboundId);
+      setFilterGroupId(prefs.filterGroupId);
+      setColumnVisibility(prefs.columnVisibility);
+      setTrafficCompareOp(prefs.trafficCompareOp);
+      setExpiryCompareOp(prefs.expiryCompareOp);
+      setSortKey(prefs.sortKey);
+      setSortDir(prefs.sortDir);
+    })();
+  }, []);
 
   useEffect(() => {
     if (!ws) return;

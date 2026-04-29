@@ -232,7 +232,6 @@ func enrichV2FromLegacySettings(cfg *SharxSubpageConfigV2) {
 	if cfg.AppSettings == nil {
 		as := &SharxSubpageAppSettings{}
 		as.Encrypt, _ = ss.GetSubEncrypt()
-		as.ShowInfo, _ = ss.GetSubShowInfo()
 		cfg.AppSettings = as
 	}
 

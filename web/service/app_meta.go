@@ -29,6 +29,8 @@ type AppMeta struct {
 	UpdateAvailable      bool   `json:"updateAvailable"`
 	ReleaseURL           string `json:"releaseUrl,omitempty"`
 	ReleaseNotesMarkdown string `json:"releaseNotesMarkdown,omitempty"`
+	PanelLang            string `json:"panelLang,omitempty"`
+	PanelTheme           string `json:"panelTheme,omitempty"`
 }
 
 type githubRelease struct {

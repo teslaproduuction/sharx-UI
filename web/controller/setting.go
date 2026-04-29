@@ -31,6 +31,15 @@ type twoFactorCodeForm struct {
 	Code string `json:"code" form:"code"`
 }
 
+type uiPreferenceGetForm struct {
+	Key string `json:"key" form:"key"`
+}
+
+type uiPreferenceSetForm struct {
+	Key   string `json:"key" form:"key"`
+	Value string `json:"value" form:"value"`
+}
+
 // SettingController handles settings and user management operations.
 type SettingController struct {
 	settingService  service.SettingService
@@ -64,6 +73,8 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/twoFactor/begin", a.beginTwoFactorSetup)
 	g.POST("/twoFactor/complete", a.completeTwoFactorSetup)
 	g.POST("/twoFactor/cancel", a.cancelTwoFactorSetup)
+	g.POST("/ui/get", a.getUIPreference)
+	g.POST("/ui/set", a.setUIPreference)
 
 	// Initialize migration controller
 	NewMigrationController(g)
@@ -233,6 +244,34 @@ func (a *SettingController) cancelTwoFactorSetup(c *gin.Context) {
 	session.ClearPendingTwoFactorSecret(c)
 	if err := sessions.Default(c).Save(); err != nil {
 		logger.Warning("session save after 2FA cancel:", err)
+	}
+	jsonMsg(c, "", nil)
+}
+
+func (a *SettingController) getUIPreference(c *gin.Context) {
+	form := &uiPreferenceGetForm{}
+	if err := c.ShouldBind(form); err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "fail"))
+		return
+	}
+	v, err := a.settingService.GetUIPreference(form.Key)
+	if err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "fail"))
+		return
+	}
+	jsonObj(c, map[string]string{"key": form.Key, "value": v}, nil)
+}
+
+func (a *SettingController) setUIPreference(c *gin.Context) {
+	form := &uiPreferenceSetForm{}
+	if err := c.ShouldBind(form); err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "fail"))
+		return
+	}
+	err := a.settingService.SetUIPreference(form.Key, form.Value)
+	if err != nil {
+		pureJsonMsg(c, http.StatusOK, false, I18nWeb(c, "fail"))
+		return
 	}
 	jsonMsg(c, "", nil)
 }

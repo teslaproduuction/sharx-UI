@@ -14,7 +14,6 @@ import (
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
-	"github.com/konstpic/sharx-code/v2/web/cache"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
 	"gorm.io/gorm"
 )
@@ -437,9 +436,7 @@ func (s *ClientHWIDService) ClearHWIDsForClient(clientId int) error {
 	
 	// Get userId for cache invalidation
 	var client model.ClientEntity
-	if err := db.Select("user_id").First(&client, clientId).Error; err == nil {
-		cache.InvalidateClients(client.UserId)
-	}
+	_ = db.Select("user_id").First(&client, clientId).Error
 	
 	result := db.Where("client_id = ?", clientId).Delete(&model.ClientHWID{})
 	if result.Error != nil {
@@ -470,9 +467,6 @@ func (s *ClientHWIDService) ClearAllHWIDs(userId int) (int64, error) {
 		return 0, result.Error
 	}
 	
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-	
 	logger.Infof("Cleared %d HWIDs for user %d (%d clients)", result.RowsAffected, userId, len(clientIds))
 	return result.RowsAffected, nil
 }
@@ -491,9 +485,6 @@ func (s *ClientHWIDService) SetHWIDLimitForAllClients(userId int, maxHwid int, e
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 	
 	logger.Infof("Set HWID limit (enabled=%v, max=%d) for %d clients of user %d", enabled, maxHwid, result.RowsAffected, userId)
 	return result.RowsAffected, nil

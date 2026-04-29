@@ -1,6 +1,6 @@
 /** Optional country/region flag emoji before a display name (remark / node name). */
 
-export const NAME_FLAG_SELECT_OPTIONS: { value: string; label: string }[] = [
+const NAME_FLAG_SELECT_OPTIONS_RAW: { value: string; label: string }[] = [
   { value: "", label: "—" },
   { value: "🇺🇸", label: "🇺🇸 US" },
   { value: "🇬🇧", label: "🇬🇧 UK" },
@@ -54,6 +54,13 @@ export const NAME_FLAG_SELECT_OPTIONS: { value: string; label: string }[] = [
   { value: "🇳🇬", label: "🇳🇬 NG" },
   { value: "🇿🇦", label: "🇿🇦 ZA" },
   { value: "🇪🇬", label: "🇪🇬 EG" },
+];
+
+export const NAME_FLAG_SELECT_OPTIONS: { value: string; label: string }[] = [
+  NAME_FLAG_SELECT_OPTIONS_RAW[0],
+  ...NAME_FLAG_SELECT_OPTIONS_RAW
+    .slice(1)
+    .sort((a, b) => a.label.localeCompare(b.label, "en")),
 ];
 
 const KNOWN_FLAG_PREFIXES: string[] = [

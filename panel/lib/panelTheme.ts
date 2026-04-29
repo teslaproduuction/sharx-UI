@@ -2,8 +2,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-export const PANEL_THEME_STORAGE_KEY = "sharx.panel.theme";
-
 const THEME_ATTR = "data-panel-theme";
 
 /** SharX Web first — matches `PANEL_THEME_DEFAULT` and default SSR on `<html>`. */
@@ -19,7 +17,7 @@ export const PANEL_THEME_IDS = [
 
 export type PanelThemeId = (typeof PANEL_THEME_IDS)[number];
 
-/** When no key in localStorage (or invalid) — first visit / new default. */
+/** Fallback when DB value is missing/invalid. */
 export const PANEL_THEME_DEFAULT: PanelThemeId = "web";
 
 const META_THEME: Record<PanelThemeId, string> = {
@@ -36,14 +34,8 @@ function isPanelThemeId(s: string | null | undefined): s is PanelThemeId {
   return !!s && (PANEL_THEME_IDS as readonly string[]).includes(s);
 }
 
-export function getStoredPanelTheme(): PanelThemeId {
-  if (typeof window === "undefined") return PANEL_THEME_DEFAULT;
-  try {
-    const v = localStorage.getItem(PANEL_THEME_STORAGE_KEY);
-    if (isPanelThemeId(v)) return v;
-  } catch {
-    /* ignore */
-  }
+export function parsePanelTheme(v: string | null | undefined): PanelThemeId {
+  if (isPanelThemeId(v)) return v;
   return PANEL_THEME_DEFAULT;
 }
 
@@ -67,11 +59,6 @@ export function applyPanelTheme(id: PanelThemeId): void {
     root.setAttribute(THEME_ATTR, id);
   }
   setMetaThemeColor(META_THEME[id] ?? META_THEME.default);
-  try {
-    localStorage.setItem(PANEL_THEME_STORAGE_KEY, id);
-  } catch {
-    /* ignore */
-  }
   window.dispatchEvent(new CustomEvent("sharx-panel-theme"));
 }
 
@@ -91,15 +78,10 @@ export function usePanelAccentColor(fallback: string = "#22d3ee"): string {
     const el = document.documentElement;
     const obs = new MutationObserver(read);
     obs.observe(el, { attributes: true, attributeFilter: [THEME_ATTR] });
-    const onStorage = (e: StorageEvent) => {
-      if (e.key === PANEL_THEME_STORAGE_KEY) read();
-    };
     const onCustom = () => read();
-    window.addEventListener("storage", onStorage);
     window.addEventListener("sharx-panel-theme", onCustom);
     return () => {
       obs.disconnect();
-      window.removeEventListener("storage", onStorage);
       window.removeEventListener("sharx-panel-theme", onCustom);
     };
   }, [read]);

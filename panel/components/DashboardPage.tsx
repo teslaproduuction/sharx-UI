@@ -56,10 +56,11 @@ import {
   DASHBOARD_WIDGET_I18N,
   DASHBOARD_WIDGET_ORDER,
   type DashboardWidgetId,
-  loadDashboardWidgets,
-  saveDashboardWidgets,
+  encodeDashboardWidgets,
+  parseDashboardWidgets,
   toggleDashboardWidget,
 } from "@/lib/dashboardLayout";
+import { getUiPref, setUiPref } from "@/lib/uiPrefs";
 
 type StatusData = {
   cpu: number;
@@ -374,7 +375,7 @@ export function DashboardPage() {
   const [memHoverIndex, setMemHoverIndex] = useState<number | null>(null);
   const [nodes, setNodes] = useState<{ id: number; name: string }[]>([]);
   const [customizeOpen, setCustomizeOpen] = useState(false);
-  const [enabledWidgets, setEnabledWidgets] = useState<DashboardWidgetId[]>(() => loadDashboardWidgets());
+  const [enabledWidgets, setEnabledWidgets] = useState<DashboardWidgetId[]>([...DASHBOARD_WIDGET_ORDER]);
   const [dashboardHwidUserAgentStats, setDashboardHwidUserAgentStats] = useState<
     { label: string; count: number; percentRaw: number; percentLabel: string }[]
   >([]);
@@ -402,13 +403,15 @@ export function DashboardPage() {
   }, []);
 
   useEffect(() => {
-    saveDashboardWidgets(enabledWidgets);
+    void setUiPref("dashboardWidgets", encodeDashboardWidgets(enabledWidgets));
   }, [enabledWidgets]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    if (localStorage.getItem("hideSecAlert") === "true") return;
-    if (window.location.protocol !== "https:") setShowSec(true);
+    (async () => {
+      const hidden = (await getUiPref("hideSecAlert")) === "true";
+      if (hidden) return;
+      if (window.location.protocol !== "https:") setShowSec(true);
+    })();
   }, []);
 
   const pull = useCallback(async () => {
@@ -458,6 +461,8 @@ export function DashboardPage() {
           setMulti(Boolean(settings.multiNodeMode));
           setIpv6Enabled(Boolean(settings.enableIPv6));
         }
+        const widgetsRaw = await getUiPref("dashboardWidgets");
+        setEnabledWidgets(parseDashboardWidgets(widgetsRaw));
       } catch {
         /* ignore */
       }
@@ -835,7 +840,9 @@ export function DashboardPage() {
             type="error"
             title={t("secAlertTitle")}
             onClose={() => {
-              if (dontSec) localStorage.setItem("hideSecAlert", "true");
+              if (dontSec) {
+                void setUiPref("hideSecAlert", "true");
+              }
               setShowSec(false);
             }}
             description={

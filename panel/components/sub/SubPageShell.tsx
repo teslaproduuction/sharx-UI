@@ -1,7 +1,7 @@
 "use client";
 
 import { motion, useReducedMotion } from "framer-motion";
-import { useEffect, type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import type { SharxBranding } from "@/lib/sharxSubpageConfig";
 import { durations, easeStandard } from "@/lib/motion";
 import { resolveSubPageColorPreset } from "@/lib/subPageColorPreset";
@@ -54,20 +54,6 @@ export function SubPageShell({
   const palette = resolveSubPageColorPreset(colorPreset);
   const reduce = useReducedMotion();
   const hasCustomBg = !!(branding?.bgColor && branding.bgColor.trim());
-
-  useEffect(() => {
-    const html = document.documentElement;
-    const prev = html.getAttribute("data-panel-theme");
-    if (palette === "default") {
-      html.removeAttribute("data-panel-theme");
-    } else {
-      html.setAttribute("data-panel-theme", palette);
-    }
-    return () => {
-      if (prev == null) html.removeAttribute("data-panel-theme");
-      else html.setAttribute("data-panel-theme", prev);
-    };
-  }, [palette]);
 
   return (
     <div

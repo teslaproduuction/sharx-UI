@@ -15,7 +15,6 @@ import (
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
-	"github.com/konstpic/sharx-code/v2/web/cache"
 	"github.com/konstpic/sharx-code/v2/xray"
 
 	"gorm.io/gorm"
@@ -637,11 +636,6 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 		}
 	}
 
-	// Invalidate cache for this user's inbounds
-	if inbound.UserId > 0 {
-		cache.InvalidateInbounds(inbound.UserId)
-	}
-
 	// Note: ClientStats are no longer managed here - clients are managed through ClientEntity
 	// Traffic is stored directly in ClientEntity table
 
@@ -848,15 +842,6 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 	// #endregion
 
 	if err == nil && userId > 0 {
-		// Invalidate cache for this user's inbounds
-		// #region agent log
-		logger.Debugf("[DEBUG-AGENT] DelInbound: before cache invalidation, userId=%d", userId)
-		// #endregion
-		cacheErr := cache.InvalidateInbounds(userId)
-		// #region agent log
-		logger.Debugf("[DEBUG-AGENT] DelInbound: after cache invalidation, userId=%d, error=%v", userId, cacheErr)
-		// #endregion
-
 		// Send notification about inbound deletion (only if deletion was successful)
 		if err == nil {
 			tgbotService := Tgbot{}
@@ -1150,16 +1135,6 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] UpdateInbound service: DB transaction success, inboundId=%d, needRestart=%v", inbound.Id, needRestart)
 		// #endregion
-		// Invalidate cache for this user's inbounds
-		if oldInbound.UserId > 0 {
-			// #region agent log
-			logger.Debugf("[DEBUG-AGENT] UpdateInbound: before cache invalidation, userId=%d", oldInbound.UserId)
-			// #endregion
-			cacheErr := cache.InvalidateInbounds(oldInbound.UserId)
-			// #region agent log
-			logger.Debugf("[DEBUG-AGENT] UpdateInbound: after cache invalidation, userId=%d, error=%v", oldInbound.UserId, cacheErr)
-			// #endregion
-		}
 	} else {
 		// #region agent log
 		logger.Debugf("[DEBUG-AGENT] UpdateInbound service: DB transaction FAILED, inboundId=%d, error=%v", inbound.Id, err)

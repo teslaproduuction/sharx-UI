@@ -28,7 +28,9 @@ export function renderBlock(block: SubpageBlock, ctx: BlockRenderContext): React
     case "installation-guide":
       return <InstallationGuideBlock block={block} ctx={ctx} />;
     case "links-list":
-      return <LinksListBlock block={block} ctx={ctx} />;
+      // Deprecated visual block: keep config for header actions,
+      // but never render per-link cards on the public page.
+      return null;
     case "support-cta":
       return <SupportCtaBlock block={block} ctx={ctx} />;
     case "custom-html":

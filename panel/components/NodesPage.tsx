@@ -85,6 +85,7 @@ type ClientNodeMatrixPayload = {
 
 /** Harbor-style path (same as published images); self-hosters may replace host/project. */
 const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
+const REGISTER_HANDSHAKE_PREVIEW_MS = 3500;
 
 function xrayStateLabel(state: string | undefined, t: TFunction): string {
   const s = (state || "unknown").toLowerCase();
@@ -404,6 +405,11 @@ export function NodesPage() {
     (checkOnly: boolean) => Promise<void>
   >(async () => {});
 
+  const wait = useCallback(
+    (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms)),
+    [],
+  );
+
   const runRegisterFlow = useCallback(
     async (checkOnly: boolean) => {
       if (checkOnly && !pendingReg) return;
@@ -459,6 +465,7 @@ export function NodesPage() {
         }
 
         setRegisterPhase("verify");
+        await wait(REGISTER_HANDSHAKE_PREVIEW_MS);
         const checkR = await postJson<unknown>(
           panel(`node/check/${stash.nodeId}`),
           {},
@@ -512,6 +519,7 @@ export function NodesPage() {
       resetAddModal,
       multiNode,
       loadProfilesForAssign,
+      wait,
     ],
   );
 
@@ -1120,31 +1128,8 @@ export function NodesPage() {
       >
         {addWizardStep === 3 ? (
           <div className="flex flex-col gap-4 text-sm">
-            {createdSecretKey ? (
-              <div className="rounded-lg border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] p-3">
-                <p className="text-xs text-[var(--fg-muted)]">
-                  {t("pages.nodes.wizardProfileComposeHint", {
-                    defaultValue: "You can still copy the node compose snippet below.",
-                  })}
-                </p>
-                <div className="mt-2">
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="!gap-2"
-                    onClick={() => void copyDockerCompose()}
-                  >
-                    <Copy size={16} />
-                    {t("pages.nodes.copyDockerCompose")}
-                  </Button>
-                </div>
-              </div>
-            ) : null}
             <p className="text-xs leading-relaxed text-[var(--fg-muted)]">
-              {t("pages.nodes.wizardProfileHint", {
-                defaultValue:
-                  "Choose a core config profile for this node, or skip to use the default profile.",
-              })}
+              {t("pages.nodes.wizardProfileHint")}
             </p>
             {profileListLoading ? (
               <div className="grid min-h-32 place-items-center">
@@ -1152,9 +1137,7 @@ export function NodesPage() {
               </div>
             ) : profileList.length === 0 ? (
               <p className="text-sm text-[var(--fg-subtle)]">
-                {t("pages.nodes.wizardProfileEmpty", {
-                  defaultValue: "No profiles found. You can add them under Xray — Core config profiles.",
-                })}
+                {t("pages.nodes.wizardProfileEmpty")}
               </p>
             ) : (
               <div className="flex max-h-64 flex-col gap-2 overflow-y-auto pr-1" role="radiogroup">
@@ -1177,7 +1160,7 @@ export function NodesPage() {
                     <span className="min-w-0 font-medium text-[var(--fg)]">
                       {pr.name}
                       {pr.isDefault
-                        ? ` ${t("pages.nodes.profileDefaultTag", { defaultValue: "(default)" })}`
+                        ? ` ${t("pages.nodes.profileDefaultTag")}`
                         : ""}
                     </span>
                   </label>

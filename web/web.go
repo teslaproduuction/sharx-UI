@@ -30,7 +30,6 @@ import (
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-contrib/sessions/cookie"
 	"github.com/gin-gonic/gin"
-	"github.com/konstpic/sharx-code/v2/web/cache"
 	"github.com/robfig/cron/v3"
 )
 
@@ -115,18 +114,10 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	engine.Use(gzip.Gzip(gzip.DefaultCompression, gzip.WithExcludedPaths([]string{basePath + "panel/api/"})))
 
-	// Use Redis store for sessions if available, otherwise fallback to cookie store
+	// Use cookie store for sessions (Redis removed).
 	var store sessions.Store
-	redisClient := cache.GetClient()
-	if redisClient != nil {
-		// Use Redis store
-		store = cache.NewRedisStore(redisClient, []byte(secret))
-		logger.Info("Using Redis store for sessions")
-	} else {
-		// Fallback to cookie store
-		store = cookie.NewStore(secret)
-		logger.Info("Using cookie store for sessions (Redis not available)")
-	}
+	store = cookie.NewStore(secret)
+	logger.Info("Using cookie store for sessions")
 	
 	// Configure default session cookie options, including expiration (MaxAge)
 	if sessionMaxAge, err := s.settingService.GetSessionMaxAge(); err == nil {
@@ -487,12 +478,3 @@ func (s *Server) GetWSHub() any {
 	return s.wsHub
 }
 
-// InitRedisCache initializes Redis cache. If redisAddr is empty, uses embedded Redis.
-func InitRedisCache(redisAddr string) error {
-	return cache.InitRedis(redisAddr)
-}
-
-// CloseRedisCache closes Redis cache connection.
-func CloseRedisCache() error {
-	return cache.Close()
-}

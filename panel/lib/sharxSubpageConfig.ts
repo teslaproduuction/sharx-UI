@@ -550,8 +550,6 @@ export type PerAppCommonSettings = z.infer<typeof perAppCommonSettingsSchema>;
 export const appSettingsSchema = z.object({
   /** Encrypt base subscription: require Happ/v2raytun/browser; block others. */
   encrypt: z.boolean().default(false),
-  /** Append remaining traffic and expiry to each config name. */
-  showInfo: z.boolean().default(true),
   presetIcons: presetIconsSchema.optional(),
   happ: perAppHappSettingsSchema.optional(),
   v2raytun: perAppCommonSettingsSchema.optional(),
@@ -717,7 +715,6 @@ export function defaultResponseRules(): ResponseRules {
 export function defaultAppSettings(): AppSettings {
   return {
     encrypt: false,
-    showInfo: true,
     presetIcons: { botUrl: "", channelUrl: "", supportUrl: "" },
     happ: { encrypt: false },
     v2raytun: { enabled: true },

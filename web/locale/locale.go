@@ -20,6 +20,7 @@ var (
 	i18nBundle   *i18n.Bundle
 	LocalizerWeb *i18n.Localizer
 	LocalizerBot *i18n.Localizer
+	settingSvc   SettingService
 )
 
 // I18nType represents the type of interface for internationalization.
@@ -33,10 +34,12 @@ const (
 // SettingService interface defines methods for accessing locale settings.
 type SettingService interface {
 	GetTgLang() (string, error)
+	GetUIPreference(key string) (string, error)
 }
 
 // InitLocalizer initializes the internationalization system with embedded translation files.
 func InitLocalizer(i18nFS embed.FS, settingService SettingService) error {
+	settingSvc = settingService
 	// set default bundle to english
 	i18nBundle = i18n.NewBundle(language.MustParse("en-US"))
 	i18nBundle.RegisterUnmarshalFunc("toml", toml.Unmarshal)
@@ -117,7 +120,7 @@ func initTGBotLocalizer(settingService SettingService) error {
 }
 
 // LocalizerMiddleware returns a Gin middleware that sets up localization for web requests.
-// It determines the user's language from cookies or Accept-Language header,
+// It determines language from global DB setting `panelLang` and falls back to Accept-Language,
 // creates a localizer instance, and stores it in the Gin context for use in handlers.
 // Also provides the I18n function in the context for template rendering.
 func LocalizerMiddleware() gin.HandlerFunc {
@@ -133,9 +136,12 @@ func LocalizerMiddleware() gin.HandlerFunc {
 		}
 		var lang string
 
-		if cookie, err := c.Request.Cookie("lang"); err == nil {
-			lang = cookie.Value
-		} else {
+		if settingSvc != nil {
+			if dbLang, err := settingSvc.GetUIPreference("panelLang"); err == nil && strings.TrimSpace(dbLang) != "" {
+				lang = dbLang
+			}
+		}
+		if strings.TrimSpace(lang) == "" {
 			lang = c.GetHeader("Accept-Language")
 		}
 

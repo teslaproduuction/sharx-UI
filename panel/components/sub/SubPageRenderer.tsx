@@ -41,6 +41,11 @@ type BrandingInfo = {
   showQrCodes: boolean;
 };
 
+type HeaderSubscriptionActions = {
+  showCopy: boolean;
+  showQr: boolean;
+};
+
 function brandingFromConfig(
   cfg: SharxSubpageConfigV1 | SharxSubpageConfigV2 | null,
   fallbackTitle: string,
@@ -54,6 +59,28 @@ function brandingFromConfig(
     brandText: cfg.branding?.brandText?.trim() || undefined,
     supportUrl: cfg.branding?.supportUrl?.trim() || undefined,
     showQrCodes: cfg.showQrCodes !== false,
+  };
+}
+
+function headerSubscriptionActionsFromConfig(
+  cfg: SharxSubpageConfigV1 | SharxSubpageConfigV2 | null,
+): HeaderSubscriptionActions {
+  // Legacy / unknown config keeps historical behavior.
+  if (!cfg || !("blocks" in cfg) || !Array.isArray(cfg.blocks)) {
+    return { showCopy: true, showQr: true };
+  }
+  const linksBlock = cfg.blocks.find(
+    (b) => b.kind === "links-list" && b.enabled !== false,
+  ) as
+    | { showCopy?: boolean; showQr?: boolean }
+    | undefined;
+  if (!linksBlock) {
+    // In v2, header subscription actions are owned by links-list block.
+    return { showCopy: false, showQr: false };
+  }
+  return {
+    showCopy: linksBlock.showCopy !== false,
+    showQr: linksBlock.showQr !== false,
   };
 }
 
@@ -87,6 +114,7 @@ export function SubPageRenderer({
       : null;
 
   const branding = brandingFromConfig(cfg, fallbackTitle);
+  const headerActions = headerSubscriptionActionsFromConfig(cfg);
 
   const copyText = useCallback(
     async (text: string, kind: "link" | "subscription") => {
@@ -137,10 +165,7 @@ export function SubPageRenderer({
                   height={36}
                 />
               ) : (
-                <div
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5 text-[#22d3ee]"
-                  aria-hidden
-                >
+                <div className={shell.logoFallback} aria-hidden>
                   <Link2 className="size-5" />
                 </div>
               )}
@@ -151,29 +176,31 @@ export function SubPageRenderer({
                   {branding.title}
                 </h1>
                 {branding.brandText ? (
-                  <p className="mt-0.5 text-xs text-[#8b949e]">{branding.brandText}</p>
+                  <p className={shell.brandTagline}>{branding.brandText}</p>
                 ) : null}
               </div>
             </div>
             <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
               {data.subscriptionUrl ? (
                 <>
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    className="!h-10 !rounded-lg !border-white/10 !bg-white/5 !text-sm !text-[#c9d1d9] hover:!bg-white/10"
-                    onClick={() => void copyText(data.subscriptionUrl, "subscription")}
-                  >
-                    <Copy className="size-4 shrink-0 text-[#22d3ee]" />
-                    {t("pages.publicSub.copySubscription", {
-                      defaultValue: "Copy subscription link",
-                    })}
-                  </Button>
-                  {branding.showQrCodes ? (
+                  {headerActions.showCopy ? (
                     <Button
                       type="button"
                       variant="secondary"
-                      className="!h-10 !rounded-lg !border-white/10 !bg-white/5 !text-sm !text-[#c9d1d9] hover:!bg-white/10"
+                      className={shell.actionBtn}
+                      onClick={() => void copyText(data.subscriptionUrl, "subscription")}
+                    >
+                      <Copy className={`size-4 shrink-0 ${shell.actionBtnIcon}`} />
+                      {t("pages.publicSub.copySubscription", {
+                        defaultValue: "Copy subscription link",
+                      })}
+                    </Button>
+                  ) : null}
+                  {branding.showQrCodes && headerActions.showQr ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className={shell.actionBtn}
                       onClick={() =>
                         setQrModal({
                           url: data.subscriptionUrl,
@@ -183,7 +210,7 @@ export function SubPageRenderer({
                         })
                       }
                     >
-                      <QrCode className="size-4 shrink-0 text-[#22d3ee]" />
+                      <QrCode className={`size-4 shrink-0 ${shell.actionBtnIcon}`} />
                       {t("pages.publicSub.qrSubscriptionShort", {
                         defaultValue: "QR",
                       })}
@@ -259,10 +286,10 @@ export function SubPageRenderer({
               <Button
                 type="button"
                 variant="secondary"
-                className="!rounded-lg !border-white/10 !bg-white/5 !text-[#c9d1d9]"
+                className={shell.actionBtn}
                 onClick={() => void copyText(qrModal.url, "link")}
               >
-                <Copy className="size-4 text-[#22d3ee]" />
+                <Copy className={`size-4 ${shell.actionBtnIcon}`} />
                 {t("copy", { defaultValue: "Copy" })}
               </Button>
             </div>
