@@ -13,7 +13,6 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
 	"github.com/konstpic/sharx-code/v2/util/random"
-	"github.com/konstpic/sharx-code/v2/web/cache"
 	"github.com/konstpic/sharx-code/v2/xray"
 
 	"gorm.io/gorm"
@@ -99,6 +98,7 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 
 		// Traffic statistics are now stored directly in ClientEntity table
 		// No need to load from client_traffics - fields are already loaded from DB
+		MergePanelClientLastConnectedNodeInto(client)
 		
 		// Check if client exceeded limits and update status if needed (but keep Enable = true)
 		now := time.Now().Unix() * 1000
@@ -115,10 +115,15 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 			}
 			// Only update if status changed
 			if client.Status != status {
+				oldClientForNotify := *client
 				client.Status = status
 				err = db.Model(&model.ClientEntity{}).Where("id = ?", client.Id).Update("status", status).Error
 				if err != nil {
 					logger.Warningf("Failed to update status for client %s: %v", client.Email, err)
+				}
+				tgbotService := Tgbot{}
+				if tgbotService.IsRunning() {
+					tgbotService.NotifyClientStateChanged(&oldClientForNotify, client)
 				}
 				// Remove expired client from Xray API if it's enabled and just expired (both local and nodes)
 				if client.Enable {
@@ -210,6 +215,7 @@ func (s *ClientService) GetClient(id int) (*model.ClientEntity, error) {
 
 	// Traffic statistics (Up, Down, AllTime, LastOnline) are already loaded from ClientEntity table
 	// No need to load from client_traffics
+	MergePanelClientLastConnectedNodeInto(&client)
 
 	// Load HWIDs for this client
 	hwidService := ClientHWIDService{}
@@ -404,9 +410,6 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	if err != nil {
 		return false, err
 	}
-	
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 	
 	// Now update Settings for all assigned inbounds
 	// This is done AFTER committing the client transaction to avoid nested transactions and database locks
@@ -711,15 +714,6 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		return false, err
 	}
 	
-	// Invalidate cache for this user's clients
-	// #region agent log
-	logger.Debugf("[DEBUG-AGENT] UpdateClient: before cache invalidation, userId=%d", userId)
-	// #endregion
-	cacheErr := cache.InvalidateClients(userId)
-	// #region agent log
-	logger.Debugf("[DEBUG-AGENT] UpdateClient: after cache invalidation, userId=%d, error=%v", userId, cacheErr)
-	// #endregion
-	
 	// Reload client from DB after commit to get latest status and values
 	var finalClient model.ClientEntity
 	db = database.GetDB()
@@ -904,6 +898,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	tgbotService := Tgbot{}
 	if tgbotService.IsRunning() {
 		tgbotService.NotifyClientUpdated(&finalClient, existing)
+		tgbotService.NotifyClientStateChanged(existing, &finalClient)
 	}
 
 	// Return needRestart based on whether API operation was done
@@ -1368,9 +1363,6 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 
 	_ = db.Where("client_id IN (?)", db.Model(&model.ClientEntity{}).Select("id").Where("user_id = ?", userId)).Delete(&model.ClientNodeTraffic{}).Error
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	// Reset status to "active" for clients expired due to traffic
 	// This will allow clients to be re-added to Xray if they were removed
 	db.Model(&model.ClientEntity{}).
@@ -1526,9 +1518,6 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 	}
 
 	_ = db.Where("client_id = ?", clientId).Delete(&model.ClientNodeTraffic{}).Error
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	// Reset status to "active" if client was expired due to traffic
 	if wasExpired {
@@ -1882,9 +1871,6 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 
 	_ = db.Where("client_id IN ?", clientIds).Delete(&model.ClientNodeTraffic{}).Error
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	// Reset status to "active" for clients expired due to traffic
 	if len(expiredClients) > 0 {
 		db.Model(&model.ClientEntity{}).
@@ -2054,9 +2040,6 @@ func (s *ClientService) BulkClearHWIDs(userId int, clientIds []int) error {
 		}
 	}
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	return nil
 }
 
@@ -2114,9 +2097,6 @@ func (s *ClientService) BulkDelete(userId int, clientIds []int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	// Update Settings for affected inbounds
 	inboundService := InboundService{}
@@ -2187,9 +2167,6 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 	if err != nil {
 		return false, err
 	}
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	// Use Xray API for instant user add/remove (both local and nodes)
 	needRestart := false
@@ -2371,9 +2348,6 @@ func (s *ClientService) BulkSetHWIDLimit(userId int, clientIds []int, maxHwid in
 		return err
 	}
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	return nil
 }
 
@@ -2452,9 +2426,6 @@ func (s *ClientService) BulkAssignInbounds(userId int, clientIds []int, inboundI
 			needRestart = true
 		}
 	}
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	return needRestart, nil
 }

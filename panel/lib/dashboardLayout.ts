@@ -1,6 +1,6 @@
 /**
  * User-configurable dashboard blocks (order fixed; each can be shown/hidden).
- * Persisted in localStorage in canonical order of enabled widget ids.
+ * Persisted in DB as canonical order of enabled widget ids.
  */
 
 export const DASHBOARD_WIDGET_ORDER = [
@@ -16,9 +16,6 @@ export const DASHBOARD_WIDGET_ORDER = [
 ] as const;
 
 export type DashboardWidgetId = (typeof DASHBOARD_WIDGET_ORDER)[number];
-
-const STORAGE_KEY = "sharx.panel.dashboard.widgets";
-const USER_AGENT_MIGRATION_KEY = "sharx.panel.dashboard.widgets.user_agent.migrated";
 
 export const DASHBOARD_WIDGET_I18N: Record<DashboardWidgetId, string> = {
   resources: "pages.index.dashWidgetResources",
@@ -37,12 +34,8 @@ export function isDashboardWidgetId(v: string): v is DashboardWidgetId {
 }
 
 /** Enabled widgets in display order. On error or empty → all. */
-export function loadDashboardWidgets(): DashboardWidgetId[] {
-  if (typeof window === "undefined") {
-    return [...DASHBOARD_WIDGET_ORDER];
-  }
+export function parseDashboardWidgets(raw: string | null | undefined): DashboardWidgetId[] {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [...DASHBOARD_WIDGET_ORDER];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed) || parsed.length === 0) {
@@ -52,26 +45,14 @@ export function loadDashboardWidgets(): DashboardWidgetId[] {
       parsed.filter((x): x is string => typeof x === "string" && isDashboardWidgetId(x))
     );
     if (asSet.size === 0) return [...DASHBOARD_WIDGET_ORDER];
-    // One-time migration: after introducing user_agent widget, keep it enabled by default
-    // for users with previously saved layout, while still allowing manual disabling later.
-    const uaMigrated = localStorage.getItem(USER_AGENT_MIGRATION_KEY) === "1";
-    if (!uaMigrated) {
-      asSet.add("user_agent");
-      localStorage.setItem(USER_AGENT_MIGRATION_KEY, "1");
-    }
     return DASHBOARD_WIDGET_ORDER.filter((id) => asSet.has(id));
   } catch {
     return [...DASHBOARD_WIDGET_ORDER];
   }
 }
 
-export function saveDashboardWidgets(enabled: readonly DashboardWidgetId[]) {
-  if (typeof window === "undefined") return;
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify([...enabled]));
-  } catch {
-    /* ignore */
-  }
+export function encodeDashboardWidgets(enabled: readonly DashboardWidgetId[]): string {
+  return JSON.stringify([...enabled]);
 }
 
 export function toggleDashboardWidget(

@@ -200,6 +200,9 @@ type ClientEntity struct {
 	UpSpeed    int64 `json:"upSpeed,omitempty" form:"-" gorm:"-"`   // Upload speed in bits per second (calculated)
 	DownSpeed  int64 `json:"downSpeed,omitempty" form:"-" gorm:"-"` // Download speed in bits per second (calculated)
 	LastOnline int64 `json:"lastOnline" form:"-" gorm:"default:0"`  // Last online timestamp
+	// Multi-node live hint: last node where this client was observed online.
+	// Not persisted in DB; refreshed from node stats collector.
+	LastConnectedNode string `json:"lastConnectedNode,omitempty" form:"-" gorm:"-"`
 
 	// HWID (Hardware ID) restrictions
 	HWIDEnabled bool          `json:"hwidEnabled" form:"hwidEnabled" gorm:"column:hwid_enabled;default:false"` // Whether HWID restriction is enabled for this client

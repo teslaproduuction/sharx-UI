@@ -9,7 +9,6 @@ import {
   RotateCcw,
   Route,
   Save,
-  SlidersHorizontal,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -24,7 +23,6 @@ import {
   type SharxSubpageConfigV2,
   type SubpageBlock,
 } from "@/lib/sharxSubpageConfig";
-import { AppSettingsEditor } from "./AppSettingsEditor";
 import { BlockListEditor } from "./BlockListEditor";
 import { BrandingEditor } from "./BrandingEditor";
 import { RoutingProfilesEditor } from "./RoutingProfilesEditor";
@@ -36,7 +34,6 @@ type LeftTab =
   | "branding"
   | "blocks"
   | "response-rules"
-  | "app-settings"
   | "client-routing"
   | "json-templates"
   | "raw";
@@ -165,11 +162,6 @@ export function SubscriptionBuilder() {
         icon: Megaphone,
       },
       {
-        id: "app-settings" as LeftTab,
-        label: t("subBuilder.tabs.appSettings", { defaultValue: "App settings" }),
-        icon: SlidersHorizontal,
-      },
-      {
         id: "client-routing" as LeftTab,
         label: t("subBuilder.tabs.clientRouting", { defaultValue: "Client routing" }),
         icon: Route,
@@ -234,8 +226,6 @@ export function SubscriptionBuilder() {
               <BlockListEditor blocks={config.blocks} onChange={handleSetBlocks} />
             ) : activeTab === "response-rules" ? (
               <ResponseRulesEditor config={config} onChange={setConfig} />
-            ) : activeTab === "app-settings" ? (
-              <AppSettingsEditor config={config} onChange={setConfig} />
             ) : activeTab === "client-routing" ? (
               <RoutingProfilesEditor config={config} onChange={setConfig} />
             ) : activeTab === "json-templates" ? (

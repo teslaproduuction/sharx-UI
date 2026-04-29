@@ -33,6 +33,8 @@ var (
 	// Merged into HTTP list/get and WebSocket client payloads so the Speed column is not always empty.
 	panelLiveSpeedMu sync.RWMutex
 	panelLiveSpeed   map[int]bpsPair
+	panelLastNodeMu  sync.RWMutex
+	panelLastNodeByEmail map[string]string
 
 	// trafficStateMap stores previous traffic states for speed calculation
 	// map[clientId]clientTrafficState
@@ -44,6 +46,47 @@ var (
 	})
 	hysteriaInboundCumulativeMu sync.Mutex
 )
+
+func setPanelClientLastConnectedNodes(m map[string]string) {
+	panelLastNodeMu.Lock()
+	defer panelLastNodeMu.Unlock()
+	if len(m) == 0 {
+		panelLastNodeByEmail = nil
+		return
+	}
+	panelLastNodeByEmail = make(map[string]string, len(m))
+	for email, nodeName := range m {
+		k := strings.ToLower(strings.TrimSpace(email))
+		v := strings.TrimSpace(nodeName)
+		if k == "" || v == "" {
+			continue
+		}
+		panelLastNodeByEmail[k] = v
+	}
+}
+
+func panelClientLastConnectedNode(email string) (string, bool) {
+	k := strings.ToLower(strings.TrimSpace(email))
+	if k == "" {
+		return "", false
+	}
+	panelLastNodeMu.RLock()
+	defer panelLastNodeMu.RUnlock()
+	if panelLastNodeByEmail == nil {
+		return "", false
+	}
+	v, ok := panelLastNodeByEmail[k]
+	return v, ok
+}
+
+func MergePanelClientLastConnectedNodeInto(c *model.ClientEntity) {
+	if c == nil {
+		return
+	}
+	if nodeName, ok := panelClientLastConnectedNode(c.Email); ok {
+		c.LastConnectedNode = nodeName
+	}
+}
 
 func setPanelClientLiveSpeeds(m map[int]bpsPair) {
 	panelLiveSpeedMu.Lock()
@@ -418,6 +461,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 
 		// Mark client with expired status if limit exceeded or time expired
 		if (finalTrafficExceeded || timeExpired) && client.Enable {
+			oldClientForNotify := *client
 			// Update status if not already set or if reason changed
 			shouldUpdateStatus := false
 			if finalTrafficExceeded && client.Status != "expired_traffic" {
@@ -454,6 +498,12 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 				
 				logger.Infof("Client %s marked with status %s: trafficExceeded=%v, timeExpired=%v, currentUsed=%d, newTraffic=%d, finalUsed=%d, total=%d",
 					client.Email, client.Status, finalTrafficExceeded, timeExpired, currentUsed, newTotal, finalUsed, trafficLimit)
+				go func(oldClient model.ClientEntity, newClient *model.ClientEntity) {
+					tgbotService := Tgbot{}
+					if tgbotService.IsRunning() {
+						tgbotService.NotifyClientStateChanged(&oldClient, newClient)
+					}
+				}(oldClientForNotify, client)
 			}
 		}
 

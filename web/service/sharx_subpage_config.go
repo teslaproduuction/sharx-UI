@@ -73,7 +73,6 @@ type SharxSubpagePerAppCommon struct {
 // configurator, so they don't need dedicated fields here.
 type SharxSubpageAppSettings struct {
 	Encrypt      bool                      `json:"encrypt"`
-	ShowInfo     bool                      `json:"showInfo"`
 	PresetIcons  *SharxSubpagePresetIcons  `json:"presetIcons,omitempty"`
 	Happ         *SharxSubpagePerAppHapp   `json:"happ,omitempty"`
 	V2RayTun     *SharxSubpagePerAppCommon `json:"v2raytun,omitempty"`

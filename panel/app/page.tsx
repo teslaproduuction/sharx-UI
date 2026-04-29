@@ -7,7 +7,9 @@ import { useTranslation } from "react-i18next";
 import { api, postJson } from "@/lib/api";
 import { changeLanguage, panelSelectLangValue, supported } from "@/lib/i18n";
 import { easeStandard, durations } from "@/lib/motion";
+import { parsePanelTheme, applyPanelTheme } from "@/lib/panelTheme";
 import { p } from "@/lib/paths";
+import { usePublicAppMeta } from "@/lib/usePublicAppMeta";
 import { Button, Input, SelectNative, Spinner, useToast } from "@/components/ui";
 import { PanelHeaderAppMeta, PanelTelegramNavLink, Surface } from "@/components/panel";
 
@@ -20,6 +22,7 @@ export default function LoginPage() {
   const [two, setTwo] = useState(false);
   const [awaiting2FA, setAwaiting2FA] = useState(false);
   const [loading, setLoading] = useState(false);
+  const publicMeta = usePublicAppMeta();
   useEffect(() => {
     (async () => {
       const res = (await api.post<{ success: boolean; obj: boolean }>(p("getTwoFactorEnable"))).data;
@@ -33,6 +36,11 @@ export default function LoginPage() {
   useEffect(() => {
     setAwaiting2FA(false);
   }, [form.username, form.password]);
+
+  useEffect(() => {
+    const theme = parsePanelTheme(publicMeta?.panelTheme);
+    applyPanelTheme(theme);
+  }, [publicMeta?.panelTheme]);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

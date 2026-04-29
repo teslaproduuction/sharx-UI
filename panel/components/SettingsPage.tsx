@@ -41,12 +41,13 @@ import { changeLanguage, panelSelectLangValue, supported } from "@/lib/i18n";
 import { linkP, panel, p } from "@/lib/paths";
 import {
   applyPanelTheme,
-  getStoredPanelTheme,
   PANEL_THEME_DEFAULT,
   PANEL_THEME_IDS,
+  parsePanelTheme,
   type PanelThemeId,
 } from "@/lib/panelTheme";
 import { parseSettingsTab, type SettingsTabId } from "@/lib/settingsTabs";
+import { getUiPref, setUiPref } from "@/lib/uiPrefs";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import { RemarkModelConstructor } from "@/components/settings/RemarkModelConstructor";
 import { SubscriptionBuilder } from "@/components/settings/subscription/SubscriptionBuilder";
@@ -137,6 +138,22 @@ type SettingsTabConfig = {
   icon: LucideIcon;
 };
 
+const TG_BOT_LANGUAGE_OPTIONS = [
+  { value: "en-US", label: "English" },
+  { value: "ru-RU", label: "Русский" },
+  { value: "fa-IR", label: "فارسی" },
+  { value: "zh-CN", label: "简体中文" },
+  { value: "zh-TW", label: "繁體中文" },
+  { value: "ar-EG", label: "العربية" },
+  { value: "es-ES", label: "Español" },
+  { value: "ja-JP", label: "日本語" },
+  { value: "id-ID", label: "Indonesia" },
+  { value: "tr-TR", label: "Türkçe" },
+  { value: "pt-BR", label: "Português" },
+  { value: "uk-UA", label: "Українська" },
+  { value: "vi-VN", label: "Tiếng Việt" },
+] as const;
+
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
   const toast = useToast();
@@ -159,9 +176,7 @@ export function SettingsPage() {
   const [twoFactorSubmitting, setTwoFactorSubmitting] = useState(false);
   const [twoFactorDisableOpen, setTwoFactorDisableOpen] = useState(false);
   const [twoFactorDisableLoading, setTwoFactorDisableLoading] = useState(false);
-  const [panelTheme, setPanelTheme] = useState<PanelThemeId>(() =>
-    typeof window !== "undefined" ? getStoredPanelTheme() : PANEL_THEME_DEFAULT,
-  );
+  const [panelTheme, setPanelTheme] = useState<PanelThemeId>(PANEL_THEME_DEFAULT);
   const [account, setAccount] = useState({
     oldUsername: "",
     oldPassword: "",
@@ -186,6 +201,9 @@ export function SettingsPage() {
       const n = normalizeAllSetting(r.obj as Record<string, unknown>);
       setForm(n);
       setBaseline(n);
+      const resolvedTheme = parsePanelTheme(await getUiPref("panelTheme"));
+      setPanelTheme(resolvedTheme);
+      applyPanelTheme(resolvedTheme);
     } else {
       toast.error(r.msg || t("pages.settings.toasts.getSettings"));
     }
@@ -408,6 +426,7 @@ export function SettingsPage() {
                     const id = v as PanelThemeId;
                     setPanelTheme(id);
                     applyPanelTheme(id);
+                    void setUiPref("panelTheme", id);
                   }
                 }}
               >
@@ -913,7 +932,16 @@ export function SettingsPage() {
               />
             </Row>
             <Row label={t("pages.settings.telegramBotLanguage")}>
-              <Input value={form.tgLang} onChange={(e) => patch("tgLang", e.target.value)} />
+              <SelectNative value={form.tgLang} onChange={(e) => patch("tgLang", e.target.value)}>
+                {!TG_BOT_LANGUAGE_OPTIONS.some((lang) => lang.value === form.tgLang) ? (
+                  <option value={form.tgLang}>{form.tgLang}</option>
+                ) : null}
+                {TG_BOT_LANGUAGE_OPTIONS.map((lang) => (
+                  <option key={lang.value} value={lang.value}>
+                    {lang.label}
+                  </option>
+                ))}
+              </SelectNative>
             </Row>
           </SettingsSection>
         </SettingsGrid>
@@ -1072,7 +1100,7 @@ export function SettingsPage() {
             icon={KeyRound}
             iconTone="neutral"
           >
-            <Row label="Bind DN">
+            <Row label={t("pages.settings.ldapBindDN", { defaultValue: "Bind DN" })}>
               <Input value={form.ldapBindDN} onChange={(e) => patch("ldapBindDN", e.target.value)} autoComplete="off" />
             </Row>
             <Row label={t("password")}>
@@ -1083,7 +1111,7 @@ export function SettingsPage() {
                 autoComplete="new-password"
               />
             </Row>
-            <Row label="Base DN">
+            <Row label={t("pages.settings.ldapBaseDN", { defaultValue: "Base DN" })}>
               <Input value={form.ldapBaseDN} onChange={(e) => patch("ldapBaseDN", e.target.value)} />
             </Row>
             <Row label={t("pages.settings.ldapUserFilter", { defaultValue: "User filter" })}>

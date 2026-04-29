@@ -11,6 +11,7 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
+	"github.com/konstpic/sharx-code/v2/util/crypto"
 	"github.com/konstpic/sharx-code/v2/util/common"
 	"github.com/konstpic/sharx-code/v2/web/service"
 
@@ -67,12 +68,22 @@ func registerPublicSubscriptionRoutes(g *gin.RouterGroup, ss *service.SettingSer
 	pub := g.Group("/panel/api/public")
 	pub.Use(publicSubscriptionRateLimit())
 	pub.GET("/subscription", publicSubscriptionGet(ss))
-	pub.GET("/appMeta", publicAppMeta)
+	pub.GET("/appMeta", publicAppMeta(ss))
 }
 
-func publicAppMeta(c *gin.Context) {
-	meta := service.GetPublicAppMeta()
-	jsonObj(c, meta, nil)
+func publicAppMeta(ss *service.SettingService) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		meta := service.GetPublicAppMeta()
+		if ss != nil {
+			if lang, err := ss.GetUIPreference("panelLang"); err == nil {
+				meta.PanelLang = strings.TrimSpace(lang)
+			}
+			if theme, err := ss.GetUIPreference("panelTheme"); err == nil {
+				meta.PanelTheme = strings.TrimSpace(theme)
+			}
+		}
+		jsonObj(c, meta, nil)
+	}
 }
 
 func hostForSubsHook(reqHost string) string {
@@ -203,6 +214,13 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 				"userStatus":               userStatus,
 				"isOnline":                 vpnOnline,
 			},
+		}
+		// Expose encrypted deeplinks for AddToApp buttons (happ/v2raytun).
+		if happEncrypted, err := crypto.EncryptForHapp(feedURL); err == nil {
+			out["happEncryptedUrl"] = "happ://crypt4/" + happEncrypted
+		}
+		if v2raytunEncrypted, err := crypto.EncryptForV2RayTun(feedURL); err == nil {
+			out["v2raytunEncryptedUrl"] = "v2raytun://crypt/" + v2raytunEncrypted
 		}
 		if pageURL != "" && pageURL != feedURL {
 			out["subscriptionPageUrl"] = pageURL

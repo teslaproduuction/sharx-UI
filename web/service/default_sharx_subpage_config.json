@@ -114,8 +114,7 @@
     "extraHeaders": []
   },
   "appSettings": {
-    "encrypt": false,
-    "showInfo": true
+    "encrypt": false
   },
   "jsonTemplates": {
     "fragment": "",

@@ -157,6 +157,109 @@
   background-attachment: fixed;
 }
 
+/* Keep panel-like character in light mode: per-preset accents and nuanced surfaces. */
+.root[data-theme="light"][data-color-preset="default"] {
+  --sub-bg: #f6f8fa;
+  --sub-bg-elevated: #ffffff;
+  --sub-fg: #1f2328;
+  --sub-fg-strong: #0b0d10;
+  --sub-fg-muted: #57606a;
+  --sub-fg-subtle: #6e7781;
+  --sub-border: rgba(31, 35, 40, 0.15);
+  --sub-border-soft: rgba(31, 35, 40, 0.08);
+  --sub-surface: rgba(255, 255, 255, 0.86);
+  --sub-surface-strong: rgba(246, 248, 250, 0.92);
+  --sub-accent: #22d3ee;
+  --sub-accent-ambient: #9775fa;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 12%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
+.root[data-theme="light"][data-color-preset="midnight"] {
+  --sub-bg: #f4f7fc;
+  --sub-bg-elevated: #ffffff;
+  --sub-fg: #1e293b;
+  --sub-fg-strong: #0f172a;
+  --sub-fg-muted: #475569;
+  --sub-fg-subtle: #64748b;
+  --sub-border: rgba(71, 85, 105, 0.2);
+  --sub-border-soft: rgba(71, 85, 105, 0.1);
+  --sub-surface: rgba(255, 255, 255, 0.88);
+  --sub-surface-strong: rgba(244, 247, 252, 0.94);
+  --sub-accent: #60a5fa;
+  --sub-accent-ambient: #818cf8;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 13%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
+.root[data-theme="light"][data-color-preset="ember"] {
+  --sub-bg: #fdf8f4;
+  --sub-bg-elevated: #fffdfb;
+  --sub-fg: #3a2b22;
+  --sub-fg-strong: #24160f;
+  --sub-fg-muted: #7a5b4a;
+  --sub-fg-subtle: #9a7a69;
+  --sub-border: rgba(122, 91, 74, 0.22);
+  --sub-border-soft: rgba(122, 91, 74, 0.1);
+  --sub-surface: rgba(255, 253, 251, 0.88);
+  --sub-surface-strong: rgba(253, 248, 244, 0.94);
+  --sub-accent: #f59e0b;
+  --sub-accent-ambient: #f472b6;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 13%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
+.root[data-theme="light"][data-color-preset="boreal"] {
+  --sub-bg: #f3fbf8;
+  --sub-bg-elevated: #ffffff;
+  --sub-fg: #17342d;
+  --sub-fg-strong: #0f231f;
+  --sub-fg-muted: #3c6b62;
+  --sub-fg-subtle: #58877d;
+  --sub-border: rgba(60, 107, 98, 0.22);
+  --sub-border-soft: rgba(60, 107, 98, 0.1);
+  --sub-surface: rgba(255, 255, 255, 0.88);
+  --sub-surface-strong: rgba(243, 251, 248, 0.94);
+  --sub-accent: #14b8a6;
+  --sub-accent-ambient: #22c55e;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 13%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
+.root[data-theme="light"][data-color-preset="web"] {
+  --sub-bg: #f6f7ff;
+  --sub-bg-elevated: #ffffff;
+  --sub-fg: #23253a;
+  --sub-fg-strong: #15172a;
+  --sub-fg-muted: #5d6280;
+  --sub-fg-subtle: #757aa0;
+  --sub-border: rgba(93, 98, 128, 0.22);
+  --sub-border-soft: rgba(93, 98, 128, 0.1);
+  --sub-surface: rgba(255, 255, 255, 0.88);
+  --sub-surface-strong: rgba(246, 247, 255, 0.94);
+  --sub-accent: #8577f2;
+  --sub-accent-ambient: #6c52c7;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 13%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
+.root[data-theme="light"][data-color-preset="xuiClassic"] {
+  --sub-bg: #f3f6fb;
+  --sub-bg-elevated: #ffffff;
+  --sub-fg: #1f2a40;
+  --sub-fg-strong: #101a2e;
+  --sub-fg-muted: #55637f;
+  --sub-fg-subtle: #6b7993;
+  --sub-border: rgba(85, 99, 127, 0.22);
+  --sub-border-soft: rgba(85, 99, 127, 0.1);
+  --sub-surface: rgba(255, 255, 255, 0.88);
+  --sub-surface-strong: rgba(243, 246, 251, 0.94);
+  --sub-accent: #008771;
+  --sub-accent-ambient: #3ad3ba;
+  --sub-accent-soft: color-mix(in oklab, var(--sub-accent) 13%, transparent);
+  --sub-accent-ambient-soft: color-mix(in oklab, var(--sub-accent-ambient) 7%, transparent);
+}
+
 .animatedBg {
   position: fixed;
   inset: 0;
@@ -213,7 +316,7 @@
 
 /* Light: soften ambient layer so dark-theme patterns do not fight the pale shell */
 .root[data-theme="light"] .animatedBg {
-  opacity: 0.38;
+  opacity: 0.52;
 }
 
 .content {
@@ -288,6 +391,43 @@
   line-height: 1.25;
 }
 
+.brandTagline {
+  margin-top: 0.125rem;
+  font-size: 0.75rem;
+  color: var(--sub-fg-muted);
+}
+
+.logoFallback {
+  display: flex;
+  height: 2.25rem;
+  width: 2.25rem;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  border: 1px solid var(--sub-border);
+  background: color-mix(in oklab, var(--sub-surface) 90%, transparent);
+  color: var(--sub-accent);
+}
+
+.actionBtn {
+  height: 2.5rem;
+  border-radius: 0.5rem;
+  border: 1px solid var(--sub-border) !important;
+  background: color-mix(in oklab, var(--sub-surface) 88%, transparent) !important;
+  color: var(--sub-fg) !important;
+  font-size: 0.875rem !important;
+}
+
+.actionBtn:hover {
+  background: color-mix(in oklab, var(--sub-surface-strong) 92%, transparent) !important;
+  border-color: color-mix(in oklab, var(--sub-accent) 24%, var(--sub-border)) !important;
+}
+
+.actionBtnIcon {
+  color: var(--sub-accent);
+}
+
 .supportIconBtn {
   display: inline-flex;
   align-items: center;
@@ -302,8 +442,8 @@
 }
 
 .supportIconBtn:hover {
-  background: rgba(255, 255, 255, 0.06);
-  border-color: rgba(255, 255, 255, 0.15);
+  background: color-mix(in oklab, var(--sub-surface-strong) 92%, transparent);
+  border-color: color-mix(in oklab, var(--sub-accent) 24%, var(--sub-border));
 }
 
 .infoGrid {

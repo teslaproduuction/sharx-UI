@@ -1359,6 +1359,7 @@ func (s *NodeService) CollectNodeStats() error {
 	settingService := SettingService{}
 	multiMode, err := settingService.GetMultiNodeMode()
 	if err != nil || !multiMode {
+		setPanelClientLastConnectedNodes(nil)
 		return nil // Skip if multi-node mode is not enabled
 	}
 
@@ -1368,23 +1369,23 @@ func (s *NodeService) CollectNodeStats() error {
 	}
 
 	if len(nodes) == 0 {
+		setPanelClientLastConnectedNodes(nil)
 		return nil // No nodes to collect stats from
 	}
 
-	// Filter nodes: only collect stats from nodes that have assigned inbounds
+	// Collect from all enabled nodes.
+	// Do not hard-require inbound mappings here: when mappings are temporarily out of sync
+	// (after restore/migration/manual DB edits), stats should still be visible instead of zero.
 	nodesWithInbounds := make([]*model.Node, 0)
 	for _, node := range nodes {
 		if !node.Enable {
 			continue
 		}
-		inbounds, err := s.GetInboundsForNode(node.Id)
-		if err == nil && len(inbounds) > 0 {
-			// Only include nodes that have at least one assigned inbound
-			nodesWithInbounds = append(nodesWithInbounds, node)
-		}
+		nodesWithInbounds = append(nodesWithInbounds, node)
 	}
 
 	if len(nodesWithInbounds) == 0 {
+		setPanelClientLastConnectedNodes(nil)
 		return nil // No nodes with assigned inbounds
 	}
 
@@ -1434,12 +1435,17 @@ func (s *NodeService) CollectNodeStats() error {
 		Up   int64
 		Down int64
 	}) // nodeId -> traffic
+	inboundTrafficMap := make(map[int]struct {
+		Up   int64
+		Down int64
+	}) // inboundId -> traffic delta
 
 	// Map to collect client traffic by email (aggregated across all nodes)
 	// email -> traffic
 	clientTrafficMap := make(map[string]*xray.ClientTraffic)
 
 	onlineClientsMap := make(map[string]bool)
+	lastConnectedNodeByEmail := make(map[string]string)
 
 	// Track success/failure counts for better logging
 	successCount := 0
@@ -1487,6 +1493,7 @@ func (s *NodeService) CollectNodeStats() error {
 		for _, inbound := range nodeInbounds {
 			nodeInboundIds[inbound.Id] = true
 		}
+		hasNodeInboundMappings := len(nodeInboundIds) > 0
 
 		// Calculate node traffic: sum of all inbound traffic on this node
 		var nodeUp int64
@@ -1505,8 +1512,9 @@ func (s *NodeService) CollectNodeStats() error {
 				continue
 			}
 
-			// Check if this inbound is assigned to this node
-			if !nodeInboundIds[inboundId] {
+			// Prefer strict mapping match.
+			// Fallback: if node has no mappings in DB, still count known inbound tags from worker stats.
+			if hasNodeInboundMappings && !nodeInboundIds[inboundId] {
 				logger.Debugf("[Node: %s] Tag %s (inboundId %d) not assigned to this node, skipping",
 					result.node.Name, nt.Tag, inboundId)
 				continue
@@ -1515,6 +1523,13 @@ func (s *NodeService) CollectNodeStats() error {
 			// Add to node traffic
 			nodeUp += nt.Up
 			nodeDown += nt.Down
+			// Also aggregate per-inbound deltas directly from node traffic tags.
+			// In multi-node path clientTraffic may not carry inboundId, so inbound counters
+			// must be updated from inbound tag traffic to avoid stale/zero inbound usage.
+			it := inboundTrafficMap[inboundId]
+			it.Up += nt.Up
+			it.Down += nt.Down
+			inboundTrafficMap[inboundId] = it
 		}
 
 		// Update node traffic
@@ -1561,6 +1576,9 @@ func (s *NodeService) CollectNodeStats() error {
 		// Collect online clients
 		for _, email := range result.stats.OnlineClients {
 			onlineClientsMap[email] = true
+			if strings.TrimSpace(email) != "" {
+				lastConnectedNodeByEmail[strings.ToLower(strings.TrimSpace(email))] = result.node.Name
+			}
 		}
 	}
 
@@ -1572,6 +1590,23 @@ func (s *NodeService) CollectNodeStats() error {
 		} else if trafficExceeded {
 			logger.Warningf("Node %d traffic limit exceeded", nodeId)
 			// TODO: Handle traffic limit exceeded (disable node or inbounds)
+		}
+	}
+	// Update inbound traffic in database from per-inbound deltas.
+	// This keeps inbound counters current in multi-node mode even when per-client stats
+	// do not include inbound IDs.
+	for inboundId, traffic := range inboundTrafficMap {
+		if traffic.Up == 0 && traffic.Down == 0 {
+			continue
+		}
+		err := db.Model(&model.Inbound{}).Where("id = ?", inboundId).
+			Updates(map[string]interface{}{
+				"up":       gorm.Expr("up + ?", traffic.Up),
+				"down":     gorm.Expr("down + ?", traffic.Down),
+				"all_time": gorm.Expr("all_time + ?", traffic.Up+traffic.Down),
+			}).Error
+		if err != nil {
+			logger.Warningf("Failed to update traffic for inbound %d: %v", inboundId, err)
 		}
 	}
 
@@ -1659,15 +1694,16 @@ func (s *NodeService) CollectNodeStats() error {
 
 	// Same as AddClientTraffic: must work when p==nil (multi-node — no local Xray process).
 	setPanelOnlineClients(onlineClientsList)
+	setPanelClientLastConnectedNodes(lastConnectedNodeByEmail)
 
 	// Log summary with success/failure counts for better visibility
 	totalNodes := len(nodesWithInbounds)
 	if failureCount > 0 {
-		logger.Warningf("Node stats collection completed: %d/%d nodes succeeded, %d failed. Updated %d node traffics, %d client traffics, %d online clients",
-			successCount, totalNodes, failureCount, len(nodeTrafficMap), len(allClientTraffics), len(onlineClientsMap))
+		logger.Warningf("Node stats collection completed: %d/%d nodes succeeded, %d failed. Updated %d node traffics, %d inbound traffics, %d client traffics, %d online clients",
+			successCount, totalNodes, failureCount, len(nodeTrafficMap), len(inboundTrafficMap), len(allClientTraffics), len(onlineClientsMap))
 	} else {
-		logger.Debugf("Collected stats from nodes: %d/%d nodes succeeded. Updated %d node traffics, %d client traffics, %d online clients",
-			successCount, totalNodes, len(nodeTrafficMap), len(allClientTraffics), len(onlineClientsMap))
+		logger.Debugf("Collected stats from nodes: %d/%d nodes succeeded. Updated %d node traffics, %d inbound traffics, %d client traffics, %d online clients",
+			successCount, totalNodes, len(nodeTrafficMap), len(inboundTrafficMap), len(allClientTraffics), len(onlineClientsMap))
 	}
 
 	return nil
@@ -1711,6 +1747,16 @@ func (s *NodeService) AssignInboundToNodes(inboundId int, nodeIds []int) error {
 		}
 	}
 
+	// Capture previous assignments to apply hot updates on nodes after DB mapping changes.
+	var oldMappings []model.InboundNodeMapping
+	if err := db.Where("inbound_id = ?", inboundId).Find(&oldMappings).Error; err != nil {
+		return err
+	}
+	oldNodeIds := make([]int, 0, len(oldMappings))
+	for _, m := range oldMappings {
+		oldNodeIds = append(oldNodeIds, m.NodeId)
+	}
+
 	// First, remove all existing assignments
 	if err := db.Where("inbound_id = ?", inboundId).Delete(&model.InboundNodeMapping{}).Error; err != nil {
 		return err
@@ -1727,6 +1773,136 @@ func (s *NodeService) AssignInboundToNodes(inboundId int, nodeIds []int) error {
 				return err
 			}
 		}
+	}
+
+	// Hot-sync assignment changes to workers: apply/remove inbound via node API without restart.
+	if err := s.syncInboundAssignmentToNodes(inboundId, oldNodeIds, nodeIds); err != nil {
+		logger.Warningf("AssignInboundToNodes: hot-sync failed for inbound %d: %v", inboundId, err)
+	}
+	return nil
+}
+
+func (s *NodeService) syncInboundAssignmentToNodes(inboundId int, oldNodeIds, newNodeIds []int) error {
+	inboundSvc := InboundService{}
+	inbound, err := inboundSvc.GetInbound(inboundId)
+	if err != nil {
+		return fmt.Errorf("load inbound %d: %w", inboundId, err)
+	}
+
+	oldSet := make(map[int]struct{}, len(oldNodeIds))
+	for _, id := range oldNodeIds {
+		if id > 0 {
+			oldSet[id] = struct{}{}
+		}
+	}
+	newSet := make(map[int]struct{}, len(newNodeIds))
+	for _, id := range newNodeIds {
+		if id > 0 {
+			newSet[id] = struct{}{}
+		}
+	}
+
+	added := make([]int, 0, len(newSet))
+	removed := make([]int, 0, len(oldSet))
+	for id := range newSet {
+		if _, ok := oldSet[id]; !ok {
+			added = append(added, id)
+		}
+	}
+	for id := range oldSet {
+		if _, ok := newSet[id]; !ok {
+			removed = append(removed, id)
+		}
+	}
+
+	if len(added) == 0 && len(removed) == 0 {
+		return nil
+	}
+
+	var inboundJSON []byte
+	if inbound.Enable && len(added) > 0 {
+		xs := XrayService{
+			inboundService: inboundSvc,
+			settingService: SettingService{},
+		}
+		cfg, err := xs.PreviewInboundCoreConfig(inbound)
+		if err != nil {
+			return fmt.Errorf("build inbound config for hot-sync: %w", err)
+		}
+		inboundJSON, err = json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal inbound config for hot-sync: %w", err)
+		}
+	}
+
+	var mu sync.Mutex
+	var errs []error
+	var wg sync.WaitGroup
+	recordErr := func(err error) {
+		if err == nil {
+			return
+		}
+		mu.Lock()
+		errs = append(errs, err)
+		mu.Unlock()
+	}
+
+	for _, nodeId := range removed {
+		nid := nodeId
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			node, err := s.GetNode(nid)
+			if err != nil {
+				recordErr(fmt.Errorf("load node %d for inbound removal: %w", nid, err))
+				return
+			}
+			if err := s.RemoveInboundFromNode(node, inbound.Tag); err != nil {
+				recordErr(fmt.Errorf("remove inbound %s from node %s: %w", inbound.Tag, node.Name, err))
+				return
+			}
+			logger.Infof("[Node: %s] Inbound %s removed after reassignment", node.Name, inbound.Tag)
+		}()
+	}
+
+	if inbound.Enable && len(added) > 0 {
+		for _, nodeId := range added {
+			nid := nodeId
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				node, err := s.GetNode(nid)
+				if err != nil {
+					recordErr(fmt.Errorf("load node %d for inbound apply: %w", nid, err))
+					return
+				}
+				if err := s.UpdateInboundOnNode(node, inboundJSON); err != nil {
+					// If worker Xray is not running yet, fallback to full apply-config once to start it.
+					if strings.Contains(strings.ToLower(err.Error()), "xray is not running") {
+						xs := NewXrayService()
+						cfgJSON, cfgErr := xs.BuildWorkerXrayConfigForNode(node)
+						if cfgErr != nil {
+							recordErr(fmt.Errorf("build full worker config for node %s fallback: %w", node.Name, cfgErr))
+							return
+						}
+						if apErr := s.ApplyConfigToNode(node, cfgJSON); apErr != nil {
+							recordErr(fmt.Errorf("fallback apply-config to node %s: %w", node.Name, apErr))
+							return
+						}
+						logger.Infof("[Node: %s] Inbound %s applied via fallback apply-config (xray was stopped)", node.Name, inbound.Tag)
+						return
+					}
+					recordErr(fmt.Errorf("apply inbound %s to node %s: %w", inbound.Tag, node.Name, err))
+					return
+				}
+				logger.Infof("[Node: %s] Inbound %s applied after reassignment via API", node.Name, inbound.Tag)
+			}()
+		}
+	}
+
+	wg.Wait()
+	if len(errs) > 0 {
+		return fmt.Errorf("%d sync errors (first: %v)", len(errs), errs[0])
 	}
 	return nil
 }

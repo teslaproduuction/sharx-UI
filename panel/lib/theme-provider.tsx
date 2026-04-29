@@ -1,6 +1,3 @@
-/** Must match PANEL_THEME_STORAGE_KEY in @/lib/panelTheme (kept local to avoid server importing hooks). */
-const PANEL_THEME_STORAGE_KEY = "sharx.panel.theme";
-
 /** Default panel accent (CSS :root; static fallbacks). */
 export const DEFAULT_PANEL_ACCENT = "#22d3ee";
 export const DEFAULT_PANEL_SECONDARY = "#9775fa";
@@ -15,25 +12,16 @@ const META: Record<string, string> = {
 };
 
 /**
- * Early paint: dark mode + panel palette from localStorage.
- * Accents come from globals.css / [data-panel-theme] (no inline --accent).
+ * Early paint: deterministic dark mode + default panel palette.
+ * Final user-selected theme is applied after API settings load.
  */
 export const themeInitScript = `
 (function() {
   try {
-    var key = ${JSON.stringify(PANEL_THEME_STORAGE_KEY)};
     var root = document.documentElement;
     var meta = ${JSON.stringify(META)};
     root.setAttribute("data-theme", "dark");
-    var stored = localStorage.getItem(key);
-    var panelThemeId;
-    if (stored === "default") {
-      panelThemeId = null;
-    } else if (stored === "midnight" || stored === "ember" || stored === "boreal" || stored === "web" || stored === "xuiClassic") {
-      panelThemeId = stored;
-    } else {
-      panelThemeId = "web";
-    }
+    var panelThemeId = "web";
     if (panelThemeId) {
       root.setAttribute("data-panel-theme", panelThemeId);
     } else {

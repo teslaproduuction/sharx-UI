@@ -14,6 +14,8 @@ export type PublicAppMeta = {
   latestVersion?: string;
   updateAvailable: boolean;
   releaseUrl?: string;
+  panelLang?: string;
+  panelTheme?: string;
   /** Markdown body of latest GitHub release (when API returned it). */
   releaseNotesMarkdown?: string;
 };

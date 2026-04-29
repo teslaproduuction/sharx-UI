@@ -1,44 +1,13 @@
 import i18n from "i18next";
 import { initReactI18next } from "react-i18next";
+import { getJson } from "./api";
 import { p } from "./paths";
-
-const STORAGE_KEY = "sharx:lang";
-
-/** Must match `web/locale` `LocalizerMiddleware` cookie `lang` so API `msg` uses the same language as the panel. */
-const SERVER_LANG_COOKIE = "lang";
-const COOKIE_MAX_AGE_SEC = 60 * 60 * 24 * 400; // ~400 days, session-long preference
+import { getUiPref, setUiPref } from "./uiPrefs";
 
 /**
  * BCP-47-style tags for go-i18n (matches embed `translate.*.toml` locales).
  * Short panel codes in `supported` are mapped to what the server localizer can resolve.
  */
-function serverLangFromPanelCode(code: string): string {
-  const map: Record<string, string> = {
-    en: "en-US",
-    ru: "ru-RU",
-    fa: "fa-IR",
-    zh: "zh-CN",
-    tw: "zh-TW",
-    ar: "ar-EG",
-    es: "es-ES",
-    ja: "ja-JP",
-    id: "id-ID",
-    tr: "tr-TR",
-    pt: "pt-BR",
-    uk: "uk-UA",
-    vi: "vi-VN",
-  };
-  return map[code] ?? "en-US";
-}
-
-/** Keeps the Gin `lang` cookie in sync with panel UI; API responses use I18nWeb() with this localizer. */
-function syncServerLocaleCookie(panelCode: string) {
-  if (typeof document === "undefined") return;
-  const tag = serverLangFromPanelCode(panelCode);
-  const val = encodeURIComponent(tag);
-  document.cookie = `${SERVER_LANG_COOKIE}=${val}; path=/; max-age=${COOKIE_MAX_AGE_SEC}; SameSite=Lax`;
-}
-
 export const supported = [
   { code: "en", label: "English" },
   { code: "ru", label: "Русский" },
@@ -76,23 +45,56 @@ function isSupportedPanelCode(code: string | undefined | null): code is (typeof 
   return Boolean(code && supported.some((s) => s.code === code));
 }
 
-/** Same preference the panel uses everywhere: `sharx:lang` in localStorage. */
-function getValidStoredPanelLangCode(): (typeof supported)[number]["code"] | null {
-  if (typeof window === "undefined") return null;
-  const raw = localStorage.getItem(STORAGE_KEY)?.trim() ?? "";
-  if (isSupportedPanelCode(raw)) return raw;
+function normalizeLanguageTagToPanelCode(tag: string | null | undefined): (typeof supported)[number]["code"] | null {
+  const raw = String(tag || "").trim().toLowerCase();
+  if (!raw) return null;
+  const map: Record<string, (typeof supported)[number]["code"]> = {
+    "en-us": "en",
+    "ru-ru": "ru",
+    "fa-ir": "fa",
+    "zh-cn": "zh",
+    "zh-tw": "tw",
+    "ar-eg": "ar",
+    "es-es": "es",
+    "ja-jp": "ja",
+    "id-id": "id",
+    "tr-tr": "tr",
+    "pt-br": "pt",
+    "uk-ua": "uk",
+    "vi-vn": "vi",
+  };
+  if (map[raw]) return map[raw];
+  if (raw.startsWith("zh-tw") || raw.startsWith("zh-hk")) return "tw";
+  if (raw.startsWith("zh")) return "zh";
+  const primary = raw.split(/[-_]/)[0] || "";
+  if (isSupportedPanelCode(primary)) return primary;
   return null;
 }
 
-function getInitialLang() {
+async function getInitialLang(): Promise<(typeof supported)[number]["code"]> {
   if (typeof window === "undefined") return "en";
-  return getValidStoredPanelLangCode() ?? "en";
+  try {
+    const r = await getJson<{ panelLang?: string }>(p("panel/api/public/appMeta"));
+    const fromPublic = r.success ? r.obj?.panelLang : null;
+    if (isSupportedPanelCode(fromPublic)) return fromPublic;
+  } catch {
+    /* ignore */
+  }
+  const fromDb = await getUiPref("panelLang");
+  if (isSupportedPanelCode(fromDb)) return fromDb;
+  const navLangs = Array.isArray(navigator.languages) ? navigator.languages : [];
+  for (const candidate of navLangs) {
+    const mapped = normalizeLanguageTagToPanelCode(candidate);
+    if (mapped) return mapped;
+  }
+  const mappedSingle = normalizeLanguageTagToPanelCode(navigator.language);
+  if (mappedSingle) return mappedSingle;
+  return "en";
 }
 
 export function setStoredLang(code: string) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(STORAGE_KEY, code);
-  syncServerLocaleCookie(code);
+  if (!isSupportedPanelCode(code)) return;
+  void setUiPref("panelLang", code);
 }
 
 let initPromise: Promise<typeof i18n> | null = null;
@@ -101,8 +103,7 @@ export function initI18n() {
   if (i18n.isInitialized) return Promise.resolve(i18n);
   if (initPromise) return initPromise;
   initPromise = (async () => {
-    const lang = getInitialLang();
-    syncServerLocaleCookie(lang);
+    const lang = await getInitialLang();
     const tr = await loadBundle(lang);
     await i18n.use(initReactI18next).init({
       lng: lang,
@@ -126,15 +127,7 @@ export async function changeLanguage(code: string) {
   await i18n.changeLanguage(code);
 }
 
-/**
- * Value for the language `<select>` on the login page and in settings: same as `STORAGE_KEY` (`sharx:lang`)
- * when set; otherwise normalize i18n BCP-47 to a `supported` code. Must match a `<option value>`.
- */
 export function panelSelectLangValue(): string {
-  const fromStorage = getValidStoredPanelLangCode();
-  if (fromStorage) {
-    return fromStorage;
-  }
   const raw = (i18n.resolvedLanguage || i18n.language || "en").trim();
   if (!raw) return "en";
   if (supported.some((s) => s.code === raw)) {

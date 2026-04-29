@@ -40,6 +40,37 @@ var (
 	hostname   string
 )
 
+const tgAnimatedEmojiSetName = "NEWSEMOJI"
+
+var (
+	tgAnimatedEmojiByRune = map[string]string{}
+	// Built-in custom emoji ids used for message rendering.
+	tgDefaultCustomEmojiByRune = map[string]string{
+		"✔️": "5206607081334906820",
+		"❌": "5210952531676504517",
+		"🔄": "5375338737028841420",
+		"⚠️": "5447644880824181073",
+		"🌐": "5447410659077661506",
+		"💬": "5443038326535759644",
+		"📊": "5231200819986047254",
+		"🚨": "5395695537687123235",
+		"🔥": "5424972470023104089",
+		"🔴": "5411225014148014586",
+		"🆕": "5382357040008021292",
+		"🔗": "5271604874419647061",
+		"✉️": "5253742260054409879",
+		"⌛": "5386367538735104399",
+		"🖥": "5282843764451195532",
+		"🗣️": "5460795800101594035",
+	}
+	clientStateCustomEmojiID = map[string]string{
+		"ACTIVE":  "5382357040008021292",
+		"DISABLE": "5210952531676504517",
+		"LIMITED": "5447644880824181073",
+		"EXPIRED": "5411225014148014586",
+	}
+)
+
 // LoginStatus represents the result of a login attempt.
 type LoginStatus byte
 
@@ -119,6 +150,7 @@ func (t *Tgbot) Start(i18nFS embed.FS) error {
 		logger.Error("Failed to initialize Telegram bot API:", err)
 		return err
 	}
+	t.initAnimatedEmojiSet()
 
 	if err = bot.SetMyCommands(context.Background(), &telego.SetMyCommandsParams{Commands: []telego.BotCommand{}}); err != nil {
 		if err2 := bot.DeleteMyCommands(context.Background(), &telego.DeleteMyCommandsParams{}); err2 != nil {
@@ -181,6 +213,83 @@ func (t *Tgbot) NewBot(token string, proxyUrl string, apiServerUrl string) (*tel
 		return telego.NewBot(token)
 	}
 	return telego.NewBot(token, telego.WithAPIServer(apiServerUrl))
+}
+
+func (t *Tgbot) initAnimatedEmojiSet() {
+	stickerSet, err := bot.GetStickerSet(context.Background(), &telego.GetStickerSetParams{
+		Name: tgAnimatedEmojiSetName,
+	})
+	if err != nil {
+		logger.Warning("[tgbot] failed to load animated emoji set:", err)
+		return
+	}
+	if stickerSet == nil || len(stickerSet.Stickers) == 0 {
+		logger.Warning("[tgbot] animated emoji set is empty")
+		return
+	}
+
+	loaded := make(map[string]string)
+	for _, sticker := range stickerSet.Stickers {
+		if sticker.CustomEmojiID == "" || sticker.Emoji == "" {
+			continue
+		}
+		if _, exists := loaded[sticker.Emoji]; !exists {
+			loaded[sticker.Emoji] = sticker.CustomEmojiID
+		}
+	}
+
+	if len(loaded) == 0 {
+		logger.Warning("[tgbot] no matching animated emoji IDs found in set ", tgAnimatedEmojiSetName)
+		return
+	}
+
+	tgAnimatedEmojiByRune = loaded
+	logger.Info("[tgbot] animated emoji set loaded: ", tgAnimatedEmojiSetName)
+}
+
+func renderAnimatedEmojiHTML(msg string) string {
+	// Normalize legacy emojis to symbols available in NEWSEMOJI.
+	msg = strings.NewReplacer(
+		"✅", "✔️",
+		"📧", "✉️",
+		"⏰", "⌛",
+		"⏱️", "⌛",
+		"💻", "🖥",
+		"👤", "🗣️",
+		"⛔", "⛔️",
+		"⚡", "⚡️",
+		"❗", "❗️",
+		"⭐", "⭐️",
+		"🗑️", "🗑",
+		"🖥️", "🖥",
+	).Replace(msg)
+	merged := make(map[string]string, len(tgDefaultCustomEmojiByRune)+len(tgAnimatedEmojiByRune))
+	for emoji, id := range tgDefaultCustomEmojiByRune {
+		merged[emoji] = id
+	}
+	for emoji, id := range tgAnimatedEmojiByRune {
+		merged[emoji] = id
+	}
+	for emoji, id := range merged {
+		if strings.Contains(msg, "<tg-emoji") && strings.Contains(msg, fmt.Sprintf(`>%s</tg-emoji>`, emoji)) {
+			continue
+		}
+		msg = strings.ReplaceAll(msg, emoji, fmt.Sprintf(`<tg-emoji emoji-id="%s">%s</tg-emoji>`, id, emoji))
+	}
+	return msg
+}
+
+func tgEmojiTag(customEmojiID, fallbackEmoji string) string {
+	id := strings.TrimSpace(customEmojiID)
+	if len(id) < 16 {
+		return fallbackEmoji
+	}
+	for _, r := range id {
+		if r < '0' || r > '9' {
+			return fallbackEmoji
+		}
+	}
+	return fmt.Sprintf(`<tg-emoji emoji-id="%s">%s</tg-emoji>`, id, fallbackEmoji)
 }
 
 // IsRunning checks if the Telegram bot is currently running.
@@ -309,6 +418,8 @@ func (t *Tgbot) SendMsgToTgbot(chatId int64, msg string, replyMarkup ...telego.R
 		return
 	}
 
+	msg = renderAnimatedEmojiHTML(msg)
+
 	if msg == "" {
 		logger.Info("[tgbot] message is empty!")
 		return
@@ -367,7 +478,7 @@ func (t *Tgbot) NotifyPanelAction(action, detail, clientIP string) {
 		return
 	}
 	var b strings.Builder
-	b.WriteString("🖥 <b>")
+	b.WriteString("🔗 <b>")
 	b.WriteString(action)
 	b.WriteString("</b>\n")
 	if detail != "" {
@@ -422,7 +533,7 @@ func (t *Tgbot) NotifyClientCreated(client *model.ClientEntity) {
 }
 
 // NotifyClientUpdated sends a notification when a client is updated.
-func (t *Tgbot) NotifyClientUpdated(client *model.ClientEntity, oldClient *model.ClientEntity) {
+func (t *Tgbot) NotifyClientUpdated(client *model.ClientEntity, _ *model.ClientEntity) {
 	if !t.IsRunning() {
 		return
 	}
@@ -453,80 +564,6 @@ func (t *Tgbot) NotifyClientUpdated(client *model.ClientEntity, oldClient *model
 		msg += t.I18nBot("tgbot.messages.hwidEnabled", "Count=="+fmt.Sprintf("%d", hwidCount), "Max=="+maxHwidText)
 	} else {
 		msg += t.I18nBot("tgbot.messages.hwidDisabled")
-	}
-
-	if oldClient != nil {
-		changes := []string{}
-		if oldClient.Email != client.Email {
-			changes = append(changes, t.I18nBot("tgbot.messages.emailChanged", "Old=="+oldClient.Email, "New=="+client.Email))
-		}
-		if oldClient.Enable != client.Enable {
-			changes = append(changes, t.I18nBot("tgbot.messages.enabledChanged", "Old=="+fmt.Sprintf("%v", oldClient.Enable), "New=="+fmt.Sprintf("%v", client.Enable)))
-		}
-		if oldClient.TotalGB != client.TotalGB {
-			changes = append(changes, t.I18nBot("tgbot.messages.trafficLimitChanged", "Old=="+t.formatTrafficLimitLocalized(oldClient.TotalGB), "New=="+t.formatTrafficLimitLocalized(client.TotalGB)))
-		}
-		if oldClient.UUID != client.UUID {
-			changes = append(changes, t.I18nBot("tgbot.messages.uuidChanged", "Old=="+oldClient.UUID, "New=="+client.UUID))
-		}
-		if oldClient.Password != client.Password {
-			changes = append(changes, t.I18nBot("tgbot.messages.passwordChanged"))
-		}
-		if oldClient.ExpiryTime != client.ExpiryTime {
-			changes = append(changes, t.I18nBot("tgbot.messages.expiryTimeChanged", "Old=="+t.formatExpiryTimeLocalized(oldClient.ExpiryTime), "New=="+t.formatExpiryTimeLocalized(client.ExpiryTime)))
-		}
-		if oldClient.Status != client.Status {
-			changes = append(changes, t.I18nBot("tgbot.messages.statusChanged", "Old=="+oldClient.Status, "New=="+client.Status))
-		}
-
-		oldTotalTraffic := oldClient.Up + oldClient.Down
-		if oldClient.Up != client.Up || oldClient.Down != client.Down {
-			changes = append(changes, t.I18nBot("tgbot.messages.trafficChanged",
-				"OldUpload=="+common.FormatTraffic(oldClient.Up),
-				"NewUpload=="+common.FormatTraffic(client.Up),
-				"OldDownload=="+common.FormatTraffic(oldClient.Down),
-				"NewDownload=="+common.FormatTraffic(client.Down),
-				"OldTotal=="+common.FormatTraffic(oldTotalTraffic),
-				"NewTotal=="+common.FormatTraffic(totalTraffic)))
-		}
-
-		if oldClient.HWIDEnabled != client.HWIDEnabled {
-			oldHwidText := t.I18nBot("tgbot.messages.hwidDisabled")
-			if oldClient.HWIDEnabled {
-				oldMaxHwidText := "∞"
-				if oldClient.MaxHWID > 0 {
-					oldMaxHwidText = fmt.Sprintf("%d", oldClient.MaxHWID)
-				}
-				oldHwidText = t.I18nBot("tgbot.messages.hwidEnabled", "Count==0", "Max=="+oldMaxHwidText)
-			}
-			newHwidText := t.I18nBot("tgbot.messages.hwidDisabled")
-			if client.HWIDEnabled {
-				newMaxHwidText := "∞"
-				if client.MaxHWID > 0 {
-					newMaxHwidText = fmt.Sprintf("%d", client.MaxHWID)
-				}
-				hwidCount := 0
-				if client.HWIDs != nil {
-					hwidCount = len(client.HWIDs)
-				}
-				newHwidText = t.I18nBot("tgbot.messages.hwidEnabled", "Count=="+fmt.Sprintf("%d", hwidCount), "Max=="+newMaxHwidText)
-			}
-			changes = append(changes, t.I18nBot("tgbot.messages.hwidChanged", "Old=="+oldHwidText, "New=="+newHwidText))
-		} else if client.HWIDEnabled && oldClient.MaxHWID != client.MaxHWID {
-			oldMaxHwidText := "∞"
-			if oldClient.MaxHWID > 0 {
-				oldMaxHwidText = fmt.Sprintf("%d", oldClient.MaxHWID)
-			}
-			newMaxHwidText := "∞"
-			if client.MaxHWID > 0 {
-				newMaxHwidText = fmt.Sprintf("%d", client.MaxHWID)
-			}
-			changes = append(changes, t.I18nBot("tgbot.messages.hwidLimitChanged", "Old=="+oldMaxHwidText, "New=="+newMaxHwidText))
-		}
-
-		if len(changes) > 0 {
-			msg += "\n\n" + t.I18nBot("tgbot.messages.changes") + "\n" + strings.Join(changes, "\n")
-		}
 	}
 
 	if client.Comment != "" {
@@ -588,26 +625,81 @@ func (t *Tgbot) NotifyClientFirstConnection(client *model.ClientEntity) {
 	t.SendMsgToTgbotAdmins(msg)
 }
 
+func (t *Tgbot) clientStateForNotifications(client *model.ClientEntity, nowMs int64) string {
+	if client == nil {
+		return ""
+	}
+	totalLimit := int64(client.TotalGB * 1024 * 1024 * 1024)
+	used := client.Up + client.Down
+	trafficExceeded := client.TotalGB > 0 && used >= totalLimit
+	timeExpired := client.ExpiryTime > 0 && client.ExpiryTime <= nowMs
+
+	if !client.Enable {
+		return "DISABLE"
+	}
+	if timeExpired {
+		return "EXPIRED"
+	}
+	if trafficExceeded {
+		return "LIMITED"
+	}
+	return "ACTIVE"
+}
+
+// NotifyClientStateChanged sends a notification when the derived client state changes.
+// Client states: ACTIVE | DISABLE | LIMITED | EXPIRED.
+func (t *Tgbot) NotifyClientStateChanged(oldClient *model.ClientEntity, newClient *model.ClientEntity) {
+	if !t.IsRunning() || oldClient == nil || newClient == nil {
+		return
+	}
+
+	nowMs := time.Now().UnixMilli()
+	oldState := t.clientStateForNotifications(oldClient, nowMs)
+	newState := t.clientStateForNotifications(newClient, nowMs)
+	if oldState == "" || newState == "" || oldState == newState {
+		return
+	}
+
+	stateEmoji := "🔄"
+	switch newState {
+	case "ACTIVE":
+		stateEmoji = "🆕"
+	case "DISABLE":
+		stateEmoji = "❌"
+	case "LIMITED":
+		stateEmoji = "⚠️"
+	case "EXPIRED":
+		stateEmoji = "🔴"
+	}
+	title := t.I18nBot("tgbot.messages.clientStateChanged")
+	if strings.TrimSpace(title) == "" || strings.Contains(title, "tgbot.messages.clientStateChanged") {
+		title = "<b>Client State Changed</b>\n"
+	}
+	msg := tgEmojiTag(clientStateCustomEmojiID[newState], stateEmoji) + " " + title
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+newClient.Email)
+	msg += t.I18nBot("tgbot.messages.status", "Status=="+newState)
+	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
+	if newClient.Comment != "" {
+		msg += t.I18nBot("tgbot.messages.comment", "Comment=="+newClient.Comment)
+	}
+	t.SendMsgToTgbotAdmins(msg)
+}
+
 // NotifyInboundCreated sends a notification when an inbound is created.
 func (t *Tgbot) NotifyInboundCreated(inbound *model.Inbound) {
 	if !t.IsRunning() {
 		return
 	}
 
-	msg := fmt.Sprintf("✅ <b>Инбаунд создан</b>\n\n"+
-		"<b>Название:</b> %s\n"+
-		"<b>Протокол:</b> %s\n"+
-		"<b>Порт:</b> %d\n"+
-		"<b>Включен:</b> %v\n"+
-		"<b>Время:</b> %s",
-		inbound.Remark,
-		inbound.Protocol,
-		inbound.Port,
-		inbound.Enable,
-		time.Now().Format("2006-01-02 15:04:05"))
+	msg := "🆕 " + t.I18nBot("tgbot.messages.inboundCreated")
+	msg += t.I18nBot("tgbot.messages.inboundName", "Name=="+inbound.Remark)
+	msg += t.I18nBot("tgbot.messages.inboundProtocol", "Protocol=="+string(inbound.Protocol))
+	msg += t.I18nBot("tgbot.messages.inboundPort", "Port=="+fmt.Sprintf("%d", inbound.Port))
+	msg += t.I18nBot("tgbot.messages.inboundEnabled", "Enabled=="+fmt.Sprintf("%v", inbound.Enable))
+	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	if inbound.Listen != "" && inbound.Listen != "0.0.0.0" {
-		msg += fmt.Sprintf("\n<b>Listen:</b> %s", inbound.Listen)
+		msg += t.I18nBot("tgbot.messages.inboundListen", "Listen=="+inbound.Listen)
 	}
 
 	t.SendMsgToTgbotAdmins(msg)
@@ -619,39 +711,34 @@ func (t *Tgbot) NotifyInboundUpdated(inbound *model.Inbound, oldInbound *model.I
 		return
 	}
 
-	msg := fmt.Sprintf("🔄 <b>Инбаунд изменен</b>\n\n"+
-		"<b>Название:</b> %s\n"+
-		"<b>Протокол:</b> %s\n"+
-		"<b>Порт:</b> %d\n"+
-		"<b>Включен:</b> %v\n"+
-		"<b>Время:</b> %s",
-		inbound.Remark,
-		inbound.Protocol,
-		inbound.Port,
-		inbound.Enable,
-		time.Now().Format("2006-01-02 15:04:05"))
+	msg := "🔄 " + t.I18nBot("tgbot.messages.inboundUpdated")
+	msg += t.I18nBot("tgbot.messages.inboundName", "Name=="+inbound.Remark)
+	msg += t.I18nBot("tgbot.messages.inboundProtocol", "Protocol=="+string(inbound.Protocol))
+	msg += t.I18nBot("tgbot.messages.inboundPort", "Port=="+fmt.Sprintf("%d", inbound.Port))
+	msg += t.I18nBot("tgbot.messages.inboundEnabled", "Enabled=="+fmt.Sprintf("%v", inbound.Enable))
+	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	if oldInbound != nil {
 		changes := []string{}
 		if oldInbound.Remark != inbound.Remark {
-			changes = append(changes, fmt.Sprintf("Название: %s → %s", oldInbound.Remark, inbound.Remark))
+			changes = append(changes, t.I18nBot("tgbot.messages.inboundNameChanged", "Old=="+oldInbound.Remark, "New=="+inbound.Remark))
 		}
 		if oldInbound.Port != inbound.Port {
-			changes = append(changes, fmt.Sprintf("Порт: %d → %d", oldInbound.Port, inbound.Port))
+			changes = append(changes, t.I18nBot("tgbot.messages.inboundPortChanged", "Old=="+fmt.Sprintf("%d", oldInbound.Port), "New=="+fmt.Sprintf("%d", inbound.Port)))
 		}
 		if oldInbound.Protocol != inbound.Protocol {
-			changes = append(changes, fmt.Sprintf("Протокол: %s → %s", oldInbound.Protocol, inbound.Protocol))
+			changes = append(changes, t.I18nBot("tgbot.messages.inboundProtocolChanged", "Old=="+string(oldInbound.Protocol), "New=="+string(inbound.Protocol)))
 		}
 		if oldInbound.Enable != inbound.Enable {
-			changes = append(changes, fmt.Sprintf("Включен: %v → %v", oldInbound.Enable, inbound.Enable))
+			changes = append(changes, t.I18nBot("tgbot.messages.inboundEnabledChanged", "Old=="+fmt.Sprintf("%v", oldInbound.Enable), "New=="+fmt.Sprintf("%v", inbound.Enable)))
 		}
 		if len(changes) > 0 {
-			msg += "\n\n<b>Изменения:</b>\n" + strings.Join(changes, "\n")
+			msg += "\n\n" + t.I18nBot("tgbot.messages.changes") + "\n" + strings.Join(changes, "\n")
 		}
 	}
 
 	if inbound.Listen != "" && inbound.Listen != "0.0.0.0" {
-		msg += fmt.Sprintf("\n<b>Listen:</b> %s", inbound.Listen)
+		msg += t.I18nBot("tgbot.messages.inboundListen", "Listen=="+inbound.Listen)
 	}
 
 	t.SendMsgToTgbotAdmins(msg)
@@ -663,18 +750,14 @@ func (t *Tgbot) NotifyInboundDeleted(inbound *model.Inbound) {
 		return
 	}
 
-	msg := fmt.Sprintf("❌ <b>Инбаунд удален</b>\n\n"+
-		"<b>Название:</b> %s\n"+
-		"<b>Протокол:</b> %s\n"+
-		"<b>Порт:</b> %d\n"+
-		"<b>Время:</b> %s",
-		inbound.Remark,
-		inbound.Protocol,
-		inbound.Port,
-		time.Now().Format("2006-01-02 15:04:05"))
+	msg := "❌ " + t.I18nBot("tgbot.messages.inboundDeleted")
+	msg += t.I18nBot("tgbot.messages.inboundName", "Name=="+inbound.Remark)
+	msg += t.I18nBot("tgbot.messages.inboundProtocol", "Protocol=="+string(inbound.Protocol))
+	msg += t.I18nBot("tgbot.messages.inboundPort", "Port=="+fmt.Sprintf("%d", inbound.Port))
+	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	if inbound.Listen != "" && inbound.Listen != "0.0.0.0" {
-		msg += fmt.Sprintf("\n<b>Listen:</b> %s", inbound.Listen)
+		msg += t.I18nBot("tgbot.messages.inboundListen", "Listen=="+inbound.Listen)
 	}
 
 	t.SendMsgToTgbotAdmins(msg)
@@ -690,20 +773,18 @@ func (t *Tgbot) NotifyGroupChanged(groupName string, enable bool, clients []*mod
 		return
 	}
 
-	action := "отключена"
-	emoji := "⛔"
+	action := "disabled"
+	emoji := "🔴"
 	if enable {
-		action = "включена"
-		emoji = "✅"
+		action = "enabled"
+		emoji = "🆕"
 	}
 
-	msg := fmt.Sprintf("%s <b>Группа изменена</b>\n\n"+
-		"<b>Название:</b> %s\n"+
-		"<b>Действие:</b> %s\n"+
-		"<b>Количество клиентов:</b> %d\n"+
-		"<b>Время:</b> %s",
-		emoji, groupName, action, len(clients),
-		time.Now().Format("2006-01-02 15:04:05"))
+	msg := emoji + " " + t.I18nBot("tgbot.messages.groupChanged")
+	msg += t.I18nBot("tgbot.messages.groupName", "Name=="+groupName)
+	msg += t.I18nBot("tgbot.messages.groupAction", "Action=="+action)
+	msg += t.I18nBot("tgbot.messages.groupClientsCount", "Count=="+fmt.Sprintf("%d", len(clients)))
+	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	maxClients := 10
 	var clientList string
@@ -715,7 +796,7 @@ func (t *Tgbot) NotifyGroupChanged(groupName string, enable bool, clients []*mod
 				clientList += fmt.Sprintf("• %s\n", clients[i].Email)
 			}
 		}
-		clientList += fmt.Sprintf("... и еще %d клиентов\n", len(clients)-maxClients)
+		clientList += t.I18nBot("tgbot.messages.groupClientsMore", "Count=="+fmt.Sprintf("%d", len(clients)-maxClients))
 	} else {
 		for _, client := range clients {
 			if client.Comment != "" {
@@ -727,7 +808,7 @@ func (t *Tgbot) NotifyGroupChanged(groupName string, enable bool, clients []*mod
 	}
 
 	if clientList != "" {
-		msg += "\n\n<b>Клиенты:</b>\n" + clientList
+		msg += "\n\n" + t.I18nBot("tgbot.messages.groupClients") + "\n" + clientList
 	}
 
 	t.SendMsgToTgbotAdmins(msg)

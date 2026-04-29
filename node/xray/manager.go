@@ -71,6 +71,37 @@ type Manager struct {
 	config  *xray.Config
 }
 
+func inboundTagSet(cfg *xray.Config) map[string]struct{} {
+	out := make(map[string]struct{})
+	if cfg == nil {
+		return out
+	}
+	for _, ib := range cfg.InboundConfigs {
+		tag := strings.TrimSpace(ib.Tag)
+		if tag == "" {
+			continue
+		}
+		out[tag] = struct{}{}
+	}
+	return out
+}
+
+func inboundTagDelta(oldCfg, newCfg *xray.Config) (added []string, removed []string) {
+	oldSet := inboundTagSet(oldCfg)
+	newSet := inboundTagSet(newCfg)
+	for tag := range newSet {
+		if _, ok := oldSet[tag]; !ok {
+			added = append(added, tag)
+		}
+	}
+	for tag := range oldSet {
+		if _, ok := newSet[tag]; !ok {
+			removed = append(removed, tag)
+		}
+	}
+	return added, removed
+}
+
 // NewManager creates a new XRAY manager instance.
 func NewManager() *Manager {
 	m := &Manager{}
@@ -284,6 +315,7 @@ func (m *Manager) GetStatus() map[string]interface{} {
 func (m *Manager) ApplyConfig(configJSON []byte) error {
 	m.lock.Lock()
 	defer m.lock.Unlock()
+	logger.Infof("ApplyConfig(manager): accepted config payload, bytes=%d", len(configJSON))
 
 	var newConfig xray.Config
 	if err := json.Unmarshal(configJSON, &newConfig); err != nil {
@@ -293,17 +325,26 @@ func (m *Manager) ApplyConfig(configJSON []byte) error {
 	xray.EnsureAPIServicesRoutingService(&newConfig)
 	xray.EnsureAPIRoutingOutbound(&newConfig)
 
+	logger.Infof("ApplyConfig(manager): parsed config, inbound_count=%d", len(newConfig.InboundConfigs))
+
 	// If XRAY is running and config is the same, skip restart
 	if m.process != nil && m.process.IsRunning() {
 		oldConfig := m.process.GetConfig()
 		if oldConfig != nil && oldConfig.Equals(&newConfig) {
-			logger.Info("Config unchanged, skipping restart")
+			logger.Infof("ApplyConfig(manager): compare result=unchanged, inbound_count=%d, action=skip-restart", len(newConfig.InboundConfigs))
 			return nil
 		}
+		added, removed := inboundTagDelta(oldConfig, &newConfig)
+		logger.Infof(
+			"ApplyConfig(manager): compare result=changed, old_inbounds=%d, new_inbounds=%d, added=%v, removed=%v, action=restart",
+			len(oldConfig.InboundConfigs), len(newConfig.InboundConfigs), added, removed,
+		)
 		// Stop existing process
 		if err := m.process.Stop(); err != nil {
 			logger.Warningf("Failed to stop existing XRAY: %v", err)
 		}
+	} else {
+		logger.Infof("ApplyConfig(manager): XRAY not running, action=start, inbound_count=%d", len(newConfig.InboundConfigs))
 	}
 
 	// Start new process with new config
@@ -313,7 +354,7 @@ func (m *Manager) ApplyConfig(configJSON []byte) error {
 		return fmt.Errorf("failed to start XRAY: %w", err)
 	}
 
-	logger.Info("XRAY configuration applied successfully")
+	logger.Infof("XRAY configuration applied successfully, running_inbounds=%d", len(newConfig.InboundConfigs))
 	return nil
 }
 

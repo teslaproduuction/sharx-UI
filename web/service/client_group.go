@@ -8,7 +8,6 @@ import (
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/util/common"
-	"github.com/konstpic/sharx-code/v2/web/cache"
 )
 
 // ClientGroupService provides business logic for managing client groups.
@@ -81,9 +80,6 @@ func (s *ClientGroupService) AddGroup(userId int, group *model.ClientGroup) erro
 		return err
 	}
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	return nil
 }
 
@@ -127,9 +123,6 @@ func (s *ClientGroupService) UpdateGroup(userId int, id int, group *model.Client
 		return err
 	}
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	return nil
 }
 
@@ -165,9 +158,6 @@ func (s *ClientGroupService) DeleteGroup(userId int, id int) error {
 	if err != nil {
 		return err
 	}
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	return nil
 }
@@ -229,9 +219,6 @@ func (s *ClientGroupService) AssignClientsToGroup(groupId int, clientIds []int, 
 		return err
 	}
 
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
-
 	return nil
 }
 
@@ -257,9 +244,6 @@ func (s *ClientGroupService) RemoveClientsFromGroup(clientIds []int, userId int)
 	if err != nil {
 		return err
 	}
-
-	// Invalidate cache for this user's clients
-	cache.InvalidateClients(userId)
 
 	return nil
 }

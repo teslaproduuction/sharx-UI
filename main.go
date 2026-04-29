@@ -99,14 +99,6 @@ func runWebServer() {
 		// Don't fail startup - Xray will attempt to generate config when it starts.
 	}
 
-	// Initialize Redis cache (embedded mode by default)
-	err = web.InitRedisCache("")
-	if err != nil {
-		logger.Errorf("Error initializing Redis cache: %v", err)
-		os.Exit(1)
-	}
-	defer web.CloseRedisCache()
-
 	var server *web.Server
 	server = web.NewServer()
 	registerClientShareLinksBuilder()

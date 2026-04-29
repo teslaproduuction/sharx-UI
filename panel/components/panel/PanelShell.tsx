@@ -19,9 +19,12 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useTranslation } from "react-i18next";
 import { postJson } from "@/lib/api";
+import { changeLanguage } from "@/lib/i18n";
+import { applyPanelTheme, parsePanelTheme } from "@/lib/panelTheme";
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { linkP, panel, p } from "@/lib/paths";
 import { SETTINGS_TAB_IDS, tSettingsTabLabel } from "@/lib/settingsTabs";
+import { getUiPref } from "@/lib/uiPrefs";
 import { PanelHeaderAppMeta } from "@/components/panel/PanelHeaderAppMeta";
 import { PanelTelegramNavLink } from "@/components/panel/PanelTelegramNavLink";
 
@@ -60,6 +63,17 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     void loadMulti();
   }, [loadMulti]);
+
+  useEffect(() => {
+    (async () => {
+      const theme = parsePanelTheme(await getUiPref("panelTheme"));
+      applyPanelTheme(theme);
+      const lang = await getUiPref("panelLang");
+      if (lang) {
+        await changeLanguage(lang);
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     if (!ws) return;

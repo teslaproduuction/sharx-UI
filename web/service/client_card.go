@@ -120,6 +120,7 @@ func (s *ClientService) ClientToCardView(client *model.ClientEntity, inboundServ
 		Inbounds:     nil,
 	}
 	MergePanelClientLiveSpeedInto(&view.ClientEntity)
+	MergePanelClientLastConnectedNodeInto(&view.ClientEntity)
 	for _, h := range client.HWIDs {
 		if h != nil && h.IsActive && (h.BlockedAt == nil || *h.BlockedAt == 0) {
 			view.ActiveHwidCount++
