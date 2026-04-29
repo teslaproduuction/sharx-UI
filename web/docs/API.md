@@ -9,6 +9,7 @@ Complete API reference for the SharX panel. This documentation covers all endpoi
 - [Notes](#notes)
 - [Base URL Configuration](#base-url-configuration)
 - [Authentication](#authentication)
+- [API Tokens (Bearer JWT)](#api-tokens-bearer-jwt)
 - [Standard Response Format](#standard-response-format)
 - [1. Login & Session](#1-login--session)
 - [2. Inbounds API](#2-inbounds-api)
@@ -70,6 +71,92 @@ The API uses session-based authentication. After successful login, a session coo
 ### Unauthenticated Access
 - API endpoints return `404 Not Found` for unauthenticated requests (to hide API existence)
 - HTML pages redirect to login page
+
+### API Tokens (Bearer JWT)
+
+In addition to session cookies, the panel supports long-lived API tokens (JWT) for automation and external integrations.
+
+**How to get token in UI:**
+- Open panel menu -> `API docs` -> API tokens block
+- Create a token (name is optional)
+- Copy it immediately (full JWT is shown only once)
+
+**Bearer auth format:**
+
+```http
+Authorization: Bearer <JWT>
+```
+
+**Important behavior:**
+- If both cookie session and `Authorization: Bearer` are present, cookie session takes precedence.
+- Token is linked to your panel user.
+- Revoked tokens stop working immediately.
+
+**Token management endpoints** (require regular logged-in session cookie):
+
+#### GET `/panel/api/tokens/list`
+
+Returns active tokens for current user (without JWT values).
+
+```bash
+curl -X GET "http://localhost:2053/panel/api/tokens/list" \
+  -b cookies.txt
+```
+
+#### POST `/panel/api/tokens/create`
+
+Creates a new token and returns JWT value once.
+
+```bash
+curl -X POST "http://localhost:2053/panel/api/tokens/create" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"name":"CI token"}'
+```
+
+Example response:
+
+```json
+{
+  "success": true,
+  "msg": "",
+  "obj": {
+    "token": "<JWT_SHOWN_ONCE>",
+    "id": 12,
+    "name": "CI token"
+  }
+}
+```
+
+#### POST `/panel/api/tokens/revoke`
+
+Revokes token by id.
+
+```bash
+curl -X POST "http://localhost:2053/panel/api/tokens/revoke" \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"id":12}'
+```
+
+**Testing API with Bearer only (no cookies):**
+
+```bash
+curl -X GET "https://localhost:2053/panel/api/inbounds/list" \
+  -H "Authorization: Bearer <YOUR_TEST_TOKEN>"
+```
+
+Use your current test endpoint:
+- `https://localhost:2053`
+
+For security, do not commit real JWT tokens to repository docs. Store them in local shell variables or secret manager:
+
+```bash
+export SHARX_API_URL="https://localhost:2053"
+export SHARX_API_TOKEN="<YOUR_TEST_TOKEN>"
+curl -X GET "$SHARX_API_URL/panel/api/inbounds/list" \
+  -H "Authorization: Bearer $SHARX_API_TOKEN"
+```
 
 ---
 
