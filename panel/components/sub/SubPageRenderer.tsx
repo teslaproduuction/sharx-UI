@@ -244,6 +244,8 @@ export function SubPageRenderer({
                   level="M"
                   bgColor="#161b22"
                   fgColor="#22d3ee"
+                  style={{cursor: "pointer"}}
+                  onClick={() => void copyText(qrModal.url, "subscription")}
                 />
               </div>
               <p className="text-center text-sm font-semibold text-[var(--sub-fg-strong,#fff)]">
@@ -261,7 +263,7 @@ export function SubPageRenderer({
                 type="button"
                 variant="secondary"
                 className={shell.actionBtn}
-                style={{ width: "100%" }}
+                style={{ width: "100%", cursor: "pointer" }}
                 onClick={() => void copyText(qrModal.url, "subscription")}
               >
                 <Copy className={`size-4 ${shell.actionBtnIcon}`} />
