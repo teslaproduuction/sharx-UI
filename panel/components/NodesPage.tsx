@@ -141,6 +141,9 @@ export function NodesPage() {
     {},
   );
   const [loading, setLoading] = useState(true);
+  const [nameFilter, setNameFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [xrayStateFilter, setXrayStateFilter] = useState("all");
 
   const [addOpen, setAddOpen] = useState(false);
   const [addWizardStep, setAddWizardStep] = useState<1 | 2 | 3>(1);
@@ -847,6 +850,30 @@ export function NodesPage() {
     return t("pages.nodes.authLegacy");
   };
 
+  const sortedAndFilteredRows = useMemo(() => {
+    const q = nameFilter.trim().toLowerCase();
+    const byId = [...rows].sort((a, b) => {
+      if (a.id !== b.id) return a.id - b.id;
+      return a.name.localeCompare(b.name);
+    });
+    return byId.filter((r) => {
+      if (q) {
+        const name = (r.name || "").toLowerCase();
+        const address = (r.address || "").toLowerCase();
+        if (!name.includes(q) && !address.includes(q)) return false;
+      }
+      if (statusFilter !== "all") {
+        const status = (r.status || "unknown").toLowerCase();
+        if (status !== statusFilter) return false;
+      }
+      if (xrayStateFilter !== "all") {
+        const xstate = (r.xrayState || "unknown").toLowerCase();
+        if (xstate !== xrayStateFilter) return false;
+      }
+      return true;
+    });
+  }, [rows, nameFilter, statusFilter, xrayStateFilter]);
+
   return (
     <PageScaffold compact>
       <PageHeader
@@ -882,6 +909,52 @@ export function NodesPage() {
             </div>
           </div>
         ) : (
+          <div className="space-y-3">
+            <div className="grid gap-2 px-3 pt-3 sm:grid-cols-[1fr,11rem,11rem]">
+              <Input
+                value={nameFilter}
+                onChange={(e) => setNameFilter(e.target.value)}
+                placeholder={t("pages.nodes.search", {
+                  defaultValue: "Search by name or address",
+                })}
+              />
+              <SelectNative
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+              >
+                <option value="all">
+                  {t("pages.nodes.filterAllStatuses", {
+                    defaultValue: "All statuses",
+                  })}
+                </option>
+                <option value="online">{t("pages.nodes.online")}</option>
+                <option value="offline">{t("pages.nodes.offline")}</option>
+                <option value="unknown">{t("pages.nodes.unknown")}</option>
+                <option value="error">{t("pages.nodes.error", { defaultValue: "Error" })}</option>
+              </SelectNative>
+              <SelectNative
+                value={xrayStateFilter}
+                onChange={(e) => setXrayStateFilter(e.target.value)}
+              >
+                <option value="all">
+                  {t("pages.nodes.filterAllXrayStates", {
+                    defaultValue: "All Xray states",
+                  })}
+                </option>
+                <option value="running">
+                  {t("pages.nodes.xrayStateRunning", { defaultValue: "Running" })}
+                </option>
+                <option value="stopped">
+                  {t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" })}
+                </option>
+                <option value="error">
+                  {t("pages.nodes.xrayStateError", { defaultValue: "Error" })}
+                </option>
+                <option value="unknown">
+                  {t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" })}
+                </option>
+              </SelectNative>
+            </div>
           <div className="panel-data-table overflow-x-auto">
             <table className="w-full min-w-[960px] border-collapse text-left text-sm">
               <thead>
@@ -906,7 +979,16 @@ export function NodesPage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {sortedAndFilteredRows.length === 0 ? (
+                  <tr>
+                    <td
+                      colSpan={11}
+                      className="p-6 text-center text-sm text-[var(--fg-subtle)]"
+                    >
+                      {t("pages.nodes.noMatches", { defaultValue: "No nodes match filters" })}
+                    </td>
+                  </tr>
+                ) : sortedAndFilteredRows.map((r) => (
                   <tr
                     key={r.id}
                     role="button"
@@ -986,6 +1068,7 @@ export function NodesPage() {
                 ))}
               </tbody>
             </table>
+          </div>
           </div>
         )}
       </Surface>

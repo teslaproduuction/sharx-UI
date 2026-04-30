@@ -106,16 +106,11 @@ func (a *NodeController) getNodes(c *gin.Context) {
 	for _, node := range nodes {
 		inbounds, _ := a.nodeService.GetInboundsForNode(node.Id)
 		profiles, _ := profileService.GetProfilesForNode(node.Id)
-		// Get Xray version from node (only if node is online)
-		xrayVersion := ""
-		if node.Status == "online" {
-			xrayVersion = a.nodeService.GetNodeXrayVersion(node)
-		}
 		result = append(result, NodeWithInbounds{
 			Node:        node,
 			Inbounds:    inbounds,
 			Profiles:    profiles,
-			XrayVersion: xrayVersion,
+			XrayVersion: node.XrayVersion,
 		})
 	}
 
@@ -719,16 +714,11 @@ func (a *NodeController) broadcastNodesUpdate() {
 	for _, node := range nodes {
 		inbounds, _ := a.nodeService.GetInboundsForNode(node.Id)
 		profiles, _ := profileService.GetProfilesForNode(node.Id)
-		// Get Xray version from node (only if node is online)
-		xrayVersion := ""
-		if node.Status == "online" {
-			xrayVersion = a.nodeService.GetNodeXrayVersion(node)
-		}
 		result = append(result, NodeWithInbounds{
 			Node:        node,
 			Inbounds:    inbounds,
 			Profiles:    profiles,
-			XrayVersion: xrayVersion,
+			XrayVersion: node.XrayVersion,
 		})
 	}
 

@@ -893,6 +893,14 @@ export function InboundsPage() {
     let settings: string;
     if (form.protocol === "wireguard") {
       settings = "{}";
+    } else if (form.protocol === "mixed") {
+      // For mixed, accounts are managed entirely via client assignments.
+      // Preserve existing settings from DB on edit; use noauth skeleton on create.
+      if (editId != null) {
+        settings = baselineSettings || JSON.stringify({ auth: "noauth", udp: true });
+      } else {
+        settings = JSON.stringify({ auth: "noauth", udp: true });
+      }
     } else if (editId != null) {
       settings = mergeFirstClientIntoSettings(baselineSettings, form.protocol, patch);
     } else {
@@ -1107,19 +1115,23 @@ export function InboundsPage() {
 
   const isEdit = editId != null;
 
-  const inboundStepOrder = useMemo<InboundStepId[]>(
-    () =>
-      multiNodeMode === true
-        ? [...INBOUND_STEP_ORDER]
-        : INBOUND_STEP_ORDER.filter((id) => id !== "nodes"),
-    [multiNodeMode],
-  );
+  const inboundStepOrder = useMemo<InboundStepId[]>(() => {
+    const hasAuth = form.protocol !== "mixed";
+    return INBOUND_STEP_ORDER.filter((id) => {
+      if (id === "nodes" && multiNodeMode !== true) return false;
+      if (id === "auth" && !hasAuth) return false;
+      return true;
+    });
+  }, [multiNodeMode, form.protocol]);
 
   useEffect(() => {
     if (step === "nodes" && multiNodeMode !== true) {
       setStep("sniffing");
     }
-  }, [step, multiNodeMode]);
+    if (step === "auth" && form.protocol === "mixed") {
+      setStep("sniffing");
+    }
+  }, [step, multiNodeMode, form.protocol]);
 
   const stepIdx = inboundStepOrder.indexOf(step);
   const isLastStep =
@@ -2387,15 +2399,60 @@ export function InboundsPage() {
                       "WireGuard uses UDP on the inbound port. There is no TCP/WebSocket `streamSettings` — leave the generated empty `{}` and configure `secretKey`, `address`, and `peers` on the next step (same shape as the Xray WireGuard example).",
                   })}
                 </p>
+              ) : streamTransportMode === "mixed" ? (
+                <>
+                  <p className="mb-3 text-xs text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.mixedStreamHint", {
+                      defaultValue:
+                        "Mixed serves HTTP and SOCKS on one port — plain TCP only. TLS/REALITY and WebSocket do not apply here.",
+                    })}
+                  </p>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="flex min-h-[2.5rem] items-end pb-0.5 text-xs leading-snug text-[var(--fg-subtle)]">
+                      {t("pages.inbounds.streamSecurityNoneForSs", {
+                        defaultValue: "Stream security is none (Xray default for this protocol).",
+                      })}
+                    </div>
+                  </div>
+                  <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label
+                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                        htmlFor="in-hdr-mixed"
+                      >
+                        {t("pages.inbounds.tcpHeaderType", { defaultValue: "TCP header" })}
+                      </label>
+                      <SelectNative
+                        id="in-hdr-mixed"
+                        value={form.streamForm.tcpHeaderType}
+                        onChange={(e) =>
+                          setStreamFormField(
+                            "tcpHeaderType",
+                            e.target.value as StreamFormState["tcpHeaderType"],
+                          )
+                        }
+                      >
+                        <option value="none">none</option>
+                        <option value="http">http</option>
+                      </SelectNative>
+                    </div>
+                    <div className="flex items-end pb-1">
+                      <CheckboxField
+                        checked={form.streamForm.acceptProxyProtocol}
+                        onChange={(e) =>
+                          setStreamFormField("acceptProxyProtocol", e.target.checked)
+                        }
+                        label={t("pages.inbounds.acceptProxyProtocol", {
+                          defaultValue: "Accept proxy protocol",
+                        })}
+                      />
+                    </div>
+                  </div>
+                </>
               ) : streamTransportMode === "shadowsocks" ? (
                 <>
                   <p className="mb-3 text-xs text-[var(--fg-subtle)]">
-                    {form.protocol === "mixed"
-                      ? t("pages.inbounds.mixedStreamHint", {
-                          defaultValue:
-                            "Mixed serves HTTP and SOCKS on one port. Use plain TCP or WebSocket for the stream (no TLS/REALITY on this step — that is for VLESS, VMess, Trojan).",
-                        })
-                      : t("pages.inbounds.shadowsocksStreamHint", {
+                    {t("pages.inbounds.shadowsocksStreamHint", {
                           defaultValue:
                             "Shadowsocks already encrypts payload. The stream is plain TCP or WebSocket (no TLS/REALITY here — that applies to VLESS, VMess, Trojan).",
                         })}

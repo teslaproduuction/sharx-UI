@@ -42,7 +42,7 @@ func (e *ErrNodeNeedsReregistration) Error() string {
 func (s *NodeService) GetAllNodes() ([]*model.Node, error) {
 	db := database.GetDB()
 	var nodes []*model.Node
-	err := db.Find(&nodes).Error
+	err := db.Order("id ASC").Find(&nodes).Error
 	return nodes, err
 }
 
@@ -271,6 +271,12 @@ func (s *NodeService) SetNodeXrayState(id int, state string) error {
 	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("xray_state", st).Error
 }
 
+// SetNodeXrayVersion persists the cached Xray version string from the worker.
+// Pass an empty string to clear (e.g. when the node goes offline).
+func (s *NodeService) SetNodeXrayVersion(id int, version string) error {
+	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("xray_version", version).Error
+}
+
 func statusMapRunning(v interface{}) bool {
 	switch x := v.(type) {
 	case bool:
@@ -282,12 +288,37 @@ func statusMapRunning(v interface{}) bool {
 	}
 }
 
-// RefreshNodeXrayStateFromWorker sets xray_state from GET /api/v1/status on the worker.
+func extractNodeXrayVersion(status map[string]interface{}) string {
+	if status == nil {
+		return ""
+	}
+	tryVersion := func(v interface{}) string {
+		s, ok := v.(string)
+		if !ok {
+			return ""
+		}
+		s = strings.TrimSpace(s)
+		if s == "" || strings.EqualFold(s, "unknown") {
+			return ""
+		}
+		return s
+	}
+	if v := tryVersion(status["version"]); v != "" {
+		return v
+	}
+	if v := tryVersion(status["xrayVersion"]); v != "" {
+		return v
+	}
+	return ""
+}
+
+// RefreshNodeXrayStateFromWorker sets xray_state (and caches xray_version) from GET /api/v1/status on the worker.
 func (s *NodeService) RefreshNodeXrayStateFromWorker(node *model.Node) error {
 	if node == nil {
 		return nil
 	}
 	if !node.Enable {
+		_ = s.SetNodeXrayVersion(node.Id, "")
 		return s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
 	}
 	st, err := s.GetNodeStatus(node)
@@ -297,6 +328,20 @@ func (s *NodeService) RefreshNodeXrayStateFromWorker(node *model.Node) error {
 		}
 		return s.SetNodeXrayState(node.Id, model.NodeXrayUnknown)
 	}
+
+	// Cache version from /api/v1/status (and keep compatibility with alternate payload keys).
+	version := extractNodeXrayVersion(st)
+	if version == "" {
+		// Fallback to public /health payload for older/newer worker payload variants.
+		if health, hErr := s.GetNodePublicHealth(node); hErr == nil && health != nil {
+			v := strings.TrimSpace(health.XrayVersion)
+			if v != "" && !strings.EqualFold(v, "unknown") {
+				version = v
+			}
+		}
+	}
+	_ = s.SetNodeXrayVersion(node.Id, version)
+
 	if statusMapRunning(st["running"]) {
 		return s.SetNodeXrayState(node.Id, model.NodeXrayRunning)
 	}
@@ -337,6 +382,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 	if node != nil && !node.Enable {
 		resetNodeHealthTgHysteresis(node.Id)
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
+		_ = s.SetNodeXrayVersion(node.Id, "")
 		return nil
 	}
 	// Get previous status before checking (to detect status changes)
@@ -351,6 +397,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 			logger.Errorf("[Node: %s] Failed to update node status: %v", node.Name, updateErr)
 		}
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayError)
+		_ = s.SetNodeXrayVersion(node.Id, "")
 		sendDown, _, downFrom := nodeHealthTgHysteresisAfterCheck(node.Id, true, previousStatus)
 		if sendDown {
 			if downFrom == "" {
