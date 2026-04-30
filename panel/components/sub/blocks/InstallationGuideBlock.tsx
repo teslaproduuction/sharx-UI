@@ -239,6 +239,7 @@ function QrIconButton({ qrUrl, qrLabel, interactive, onShowQr }: {
   return (
     <button
       type="button"
+      style={{cursor: "pointer"}}
       onClick={() => { if (interactive) onShowQr(qrUrl, qrLabel); }}
       className="grid size-[30px] shrink-0 place-items-center rounded-lg border border-[color-mix(in_oklab,var(--sub-accent)_45%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.1))] text-[var(--sub-accent,#22d3ee)] transition hover:border-[color-mix(in_oklab,var(--sub-accent)_70%,transparent)]"
     >
@@ -249,12 +250,12 @@ function QrIconButton({ qrUrl, qrLabel, interactive, onShowQr }: {
 
 function StepsTimeline({ steps, actions, interactive, showQrCodes, qrUrl, qrLabel, onShowQr }: StepsSharedProps) {
   return (
-    <ol className="relative flex flex-col gap-0 border-l-2 border-[var(--sub-border,rgba(255,255,255,0.08))] ml-[15px]">
+    <ol className="relative flex flex-col gap-0 ml-[15px]">
       {steps.map((s: InstallationStep, i: number) => {
         const action = actions[i];
         const showQr = showQrCodes && qrUrl && i === 1;
         return (
-          <li key={i} className="relative pb-5 pl-6 last:pb-0">
+          <li key={i} className="relative pb-5 pl-6 last:pb-0 last:before:hidden before:absolute before:left-[-2px] before:top-4 before:bottom-0 before:w-[2px] before:bg-[var(--sub-border,rgba(255,255,255,0.08))]">
             <span className="absolute -left-[11px] top-0.5 flex size-5 items-center justify-center rounded-full border-2 border-[var(--sub-accent,#22d3ee)] bg-[var(--sub-bg,#161b22)] text-[10px] font-bold text-[var(--sub-accent,#22d3ee)]">
               {i + 1}
             </span>
