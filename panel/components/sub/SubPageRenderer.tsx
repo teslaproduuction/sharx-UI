@@ -1,6 +1,6 @@
 "use client";
 
-import { Copy, LifeBuoy, Link2, MessageSquare, QrCode, Send } from "lucide-react";
+import { Copy, LifeBuoy, Link2, MessageSquare, Send } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
@@ -10,6 +10,7 @@ import { isSharxV2Config, isSharxV1Config } from "@/lib/sharxSubpageConfig";
 import type {
   SharxSubpageConfigV1,
   SharxSubpageConfigV2,
+  SubpageBlock,
 } from "@/lib/sharxSubpageConfig";
 import shell from "./subscription-shell.module.css";
 import type {
@@ -41,11 +42,6 @@ type BrandingInfo = {
   showQrCodes: boolean;
 };
 
-type HeaderSubscriptionActions = {
-  showCopy: boolean;
-  showQr: boolean;
-};
-
 function brandingFromConfig(
   cfg: SharxSubpageConfigV1 | SharxSubpageConfigV2 | null,
   fallbackTitle: string,
@@ -62,35 +58,21 @@ function brandingFromConfig(
   };
 }
 
-function headerSubscriptionActionsFromConfig(
+function shouldShowGetLink(
   cfg: SharxSubpageConfigV1 | SharxSubpageConfigV2 | null,
-): HeaderSubscriptionActions {
-  // Legacy / unknown config keeps historical behavior.
-  if (!cfg || !("blocks" in cfg) || !Array.isArray(cfg.blocks)) {
-    return { showCopy: true, showQr: true };
-  }
+): boolean {
+  if (!cfg || !("blocks" in cfg) || !Array.isArray(cfg.blocks)) return true;
   const linksBlock = cfg.blocks.find(
-    (b) => b.kind === "links-list" && b.enabled !== false,
-  ) as
-    | { showCopy?: boolean; showQr?: boolean }
-    | undefined;
-  if (!linksBlock) {
-    // In v2, header subscription actions are owned by links-list block.
-    return { showCopy: false, showQr: false };
-  }
-  return {
-    showCopy: linksBlock.showCopy !== false,
-    showQr: linksBlock.showQr !== false,
-  };
+    (b: SubpageBlock) => b.kind === "links-list" && b.enabled !== false,
+  ) as { showCopy?: boolean; showQr?: boolean } | undefined;
+  if (!linksBlock) return false;
+  return linksBlock.showCopy !== false || linksBlock.showQr !== false;
 }
 
 type SubPageRendererProps = {
   data: PublicSubPayload;
-  /** Copy handler. Defaults to navigator.clipboard with a toast. */
   onCopy?: (text: string, kind: "link" | "subscription") => void;
-  /** Disable interactive actions (e.g. for live preview). */
   interactive?: boolean;
-  /** Extra class applied on the outer header container. */
   className?: string;
 };
 
@@ -102,9 +84,7 @@ export function SubPageRenderer({
 }: SubPageRendererProps) {
   const { t } = useTranslation();
   const toast = useToast();
-  const [qrModal, setQrModal] = useState<{ url: string; title: string } | null>(
-    null,
-  );
+  const [qrModal, setQrModal] = useState<{ url: string; title: string } | null>(null);
 
   const fallbackTitle = t("pages.publicSub.title", { defaultValue: "Subscription" });
   const cfg = isSharxV2Config(data.config)
@@ -114,7 +94,7 @@ export function SubPageRenderer({
       : null;
 
   const branding = brandingFromConfig(cfg, fallbackTitle);
-  const headerActions = headerSubscriptionActionsFromConfig(cfg);
+  const showGetLink = shouldShowGetLink(cfg);
 
   const copyText = useCallback(
     async (text: string, kind: "link" | "subscription") => {
@@ -143,11 +123,13 @@ export function SubPageRenderer({
     ? supportKindFromUrl(branding.supportUrl)
     : ("generic" as SupportKind);
 
-  // v2: render block list. v1 / legacy: render a deterministic default block set.
-  const blocks =
+  const blocks: SubpageBlock[] =
     cfg && "blocks" in cfg && Array.isArray(cfg.blocks) && cfg.blocks.length > 0
-      ? cfg.blocks.filter((b) => b.enabled !== false)
+      ? (cfg.blocks as SubpageBlock[]).filter((b: SubpageBlock) => b.enabled !== false)
       : defaultBlocksForLegacy();
+
+  const locales =
+    cfg && "locales" in cfg && Array.isArray(cfg.locales) ? cfg.locales : [];
 
   return (
     <>
@@ -170,9 +152,7 @@ export function SubPageRenderer({
                 </div>
               )}
               <div className="min-w-0">
-                <h1
-                  className={branding.logoUrl ? shell.titleCyan : shell.titleWhite}
-                >
+                <h1 className={branding.logoUrl ? shell.titleCyan : shell.titleWhite}>
                   {branding.title}
                 </h1>
                 {branding.brandText ? (
@@ -180,43 +160,22 @@ export function SubPageRenderer({
                 ) : null}
               </div>
             </div>
-            <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-              {data.subscriptionUrl ? (
-                <>
-                  {headerActions.showCopy ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className={shell.actionBtn}
-                      onClick={() => void copyText(data.subscriptionUrl, "subscription")}
-                    >
-                      <Copy className={`size-4 shrink-0 ${shell.actionBtnIcon}`} />
-                      {t("pages.publicSub.copySubscription", {
-                        defaultValue: "Copy subscription link",
-                      })}
-                    </Button>
-                  ) : null}
-                  {branding.showQrCodes && headerActions.showQr ? (
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      className={shell.actionBtn}
-                      onClick={() =>
-                        setQrModal({
-                          url: data.subscriptionUrl,
-                          title: t("pages.publicSub.qrSubscription", {
-                            defaultValue: "Subscription QR",
-                          }),
-                        })
-                      }
-                    >
-                      <QrCode className={`size-4 shrink-0 ${shell.actionBtnIcon}`} />
-                      {t("pages.publicSub.qrSubscriptionShort", {
-                        defaultValue: "QR",
-                      })}
-                    </Button>
-                  ) : null}
-                </>
+            <div className="flex shrink-0 items-center gap-2">
+              {data.subscriptionUrl && showGetLink ? (
+                <button
+                  type="button"
+                  className={shell.supportIconBtn}
+                  title={t("pages.publicSub.getLink", { defaultValue: "Get link" })}
+                  aria-label={t("pages.publicSub.getLink", { defaultValue: "Get link" })}
+                  onClick={() =>
+                    setQrModal({
+                      url: data.subscriptionUrl,
+                      title: t("pages.publicSub.getLink", { defaultValue: "Get link" }),
+                    })
+                  }
+                >
+                  <Link2 className="size-[1.125rem]" />
+                </button>
               ) : null}
               {branding.supportUrl ? (
                 <a
@@ -255,8 +214,12 @@ export function SubPageRenderer({
             </section>
           ))}
 
+          {locales.length > 1 ? (
+            <LanguagePicker locales={locales} />
+          ) : null}
+
           {data.subscriptionUrl ? (
-            <p className="text-center text-[11px] text-[#6e7681]">
+            <p className="text-center text-[11px] text-[var(--sub-fg-subtle,#6e7681)]">
               {t("pages.publicSub.rawHint", {
                 defaultValue: "Use the subscription URL in your VPN app.",
               })}
@@ -283,20 +246,73 @@ export function SubPageRenderer({
                   fgColor="#22d3ee"
                 />
               </div>
+              <p className="text-center text-sm font-semibold text-[var(--sub-fg-strong,#fff)]">
+                {t("pages.publicSub.scanQrCode", {
+                  defaultValue: "Scan QR code in the app",
+                })}
+              </p>
+              <p className="text-center text-xs text-[var(--sub-fg-muted,#8b949e)]">
+                {t("pages.publicSub.scanQrCodeDescription", {
+                  defaultValue:
+                    "Or copy the link below and paste it into your VPN client.",
+                })}
+              </p>
               <Button
                 type="button"
                 variant="secondary"
                 className={shell.actionBtn}
-                onClick={() => void copyText(qrModal.url, "link")}
+                style={{ width: "100%" }}
+                onClick={() => void copyText(qrModal.url, "subscription")}
               >
                 <Copy className={`size-4 ${shell.actionBtnIcon}`} />
-                {t("copy", { defaultValue: "Copy" })}
+                {t("pages.publicSub.copyLink", { defaultValue: "Copy link" })}
               </Button>
             </div>
           ) : null}
         </Modal>
       ) : null}
     </>
+  );
+}
+
+/** Language picker shown at bottom of the page when multiple locales are configured. */
+function LanguagePicker({ locales }: { locales: string[] }) {
+  const { i18n } = useTranslation();
+  const currentLang = i18n.language?.slice(0, 2) ?? "en";
+
+  const LANG_LABELS: Record<string, string> = {
+    en: "English",
+    ru: "Русский",
+    zh: "中文",
+    fa: "فارسی",
+    fr: "Français",
+    de: "Deutsch",
+    es: "Español",
+    tr: "Türkçe",
+    ar: "العربية",
+    uk: "Українська",
+  };
+
+  return (
+    <div className="flex items-center justify-center gap-2">
+      {locales.map((locale) => {
+        const isActive = locale === currentLang;
+        return (
+          <button
+            key={locale}
+            type="button"
+            onClick={() => void i18n.changeLanguage(locale)}
+            className={`rounded-md px-2.5 py-1 text-[12px] font-medium transition ${
+              isActive
+                ? "bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] text-[var(--sub-accent,#22d3ee)]"
+                : "text-[var(--sub-fg-muted,#8b949e)] hover:text-[var(--sub-fg,#c9d1d9)]"
+            }`}
+          >
+            {LANG_LABELS[locale] ?? locale.toUpperCase()}
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -319,5 +335,4 @@ export function SubPageErrorBox({
   );
 }
 
-// Re-export utility for callers
 export { parseLinkTitle };

@@ -1,14 +1,17 @@
 "use client";
 
-import { Download, Smartphone, Zap } from "lucide-react";
+import { ChevronDown, Copy, Download, QrCode, Smartphone, Zap } from "lucide-react";
 import { useState } from "react";
 import {
   APP_CATALOG,
   normalizeInstallationGuideBlock,
+  type AppViewMode,
   type BlockInstallationGuide,
   type InstallationAppEntry,
   type InstallationPlatform,
   type InstallationStep,
+  type PlatformViewMode,
+  type StepsViewMode,
   type SubscriptionApp,
   type SupportedPlatform,
 } from "@/lib/sharxSubpageConfig";
@@ -25,12 +28,40 @@ const PLATFORM_META: Record<SupportedPlatform, { label: string }> = {
   androidtv: { label: "Android TV" },
 };
 
+/**
+ * Detect the user's platform from navigator.userAgent.
+ * Returns the best match from the `available` list, or the first entry as fallback.
+ */
+function detectPlatform(available: InstallationPlatform[]): SupportedPlatform {
+  const fallback = available[0]?.platform ?? "ios";
+  if (typeof navigator === "undefined") return fallback as SupportedPlatform;
+
+  const ua = navigator.userAgent;
+  let detected: SupportedPlatform | null = null;
+
+  if (/android/i.test(ua)) {
+    detected = /tv|stick|box/i.test(ua) ? "androidtv" : "android";
+  } else if (/ipad|iphone|ipod/i.test(ua)) {
+    detected = "ios";
+  } else if (/win/i.test(ua)) {
+    detected = "windows";
+  } else if (/mac/i.test(ua)) {
+    detected = "macos";
+  } else if (/linux/i.test(ua)) {
+    detected = "linux";
+  }
+
+  if (detected && available.some((g) => g.platform === detected)) {
+    return detected;
+  }
+  return fallback as SupportedPlatform;
+}
+
 function base64Url(input: string): string {
   if (typeof btoa === "function") return btoa(unescape(encodeURIComponent(input)));
   return Buffer.from(input, "utf-8").toString("base64");
 }
 
-/** Substitute deep-link template variables from APP_CATALOG. */
 function expandTemplate(template: string, url: string): string {
   if (!template || !url) return "";
   return template
@@ -39,353 +70,795 @@ function expandTemplate(template: string, url: string): string {
     .replace(/\{b64Url\}/g, base64Url(url));
 }
 
-/** Default per-app steps used when the admin hasn't customized them. */
 function defaultSteps(
-  app: SubscriptionApp,
+  _app: SubscriptionApp,
   appLabel: string,
   hasDownload: boolean,
+  t: BlockRenderContext["t"],
 ): InstallationStep[] {
-  const base: InstallationStep[] = [
+  return [
     {
-      title: "Install the app",
+      title: t("pages.publicSub.step.install.title", { defaultValue: "Install the app" }),
       text: hasDownload
-        ? `Download ${appLabel} using the button above.`
-        : `Install ${appLabel} from the official store for your platform.`,
+        ? t("pages.publicSub.step.install.textDownload", { defaultValue: "Download {{app}} using the button below.", app: appLabel })
+        : t("pages.publicSub.step.install.textStore", { defaultValue: "Install {{app}} from the official store for your platform.", app: appLabel }),
     },
     {
-      title: "Add subscription",
-      text: "Tap the \"Add subscription\" button — it opens the app and imports automatically. Or copy the subscription URL from the header and paste it in.",
+      title: t("pages.publicSub.step.addSub.title", { defaultValue: "Add subscription" }),
+      text: t("pages.publicSub.step.addSub.text", { defaultValue: 'Use the "Add subscription" button below to import automatically, or copy the subscription URL and paste it into the app.' }),
     },
     {
-      title: "Connect",
-      text: "Pick a server and turn the tunnel on. That's it.",
+      title: t("pages.publicSub.step.connect.title", { defaultValue: "Connect" }),
+      text: t("pages.publicSub.step.connect.text", { defaultValue: "Pick a server and turn the tunnel on. That's it." }),
     },
   ];
-  void app;
-  return base;
 }
 
 function getAppMeta(entry: InstallationAppEntry) {
-  const catalog = APP_CATALOG[entry.app];
+  const catalog = APP_CATALOG[entry.app as SubscriptionApp];
   const label = entry.label?.trim() || catalog?.label || entry.app;
-  const deepLinkTemplate = catalog?.deepLinkTemplate || "";
+  const deepLinkTemplate =
+    entry.deepLinkTemplate?.trim() || catalog?.deepLinkTemplate || "";
   const iconUrl = catalog?.iconUrl?.trim() || "";
-  return { label, deepLinkTemplate, iconUrl };
+  const supportsEncrypted = catalog?.supportsEncrypted === true;
+  return { label, deepLinkTemplate, iconUrl, supportsEncrypted };
 }
 
-/** Card for one app inside a platform group. */
-function AppCard({
-  entry,
-  subscriptionUrl,
-  showDeeplinks,
-  interactive,
-  t,
-}: {
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
+
+type DetailProps = {
   entry: InstallationAppEntry;
   subscriptionUrl: string;
   showDeeplinks: boolean;
+  showQrCodes: boolean;
   interactive: boolean;
+  onCopyLink: (url: string) => void;
+  onShowQr: (url: string, title: string) => void;
+  happEncryptedUrl?: string;
+  v2raytunEncryptedUrl?: string;
   t: BlockRenderContext["t"];
-}) {
-  const { label, deepLinkTemplate, iconUrl } = getAppMeta(entry);
-  const addHref = expandTemplate(deepLinkTemplate, subscriptionUrl);
-  const hasDownload = !!entry.downloadUrl?.trim();
-  const steps =
-    entry.steps && entry.steps.length > 0
-      ? entry.steps
-      : defaultSteps(entry.app, label, hasDownload);
+  stepsView: StepsViewMode;
+};
 
-  return (
-    <article className="flex flex-col gap-3 rounded-xl border border-white/10 bg-white/[0.03] p-4">
-      <header className="flex items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-white/10 bg-white/5 text-[#22d3ee]">
-            {iconUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={iconUrl}
-                alt=""
-                className="size-full object-contain"
-                loading="lazy"
-              />
-            ) : (
-              <Smartphone className="size-4" />
-            )}
+type StepAction = {
+  label: string;
+  href?: string;
+  onClick?: () => void;
+  icon: React.ReactNode;
+  primary?: boolean;
+  badge?: string;
+  external?: boolean;
+};
+
+function resolveStepActions(
+  steps: InstallationStep[],
+  opts: {
+    hasDownload: boolean;
+    downloadUrl?: string;
+    showDeeplinks: boolean;
+    addHref: string;
+    isEncrypted: boolean;
+    subscriptionUrl: string;
+    onCopyLink: (url: string) => void;
+    t: BlockRenderContext["t"];
+  },
+): (StepAction | null)[] {
+  return steps.map((_s: InstallationStep, i: number) => {
+    if (i === 0 && opts.hasDownload) {
+      return {
+        label: opts.t("pages.publicSub.installStore", { defaultValue: "Download" }),
+        href: opts.downloadUrl,
+        icon: <Download className="size-3.5" />,
+        external: true,
+      };
+    }
+    if (i === 1 && opts.showDeeplinks && opts.addHref) {
+      return {
+        label: opts.t("pages.publicSub.addSubscription", { defaultValue: "Add subscription" }),
+        href: opts.addHref,
+        icon: <Zap className="size-3.5" />,
+        primary: true,
+        badge: opts.isEncrypted ? "E2E" : undefined,
+      };
+    }
+    if (i === 1) {
+      return {
+        label: opts.t("pages.publicSub.copySubscription", { defaultValue: "Copy link" }),
+        onClick: () => opts.onCopyLink(opts.subscriptionUrl),
+        icon: <Copy className="size-3.5" />,
+      };
+    }
+    return null;
+  });
+}
+
+function ActionButton({
+  action,
+  interactive,
+}: {
+  action: StepAction;
+  interactive: boolean;
+}) {
+  if (action.href) {
+    return (
+      <a
+        href={action.href}
+        target={action.external ? "_blank" : undefined}
+        rel={action.external ? "noreferrer" : undefined}
+        onClick={(e) => { if (!interactive) e.preventDefault(); }}
+        className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition ${
+          action.primary
+            ? "border-[color-mix(in_oklab,var(--sub-accent)_45%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.1))] text-[var(--sub-accent,#22d3ee)] hover:border-[color-mix(in_oklab,var(--sub-accent)_70%,transparent)]"
+            : "border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-fg,#c9d1d9)] hover:border-[color-mix(in_oklab,var(--sub-accent)_45%,transparent)] hover:bg-[var(--sub-accent-soft,rgba(34,211,238,0.1))]"
+        }`}
+      >
+        {action.icon}
+        {action.label}
+        {action.badge ? (
+          <span className="rounded-full border border-[color-mix(in_oklab,var(--sub-accent)_35%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] px-1.5 py-[1px] text-[9px] font-semibold tracking-wider">
+            {action.badge}
           </span>
-          <span className="truncate text-sm font-semibold text-[#c9d1d9]">{label}</span>
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          {hasDownload ? (
-            <a
-              href={entry.downloadUrl}
-              target="_blank"
-              rel="noreferrer"
-              onClick={(e) => {
-                if (!interactive) e.preventDefault();
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[11px] font-medium text-[#c9d1d9] transition hover:border-[rgba(34,211,238,0.45)] hover:bg-[rgba(34,211,238,0.1)]"
-            >
-              <Download className="size-3" />
-              {t("pages.publicSub.installStore", { defaultValue: "Install" })}
-            </a>
-          ) : null}
-          {showDeeplinks && addHref ? (
-            <a
-              href={addHref}
-              onClick={(e) => {
-                if (!interactive) e.preventDefault();
-              }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[rgba(34,211,238,0.45)] bg-[rgba(34,211,238,0.1)] px-2.5 py-1 text-[11px] font-medium text-[#22d3ee] transition hover:border-[rgba(34,211,238,0.7)]"
-            >
-              <Zap className="size-3" />
-              {t("pages.publicSub.addSubscription", { defaultValue: "Add subscription" })}
-            </a>
-          ) : null}
-        </div>
-      </header>
-      <ol className="list-decimal space-y-1.5 pl-5 text-[13px] leading-relaxed text-[#8b949e] marker:text-[#22d3ee]">
-        {steps.map((s, i) => (
+        ) : null}
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => { if (interactive && action.onClick) action.onClick(); }}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] px-3 py-1.5 text-[12px] font-medium text-[var(--sub-fg,#c9d1d9)] transition hover:border-[color-mix(in_oklab,var(--sub-accent)_45%,transparent)] hover:bg-[var(--sub-accent-soft,rgba(34,211,238,0.1))]"
+    >
+      {action.icon}
+      {action.label}
+    </button>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Steps view modes
+// ---------------------------------------------------------------------------
+
+type StepsSharedProps = {
+  steps: InstallationStep[];
+  actions: (StepAction | null)[];
+  interactive: boolean;
+  showQrCodes: boolean;
+  qrUrl: string;
+  qrLabel: string;
+  onShowQr: (url: string, title: string) => void;
+};
+
+function QrIconButton({ qrUrl, qrLabel, interactive, onShowQr }: {
+  qrUrl: string;
+  qrLabel: string;
+  interactive: boolean;
+  onShowQr: (url: string, title: string) => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => { if (interactive) onShowQr(qrUrl, qrLabel); }}
+      className="grid size-[30px] shrink-0 place-items-center rounded-lg border border-[color-mix(in_oklab,var(--sub-accent)_45%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.1))] text-[var(--sub-accent,#22d3ee)] transition hover:border-[color-mix(in_oklab,var(--sub-accent)_70%,transparent)]"
+    >
+      <QrCode className="size-3.5" />
+    </button>
+  );
+}
+
+function StepsTimeline({ steps, actions, interactive, showQrCodes, qrUrl, qrLabel, onShowQr }: StepsSharedProps) {
+  return (
+    <ol className="relative flex flex-col gap-0 border-l-2 border-[var(--sub-border,rgba(255,255,255,0.08))] ml-[15px]">
+      {steps.map((s: InstallationStep, i: number) => {
+        const action = actions[i];
+        const showQr = showQrCodes && qrUrl && i === 1;
+        return (
+          <li key={i} className="relative pb-5 pl-6 last:pb-0">
+            <span className="absolute -left-[11px] top-0.5 flex size-5 items-center justify-center rounded-full border-2 border-[var(--sub-accent,#22d3ee)] bg-[var(--sub-bg,#161b22)] text-[10px] font-bold text-[var(--sub-accent,#22d3ee)]">
+              {i + 1}
+            </span>
+            <div className="rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] p-3">
+              {s.title?.trim() ? (
+                <div className="mb-1 text-[13px] font-semibold text-[var(--sub-fg-strong,#fff)]">
+                  {s.title}
+                </div>
+              ) : null}
+              {s.text?.trim() ? (
+                <p className="text-[12px] leading-relaxed text-[var(--sub-fg-muted,#8b949e)]">
+                  {s.text}
+                </p>
+              ) : null}
+              {(action || showQr) ? (
+                <div className="mt-2.5 flex items-center gap-2">
+                  {action ? <ActionButton action={action} interactive={interactive} /> : null}
+                  {showQr ? <QrIconButton qrUrl={qrUrl} qrLabel={qrLabel} interactive={interactive} onShowQr={onShowQr} /> : null}
+                </div>
+              ) : null}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function StepsNumbered({ steps, actions, interactive, showQrCodes, qrUrl, qrLabel, onShowQr }: StepsSharedProps) {
+  return (
+    <div>
+      <ol className="mb-3 list-decimal space-y-2 pl-5 text-[13px] leading-relaxed text-[var(--sub-fg-muted,#8b949e)] marker:text-[var(--sub-accent,#22d3ee)]">
+        {steps.map((s: InstallationStep, i: number) => (
           <li key={i}>
             {s.title?.trim() ? (
-              <span className="font-medium text-[#c9d1d9]">{s.title}</span>
+              <span className="font-medium text-[var(--sub-fg,#c9d1d9)]">{s.title}</span>
             ) : null}
             {s.title?.trim() && s.text?.trim() ? " — " : null}
             {s.text}
           </li>
         ))}
       </ol>
-    </article>
+      <div className="flex flex-wrap items-center gap-2">
+        {actions.map((action, i) =>
+          action ? <ActionButton key={i} action={action} interactive={interactive} /> : null,
+        )}
+        {showQrCodes && qrUrl ? (
+          <QrIconButton qrUrl={qrUrl} qrLabel={qrLabel} interactive={interactive} onShowQr={onShowQr} />
+        ) : null}
+      </div>
+    </div>
   );
 }
 
-/** Stepper style: platform tabs → app cards grid. */
-function StepperGuide({
-  groups,
-  title,
-  subscriptionUrl,
-  showDeeplinks,
-  interactive,
-  t,
+function StepsPlain({ steps, actions, interactive, showQrCodes, qrUrl, qrLabel, onShowQr }: StepsSharedProps) {
+  return (
+    <div>
+      <div className="mb-3 flex flex-col gap-2">
+        {steps.map((s: InstallationStep, i: number) => (
+          <div key={i} className="text-[13px] leading-relaxed text-[var(--sub-fg-muted,#8b949e)]">
+            {s.title?.trim() ? (
+              <span className="font-medium text-[var(--sub-fg,#c9d1d9)]">{s.title}: </span>
+            ) : null}
+            {s.text}
+          </div>
+        ))}
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {actions.map((action, i) =>
+          action ? <ActionButton key={i} action={action} interactive={interactive} /> : null,
+        )}
+        {showQrCodes && qrUrl ? (
+          <QrIconButton qrUrl={qrUrl} qrLabel={qrLabel} interactive={interactive} onShowQr={onShowQr} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App detail: resolves deep links / steps, delegates to the chosen steps view
+// ---------------------------------------------------------------------------
+
+function SelectedAppDetail(props: DetailProps) {
+  const { entry, subscriptionUrl, showDeeplinks, showQrCodes, interactive, onCopyLink, onShowQr, happEncryptedUrl, v2raytunEncryptedUrl, t, stepsView } = props;
+  const { label, deepLinkTemplate, iconUrl, supportsEncrypted } = getAppMeta(entry);
+
+  let addHref = expandTemplate(deepLinkTemplate, subscriptionUrl);
+  let isEncrypted = false;
+  if (entry.useEncrypted && supportsEncrypted) {
+    if (entry.app === "happ" && happEncryptedUrl) {
+      addHref = happEncryptedUrl;
+      isEncrypted = true;
+    } else if (entry.app === "v2raytun" && v2raytunEncryptedUrl) {
+      addHref = v2raytunEncryptedUrl;
+      isEncrypted = true;
+    }
+  }
+  const qrUrl = addHref || subscriptionUrl;
+  const hasDownload = !!entry.downloadUrl?.trim();
+  const steps =
+    entry.steps && entry.steps.length > 0
+      ? entry.steps
+      : defaultSteps(entry.app, label, hasDownload, t);
+
+  const actions = resolveStepActions(steps, {
+    hasDownload,
+    downloadUrl: entry.downloadUrl,
+    showDeeplinks,
+    addHref,
+    isEncrypted,
+    subscriptionUrl,
+    onCopyLink,
+    t,
+  });
+
+  return (
+    <div className="mt-1">
+      <div className="mb-3 flex items-center gap-2.5">
+        <span className="grid size-8 shrink-0 place-items-center overflow-hidden rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-accent,#22d3ee)]">
+          {iconUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={iconUrl} alt="" className="size-full object-contain" loading="lazy" />
+          ) : (
+            <Smartphone className="size-4" />
+          )}
+        </span>
+        <span className="text-sm font-semibold text-[var(--sub-fg-strong,#fff)]">{label}</span>
+        {isEncrypted ? (
+          <span className="rounded-full border border-[color-mix(in_oklab,var(--sub-accent)_35%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] px-1.5 py-[1px] text-[9px] font-semibold tracking-wider text-[var(--sub-accent,#22d3ee)]">
+            E2E
+          </span>
+        ) : null}
+      </div>
+
+      {stepsView === "timeline" ? (
+        <StepsTimeline steps={steps} actions={actions} interactive={interactive} showQrCodes={showQrCodes} qrUrl={qrUrl} qrLabel={label} onShowQr={onShowQr} />
+      ) : stepsView === "numbered" ? (
+        <StepsNumbered steps={steps} actions={actions} interactive={interactive} showQrCodes={showQrCodes} qrUrl={qrUrl} qrLabel={label} onShowQr={onShowQr} />
+      ) : (
+        <StepsPlain steps={steps} actions={actions} interactive={interactive} showQrCodes={showQrCodes} qrUrl={qrUrl} qrLabel={label} onShowQr={onShowQr} />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// App selector modes: chips, list, dropdown
+// ---------------------------------------------------------------------------
+
+function AppChip({
+  entry,
+  isActive,
+  onClick,
 }: {
+  entry: InstallationAppEntry;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const { label, iconUrl } = getAppMeta(entry);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-[12px] font-medium transition ${
+        isActive
+          ? "border-[var(--sub-accent,rgba(34,211,238,0.55))] bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] text-[var(--sub-accent,#22d3ee)]"
+          : "border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-fg,#c9d1d9)] hover:border-[var(--sub-border,rgba(255,255,255,0.15))]"
+      }`}
+    >
+      <span className="grid size-5 shrink-0 place-items-center overflow-hidden rounded text-[var(--sub-accent,#22d3ee)]">
+        {iconUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={iconUrl} alt="" className="size-full object-contain" loading="lazy" />
+        ) : (
+          <Smartphone className="size-3" />
+        )}
+      </span>
+      {label}
+    </button>
+  );
+}
+
+function AppListItem({
+  entry,
+  isActive,
+  onClick,
+}: {
+  entry: InstallationAppEntry;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const { label, iconUrl } = getAppMeta(entry);
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex w-full items-center gap-3 rounded-lg border px-3 py-2.5 text-left text-[13px] font-medium transition ${
+        isActive
+          ? "border-[var(--sub-accent,rgba(34,211,238,0.55))] bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] text-[var(--sub-accent,#22d3ee)]"
+          : "border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-fg,#c9d1d9)] hover:border-[var(--sub-border,rgba(255,255,255,0.15))]"
+      }`}
+    >
+      <span className="grid size-6 shrink-0 place-items-center overflow-hidden rounded text-[var(--sub-accent,#22d3ee)]">
+        {iconUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={iconUrl} alt="" className="size-full object-contain" loading="lazy" />
+        ) : (
+          <Smartphone className="size-3.5" />
+        )}
+      </span>
+      {label}
+    </button>
+  );
+}
+
+function AppDropdownSelector({
+  apps,
+  selectedIdx,
+  onSelect,
+}: {
+  apps: InstallationAppEntry[];
+  selectedIdx: number;
+  onSelect: (idx: number) => void;
+}) {
+  const current = apps[selectedIdx];
+  const { iconUrl } = current ? getAppMeta(current) : { iconUrl: "" };
+
+  return (
+    <div className="relative">
+      <select
+        value={selectedIdx}
+        onChange={(e) => onSelect(Number(e.target.value))}
+        className="w-full appearance-none rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] py-2.5 pl-10 pr-8 text-[13px] font-medium text-[var(--sub-fg,#c9d1d9)] outline-none transition focus:border-[var(--sub-accent,rgba(34,211,238,0.55))]"
+      >
+        {apps.map((entry: InstallationAppEntry, i: number) => {
+          const meta = getAppMeta(entry);
+          return (
+            <option key={`${entry.app}-${i}`} value={i}>
+              {meta.label}
+            </option>
+          );
+        })}
+      </select>
+      <span className="pointer-events-none absolute left-3 top-1/2 grid -translate-y-1/2 size-5 place-items-center overflow-hidden rounded text-[var(--sub-accent,#22d3ee)]">
+        {iconUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={iconUrl} alt="" className="size-full object-contain" loading="lazy" />
+        ) : (
+          <Smartphone className="size-3" />
+        )}
+      </span>
+      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--sub-fg-muted,#8b949e)]" />
+    </div>
+  );
+}
+
+function AppSelector({
+  apps,
+  selectedIdx,
+  onSelect,
+  appView,
+}: {
+  apps: InstallationAppEntry[];
+  selectedIdx: number;
+  onSelect: (idx: number) => void;
+  appView: AppViewMode;
+}) {
+  if (apps.length <= 1) return null;
+
+  if (appView === "list") {
+    return (
+      <div className="mb-3 flex flex-col gap-1.5">
+        {apps.map((entry: InstallationAppEntry, i: number) => (
+          <AppListItem
+            key={`${entry.app}-${i}`}
+            entry={entry}
+            isActive={i === selectedIdx}
+            onClick={() => onSelect(i)}
+          />
+        ))}
+      </div>
+    );
+  }
+
+  if (appView === "dropdown") {
+    return (
+      <div className="mb-3">
+        <AppDropdownSelector apps={apps} selectedIdx={selectedIdx} onSelect={onSelect} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-3 flex flex-wrap gap-1.5">
+      {apps.map((entry: InstallationAppEntry, i: number) => (
+        <AppChip
+          key={`${entry.app}-${i}`}
+          entry={entry}
+          isActive={i === selectedIdx}
+          onClick={() => onSelect(i)}
+        />
+      ))}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Platform + App combined content (used inside each platform view mode)
+// ---------------------------------------------------------------------------
+
+type PlatformContentProps = {
+  group: InstallationPlatform;
+  subscriptionUrl: string;
+  showDeeplinks: boolean;
+  showQrCodes: boolean;
+  interactive: boolean;
+  onCopyLink: (url: string) => void;
+  onShowQr: (url: string, title: string) => void;
+  happEncryptedUrl?: string;
+  v2raytunEncryptedUrl?: string;
+  t: BlockRenderContext["t"];
+  appView: AppViewMode;
+  stepsView: StepsViewMode;
+};
+
+function PlatformContent(props: PlatformContentProps) {
+  const { group, subscriptionUrl, showDeeplinks, showQrCodes, interactive, onCopyLink, onShowQr, happEncryptedUrl, v2raytunEncryptedUrl, t, appView, stepsView } = props;
+  const enabledApps = group.apps.filter((e: InstallationAppEntry) => e.enabled !== false);
+  const [selectedIdx, setSelectedIdx] = useState(0);
+  const selectedApp = enabledApps[selectedIdx] ?? enabledApps[0];
+
+  return (
+    <div>
+      {group.intro?.trim() ? (
+        <p className="mb-3 text-[13px] leading-relaxed text-[var(--sub-fg-muted,#8b949e)]">{group.intro}</p>
+      ) : null}
+
+      <AppSelector
+        apps={enabledApps}
+        selectedIdx={selectedIdx}
+        onSelect={setSelectedIdx}
+        appView={appView}
+      />
+
+      {selectedApp ? (
+        <SelectedAppDetail
+          entry={selectedApp}
+          subscriptionUrl={subscriptionUrl}
+          showDeeplinks={showDeeplinks}
+          showQrCodes={showQrCodes}
+          interactive={interactive}
+          onCopyLink={onCopyLink}
+          onShowQr={onShowQr}
+          happEncryptedUrl={happEncryptedUrl}
+          v2raytunEncryptedUrl={v2raytunEncryptedUrl}
+          t={t}
+          stepsView={stepsView}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Platform view modes
+// ---------------------------------------------------------------------------
+
+type GuideProps = {
   groups: InstallationPlatform[];
   title: string;
   subscriptionUrl: string;
   showDeeplinks: boolean;
+  showQrCodes: boolean;
   interactive: boolean;
+  onCopyLink: (url: string) => void;
+  onShowQr: (url: string, title: string) => void;
+  happEncryptedUrl?: string;
+  v2raytunEncryptedUrl?: string;
   t: BlockRenderContext["t"];
-}) {
-  const enabled = groups.filter((g) => g.enabled !== false && g.apps.length > 0);
-  const [active, setActive] = useState<SupportedPlatform>(
-    enabled[0]?.platform ?? "ios",
+  platformView: PlatformViewMode;
+  appView: AppViewMode;
+  stepsView: StepsViewMode;
+};
+
+function PlatformTabs(props: GuideProps) {
+  const { groups, title, platformView: _pv, appView, stepsView, ...rest } = props;
+  void _pv;
+  const enabled: InstallationPlatform[] = groups.filter((g: InstallationPlatform) => g.enabled !== false && g.apps.length > 0);
+  const [activePlatform, setActivePlatform] = useState<SupportedPlatform>(
+    () => detectPlatform(enabled),
   );
+
   if (enabled.length === 0) return null;
-  const current =
-    enabled.find((g) => g.platform === active) ?? enabled[0]!;
+
+  const current = enabled.find((g) => g.platform === activePlatform) ?? enabled[0]!;
 
   return (
     <div>
       <h2 className={shell.sectionTitle}>{title}</h2>
+
       <div className="mb-3 flex flex-wrap gap-1.5">
-        {enabled.map((g) => {
-          const meta = PLATFORM_META[g.platform];
-          const isActive = g.platform === current.platform;
+        {enabled.map((g: InstallationPlatform) => {
+          const plat = g.platform as SupportedPlatform;
+          const meta = PLATFORM_META[plat];
+          const isActive = plat === current.platform;
           return (
             <button
-              key={g.platform}
+              key={plat}
               type="button"
-              onClick={() => setActive(g.platform)}
+              onClick={() => setActivePlatform(plat)}
               className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[12px] font-medium transition ${
                 isActive
-                  ? "border-[rgba(34,211,238,0.55)] bg-[rgba(34,211,238,0.14)] text-[#22d3ee]"
-                  : "border-white/10 bg-white/5 text-[#c9d1d9] hover:border-white/20"
+                  ? "border-[color-mix(in_oklab,var(--sub-accent)_55%,transparent)] bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] text-[var(--sub-accent,#22d3ee)]"
+                  : "border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-fg,#c9d1d9)] hover:border-[var(--sub-border,rgba(255,255,255,0.15))]"
               }`}
             >
-              <PlatformBrandIcon platform={g.platform} className="size-3.5" />
-              {meta?.label ?? g.platform}
+              <PlatformBrandIcon platform={plat} className="size-3.5" />
+              {meta?.label ?? plat}
             </button>
           );
         })}
       </div>
-      {current.intro?.trim() ? (
-        <p className="mb-3 text-[13px] leading-relaxed text-[#8b949e]">{current.intro}</p>
-      ) : null}
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-        {current.apps.map((entry, i) => (
-          <AppCard
-            key={`${entry.app}-${i}`}
-            entry={entry}
-            subscriptionUrl={subscriptionUrl}
-            showDeeplinks={showDeeplinks}
-            interactive={interactive}
-            t={t}
-          />
-        ))}
-      </div>
+
+      <PlatformContent
+        key={current.platform}
+        group={current}
+        appView={appView}
+        stepsView={stepsView}
+        {...rest}
+      />
     </div>
   );
 }
 
-/** Compact summary for "minimal" style: one chip per platform. */
-function MinimalGuide({
-  groups,
-  title,
-}: {
-  groups: InstallationPlatform[];
-  title: string;
-}) {
-  const enabled = groups.filter((g) => g.enabled !== false);
+function PlatformDropdown(props: GuideProps) {
+  const { groups, title, platformView: _pv, appView, stepsView, ...rest } = props;
+  void _pv;
+  const enabled: InstallationPlatform[] = groups.filter((g: InstallationPlatform) => g.enabled !== false && g.apps.length > 0);
+  const [activePlatform, setActivePlatform] = useState<SupportedPlatform>(
+    () => detectPlatform(enabled),
+  );
+
   if (enabled.length === 0) return null;
+
+  const current = enabled.find((g) => g.platform === activePlatform) ?? enabled[0]!;
+
   return (
     <div>
       <h2 className={shell.sectionTitle}>{title}</h2>
-      <ul className="flex flex-wrap gap-2 text-[12px] text-[#8b949e]">
-        {enabled.map((g) => {
-          const meta = PLATFORM_META[g.platform];
+
+      <div className="relative mb-3">
+        <select
+          value={current.platform}
+          onChange={(e) => setActivePlatform(e.target.value as SupportedPlatform)}
+          className="w-full appearance-none rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] py-2.5 pl-10 pr-8 text-[13px] font-medium text-[var(--sub-fg,#c9d1d9)] outline-none transition focus:border-[var(--sub-accent,rgba(34,211,238,0.55))]"
+        >
+          {enabled.map((g: InstallationPlatform) => {
+            const plat = g.platform as SupportedPlatform;
+            const meta = PLATFORM_META[plat];
+            return (
+              <option key={plat} value={plat}>
+                {meta?.label ?? plat}
+              </option>
+            );
+          })}
+        </select>
+        <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--sub-accent,#22d3ee)]">
+          <PlatformBrandIcon platform={current.platform as SupportedPlatform} className="size-4" />
+        </span>
+        <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--sub-fg-muted,#8b949e)]" />
+      </div>
+
+      <PlatformContent
+        key={current.platform}
+        group={current}
+        appView={appView}
+        stepsView={stepsView}
+        {...rest}
+      />
+    </div>
+  );
+}
+
+function PlatformPills(props: GuideProps) {
+  const { groups, title, platformView: _pv, appView, stepsView, ...rest } = props;
+  void _pv;
+  const enabled: InstallationPlatform[] = groups.filter((g: InstallationPlatform) => g.enabled !== false && g.apps.length > 0);
+  const [activePlatform, setActivePlatform] = useState<SupportedPlatform>(
+    () => detectPlatform(enabled),
+  );
+
+  if (enabled.length === 0) return null;
+
+  const current = enabled.find((g) => g.platform === activePlatform) ?? enabled[0]!;
+
+  return (
+    <div>
+      <h2 className={shell.sectionTitle}>{title}</h2>
+
+      <div className="mb-3 inline-flex overflow-hidden rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))]">
+        {enabled.map((g: InstallationPlatform) => {
+          const plat = g.platform as SupportedPlatform;
+          const meta = PLATFORM_META[plat];
+          const isActive = plat === current.platform;
           return (
-            <li
-              key={g.platform}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-[#c9d1d9]"
+            <button
+              key={plat}
+              type="button"
+              onClick={() => setActivePlatform(plat)}
+              className={`inline-flex items-center gap-1.5 px-3 py-2 text-[12px] font-medium transition ${
+                isActive
+                  ? "bg-[var(--sub-accent-soft,rgba(34,211,238,0.14))] text-[var(--sub-accent,#22d3ee)]"
+                  : "bg-[var(--sub-surface,rgba(255,255,255,0.04))] text-[var(--sub-fg,#c9d1d9)] hover:bg-[var(--sub-surface,rgba(255,255,255,0.08))]"
+              }`}
             >
-              <PlatformBrandIcon platform={g.platform} className="size-3.5" />
-              {meta?.label ?? g.platform}
-              <span className="ml-1 text-[10px] text-[#6e7681]">
-                {g.apps.length ? `· ${g.apps.length}` : ""}
-              </span>
-            </li>
+              <PlatformBrandIcon platform={plat} className="size-3.5" />
+              {meta?.label ?? plat}
+            </button>
           );
         })}
-      </ul>
+      </div>
+
+      <PlatformContent
+        key={current.platform}
+        group={current}
+        appView={appView}
+        stepsView={stepsView}
+        {...rest}
+      />
     </div>
   );
 }
 
-/** Accordion / cards / timeline all follow platform-as-outer-group layout. */
-function GroupedGuide({
-  style,
-  groups,
-  title,
-  subscriptionUrl,
-  showDeeplinks,
-  interactive,
-  t,
-}: {
-  style: "cards" | "accordion" | "timeline";
-  groups: InstallationPlatform[];
-  title: string;
-  subscriptionUrl: string;
-  showDeeplinks: boolean;
-  interactive: boolean;
-  t: BlockRenderContext["t"];
-}) {
-  const enabled = groups.filter((g) => g.enabled !== false && g.apps.length > 0);
+function PlatformAccordion(props: GuideProps) {
+  const { groups, title, platformView: _pv, appView, stepsView, ...rest } = props;
+  void _pv;
+  const enabled: InstallationPlatform[] = groups.filter((g: InstallationPlatform) => g.enabled !== false && g.apps.length > 0);
+
   if (enabled.length === 0) return null;
 
-  if (style === "accordion") {
-    return (
-      <div>
-        <h2 className={shell.sectionTitle}>{title}</h2>
-        <div className="flex flex-col gap-2">
-          {enabled.map((g, gi) => {
-            const meta = PLATFORM_META[g.platform];
-            return (
-              <details
-                key={g.platform}
-                className="group rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3"
-                open={gi === 0}
-              >
-                <summary className="flex cursor-pointer list-none items-center justify-between text-sm text-[#c9d1d9] [&::-webkit-details-marker]:hidden">
-                  <span className="inline-flex items-center gap-2">
-                    <PlatformBrandIcon platform={g.platform} className="size-4" />
-                    {meta?.label ?? g.platform}
-                  </span>
-                  <span className="text-xs text-[#6e7681]">{g.apps.length}</span>
-                </summary>
-                <div className="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {g.apps.map((entry, i) => (
-                    <AppCard
-                      key={`${entry.app}-${i}`}
-                      entry={entry}
-                      subscriptionUrl={subscriptionUrl}
-                      showDeeplinks={showDeeplinks}
-                      interactive={interactive}
-                      t={t}
-                    />
-                  ))}
-                </div>
-              </details>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  if (style === "timeline") {
-    return (
-      <div>
-        <h2 className={shell.sectionTitle}>{title}</h2>
-        <ol className="flex flex-col gap-6 border-l border-white/10 pl-4">
-          {enabled.map((g) => {
-            const meta = PLATFORM_META[g.platform];
-            return (
-              <li key={g.platform} className="relative">
-                <span className="absolute -left-[22px] top-0 flex size-4 items-center justify-center rounded-full border border-[#22d3ee]/60 bg-[#161b22]">
-                  <PlatformBrandIcon platform={g.platform} className="size-2.5" />
-                </span>
-                <div className="mb-3 text-sm font-semibold text-[#c9d1d9]">
-                  {meta?.label ?? g.platform}
-                </div>
-                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                  {g.apps.map((entry, i) => (
-                    <AppCard
-                      key={`${entry.app}-${i}`}
-                      entry={entry}
-                      subscriptionUrl={subscriptionUrl}
-                      showDeeplinks={showDeeplinks}
-                      interactive={interactive}
-                      t={t}
-                    />
-                  ))}
-                </div>
-              </li>
-            );
-          })}
-        </ol>
-      </div>
-    );
-  }
-
-  // cards
   return (
     <div>
       <h2 className={shell.sectionTitle}>{title}</h2>
-      <div className="flex flex-col gap-5">
-        {enabled.map((g) => {
-          const meta = PLATFORM_META[g.platform];
+      <div className="flex flex-col gap-2">
+        {enabled.map((g: InstallationPlatform, gi: number) => {
+          const plat = g.platform as SupportedPlatform;
+          const meta = PLATFORM_META[plat];
           return (
-            <section key={g.platform}>
-              <div className="mb-2 inline-flex items-center gap-2 text-[#c9d1d9]">
-                <PlatformBrandIcon platform={g.platform} className="size-4" />
-                <span className="text-sm font-semibold">{meta?.label ?? g.platform}</span>
+            <details
+              key={plat}
+              className="group rounded-xl border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] px-4 py-3"
+              open={gi === 0}
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between text-sm text-[var(--sub-fg,#c9d1d9)] [&::-webkit-details-marker]:hidden">
+                <span className="inline-flex items-center gap-2">
+                  <PlatformBrandIcon platform={plat} className="size-4" />
+                  {meta?.label ?? plat}
+                </span>
+                <span className="text-xs text-[var(--sub-fg-subtle,#6e7681)]">{g.apps.length}</span>
+              </summary>
+              <div className="mt-3">
+                <PlatformContent
+                  group={g}
+                  appView={appView}
+                  stepsView={stepsView}
+                  {...rest}
+                />
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                {g.apps.map((entry, i) => (
-                  <AppCard
-                    key={`${entry.app}-${i}`}
-                    entry={entry}
-                    subscriptionUrl={subscriptionUrl}
-                    showDeeplinks={showDeeplinks}
-                    interactive={interactive}
-                    t={t}
-                  />
-                ))}
-              </div>
-            </section>
+            </details>
           );
         })}
       </div>
     </div>
   );
+}
+
+// ---------------------------------------------------------------------------
+// Main export: resolves view mode settings and renders
+// ---------------------------------------------------------------------------
+
+function resolveModes(
+  normalized: BlockInstallationGuide,
+): { platformView: PlatformViewMode; appView: AppViewMode; stepsView: StepsViewMode } {
+  if (normalized.platformView) {
+    return {
+      platformView: normalized.platformView,
+      appView: normalized.appView ?? "chips",
+      stepsView: normalized.stepsView ?? "timeline",
+    };
+  }
+
+  switch (normalized.style) {
+    case "accordion":
+      return { platformView: "accordion", appView: "chips", stepsView: "timeline" };
+    case "timeline":
+      return { platformView: "tabs", appView: "chips", stepsView: "timeline" };
+    case "cards":
+      return { platformView: "tabs", appView: "chips", stepsView: "numbered" };
+    case "minimal":
+      return { platformView: "tabs", appView: "chips", stepsView: "plain" };
+    default:
+      return { platformView: "tabs", appView: "chips", stepsView: "timeline" };
+  }
 }
 
 export function InstallationGuideBlock({
@@ -395,7 +868,7 @@ export function InstallationGuideBlock({
   block: BlockInstallationGuide;
   ctx: BlockRenderContext;
 }) {
-  const { data, interactive, t } = ctx;
+  const { data, showQrCodes, interactive, t } = ctx;
   const normalized = normalizeInstallationGuideBlock(block);
   const groups = normalized.groups ?? [];
   const title =
@@ -403,38 +876,38 @@ export function InstallationGuideBlock({
     t("pages.publicSub.installation", { defaultValue: "Installation guide" });
   const showDeeplinks = normalized.showDeeplinks !== false;
   const subscriptionUrl = data.subscriptionUrl || "";
+  const onCopyLink = ctx.onCopyLink;
+  const onShowQr = ctx.onShowQr;
+  const happEncryptedUrl = data.happEncryptedUrl;
+  const v2raytunEncryptedUrl = data.v2raytunEncryptedUrl;
 
-  if (normalized.style === "minimal") {
-    return <MinimalGuide groups={groups} title={title} />;
+  const { platformView, appView, stepsView } = resolveModes(normalized);
+
+  const guideProps: GuideProps = {
+    groups,
+    title,
+    subscriptionUrl,
+    showDeeplinks,
+    showQrCodes,
+    interactive,
+    onCopyLink,
+    onShowQr,
+    happEncryptedUrl,
+    v2raytunEncryptedUrl,
+    t,
+    platformView,
+    appView,
+    stepsView,
+  };
+
+  switch (platformView) {
+    case "dropdown":
+      return <PlatformDropdown {...guideProps} />;
+    case "pills":
+      return <PlatformPills {...guideProps} />;
+    case "accordion":
+      return <PlatformAccordion {...guideProps} />;
+    default:
+      return <PlatformTabs {...guideProps} />;
   }
-
-  if (
-    normalized.style === "cards" ||
-    normalized.style === "accordion" ||
-    normalized.style === "timeline"
-  ) {
-    return (
-      <GroupedGuide
-        style={normalized.style}
-        groups={groups}
-        title={title}
-        subscriptionUrl={subscriptionUrl}
-        showDeeplinks={showDeeplinks}
-        interactive={interactive}
-        t={t}
-      />
-    );
-  }
-
-  // stepper (default)
-  return (
-    <StepperGuide
-      groups={groups}
-      title={title}
-      subscriptionUrl={subscriptionUrl}
-      showDeeplinks={showDeeplinks}
-      interactive={interactive}
-      t={t}
-    />
-  );
 }
