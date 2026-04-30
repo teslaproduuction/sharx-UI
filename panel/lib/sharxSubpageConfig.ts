@@ -229,6 +229,15 @@ export const installationStyles = [
 ] as const;
 export type InstallationStyle = (typeof installationStyles)[number];
 
+export const platformViewModes = ["tabs", "dropdown", "pills", "accordion"] as const;
+export type PlatformViewMode = (typeof platformViewModes)[number];
+
+export const appViewModes = ["chips", "list", "dropdown"] as const;
+export type AppViewMode = (typeof appViewModes)[number];
+
+export const stepsViewModes = ["timeline", "numbered", "plain"] as const;
+export type StepsViewMode = (typeof stepsViewModes)[number];
+
 export const subscriptionInfoVariants = ["expanded", "compact", "cards"] as const;
 export type SubscriptionInfoVariant = (typeof subscriptionInfoVariants)[number];
 
@@ -276,12 +285,24 @@ export type InstallationStep = z.infer<typeof installationStepSchema>;
 /** Recommended app entry inside a platform group. */
 export const installationAppEntrySchema = z.object({
   app: z.enum(subscriptionApps),
+  /** When false the app is hidden from the public page but kept in the config. */
+  enabled: z.boolean().default(true),
   /** Optional label override (else APP_CATALOG[app].label). */
   label: z.string().default(""),
   /** Store / GitHub release URL for the "Install" button. */
   downloadUrl: z.string().default(""),
   /** Optional custom steps. Empty → fall back to a generic Install → Import → Connect flow. */
   steps: z.array(installationStepSchema).default([]),
+  /**
+   * Override the deep-link template for this app entry. Empty → catalog default.
+   * Variables: {url} {urlEncoded} {b64Url}
+   */
+  deepLinkTemplate: z.string().default(""),
+  /**
+   * When true and the app supports it, prefer server-generated encrypted URL
+   * (happ://crypt4/…, v2raytun://crypt/…) over the plain template.
+   */
+  useEncrypted: z.boolean().default(false),
 });
 export type InstallationAppEntry = z.infer<typeof installationAppEntrySchema>;
 
@@ -301,7 +322,14 @@ export const blockInstallationGuideSchema = z.object({
   kind: z.literal("installation-guide"),
   /** Optional section title override. */
   title: z.string().optional(),
+  /** Legacy combined style — kept for back-compat; superseded by the three *View fields. */
   style: z.enum(installationStyles).default("stepper"),
+  /** How platforms are presented: tabs (inline row), dropdown, pills, or accordion sections. */
+  platformView: z.enum(platformViewModes).default("tabs"),
+  /** How apps within a platform are presented: chips, vertical list, or dropdown. */
+  appView: z.enum(appViewModes).default("chips"),
+  /** How installation steps are rendered: vertical timeline, numbered list, or plain text. */
+  stepsView: z.enum(stepsViewModes).default("timeline"),
   /**
    * New structured per-platform config. When non-empty it takes precedence
    * over the legacy flat `platforms[]` list.
@@ -330,9 +358,12 @@ export function defaultAppsForPlatform(platform: SupportedPlatform): Installatio
   });
   return apps.map<InstallationAppEntry>((app) => ({
     app,
+    enabled: true,
     label: "",
     downloadUrl: "",
     steps: [],
+    deepLinkTemplate: "",
+    useEncrypted: APP_CATALOG[app]?.supportsEncrypted === true,
   }));
 }
 
@@ -680,16 +711,12 @@ export function defaultV2Blocks(): SubpageBlock[] {
       kind: "installation-guide",
       enabled: true,
       style: "stepper",
+      platformView: "tabs",
+      appView: "chips",
+      stepsView: "timeline",
       groups: defaultInstallationGroups(),
       platforms: ["ios", "android", "windows", "macos", "linux"],
       showDeeplinks: true,
-    },
-    {
-      id: genBlockId(),
-      kind: "add-to-app",
-      enabled: true,
-      preferJsonUrl: false,
-      buttons: defaultAppButtons(),
     },
     {
       id: genBlockId(),

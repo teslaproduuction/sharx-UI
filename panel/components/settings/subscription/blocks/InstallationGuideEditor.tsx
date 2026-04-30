@@ -13,17 +13,21 @@ import { useTranslation } from "react-i18next";
 import { Button, IconButton, Input, Segmented, Switch } from "@/components/ui";
 import {
   APP_CATALOG,
+  appViewModes,
   defaultAppsForPlatform,
   defaultInstallationGroups,
-  installationStyles,
   normalizeInstallationGuideBlock,
+  platformViewModes,
+  stepsViewModes,
   subscriptionApps,
   supportedPlatforms,
+  type AppViewMode,
   type BlockInstallationGuide,
   type InstallationAppEntry,
   type InstallationPlatform,
   type InstallationStep,
-  type InstallationStyle,
+  type PlatformViewMode,
+  type StepsViewMode,
   type SubscriptionApp,
   type SupportedPlatform,
 } from "@/lib/sharxSubpageConfig";
@@ -48,20 +52,24 @@ function platformLabel(t: TFn, p: SupportedPlatform) {
 
 type TFn = ReturnType<typeof useTranslation>["t"];
 
-function styleLabel(t: TFn, s: InstallationStyle) {
-  switch (s) {
-    case "stepper":
-      return t("subBuilder.install.stepper", { defaultValue: "Stepper" });
-    case "timeline":
-      return t("subBuilder.install.timeline", { defaultValue: "Timeline" });
-    case "cards":
-      return t("subBuilder.install.cards", { defaultValue: "Cards" });
-    case "accordion":
-      return t("subBuilder.install.accordion", { defaultValue: "Accordion" });
-    case "minimal":
-      return t("subBuilder.install.minimal", { defaultValue: "Minimal" });
-  }
-}
+const PLATFORM_VIEW_LABELS: Record<PlatformViewMode, string> = {
+  tabs: "Tabs",
+  dropdown: "Dropdown",
+  pills: "Pills",
+  accordion: "Accordion",
+};
+
+const APP_VIEW_LABELS: Record<AppViewMode, string> = {
+  chips: "Chips",
+  list: "List",
+  dropdown: "Dropdown",
+};
+
+const STEPS_VIEW_LABELS: Record<StepsViewMode, string> = {
+  timeline: "Timeline",
+  numbered: "Numbered",
+  plain: "Plain",
+};
 
 export function InstallationGuideEditor({ block, onChange }: Props) {
   const { t } = useTranslation();
@@ -137,16 +145,51 @@ export function InstallationGuideEditor({ block, onChange }: Props) {
         />
       </div>
 
-      <div>
-        <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
-          {t("subBuilder.install.style", { defaultValue: "Layout" })}
+      <div className="flex flex-col gap-3">
+        <div>
+          <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+            {t("subBuilder.install.platformView", { defaultValue: "Platform selector" })}
+          </div>
+          <Segmented<PlatformViewMode>
+            items={platformViewModes.map((m) => ({
+              id: m,
+              label: t(`subBuilder.install.platformView.${m}`, { defaultValue: PLATFORM_VIEW_LABELS[m] }),
+            }))}
+            value={normalized.platformView ?? "tabs"}
+            onChange={(platformView) => onChange({ ...block, platformView })}
+            size="sm"
+          />
         </div>
-        <Segmented<InstallationStyle>
-          items={installationStyles.map((s) => ({ id: s, label: styleLabel(t, s) }))}
-          value={normalized.style}
-          onChange={(style) => onChange({ ...block, style })}
-          size="sm"
-        />
+
+        <div>
+          <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+            {t("subBuilder.install.appView", { defaultValue: "App selector" })}
+          </div>
+          <Segmented<AppViewMode>
+            items={appViewModes.map((m) => ({
+              id: m,
+              label: t(`subBuilder.install.appView.${m}`, { defaultValue: APP_VIEW_LABELS[m] }),
+            }))}
+            value={normalized.appView ?? "chips"}
+            onChange={(appView) => onChange({ ...block, appView })}
+            size="sm"
+          />
+        </div>
+
+        <div>
+          <div className="mb-1.5 text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+            {t("subBuilder.install.stepsView", { defaultValue: "Steps layout" })}
+          </div>
+          <Segmented<StepsViewMode>
+            items={stepsViewModes.map((m) => ({
+              id: m,
+              label: t(`subBuilder.install.stepsView.${m}`, { defaultValue: STEPS_VIEW_LABELS[m] }),
+            }))}
+            value={normalized.stepsView ?? "timeline"}
+            onChange={(stepsView) => onChange({ ...block, stepsView })}
+            size="sm"
+          />
+        </div>
       </div>
 
       <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--fg)]">
@@ -255,7 +298,7 @@ function PlatformGroupCard({
   const setApps = (apps: InstallationAppEntry[]) => onChange({ apps });
   const addApp = (app: SubscriptionApp) => {
     if (group.apps.some((e) => e.app === app)) return;
-    setApps([...group.apps, { app, label: "", downloadUrl: "", steps: [] }]);
+    setApps([...group.apps, { app, enabled: true, label: "", downloadUrl: "", steps: [], deepLinkTemplate: "", useEncrypted: APP_CATALOG[app]?.supportsEncrypted === true }]);
   };
   const removeAppAt = (i: number) => setApps(group.apps.filter((_, j) => j !== i));
   const moveApp = (i: number, dir: -1 | 1) => {
@@ -450,14 +493,19 @@ function AppEntryCard({
             <ArrowDown size={10} />
           </IconButton>
         </div>
-        <div className="min-w-0 flex-1">
+        <div className={`min-w-0 flex-1 ${entry.enabled === false ? "opacity-50" : ""}`}>
           <div className="truncate text-sm font-medium text-[var(--fg)]">{label}</div>
           <div className="truncate text-[10px] text-[var(--fg-subtle)]">
             {entry.app}
+            {entry.enabled === false ? ` · ${t("disabled", { defaultValue: "hidden" })}` : ""}
             {entry.downloadUrl ? " · download" : ""}
             {entry.steps && entry.steps.length > 0 ? ` · ${entry.steps.length} steps` : ""}
           </div>
         </div>
+        <Switch
+          checked={entry.enabled !== false}
+          onChange={(enabled) => onChange({ enabled })}
+        />
         <IconButton
           label={expanded ? t("collapse", { defaultValue: "Collapse" }) : t("expand", { defaultValue: "Expand" })}
           onClick={() => setExpanded((v) => !v)}
@@ -500,6 +548,41 @@ function AppEntryCard({
               />
             </label>
           </div>
+
+          <label className="block">
+            <span className="mb-0.5 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+              {t("subBuilder.install.deepLinkTemplate", {
+                defaultValue: "Deep link template (optional)",
+              })}
+            </span>
+            <Input
+              value={entry.deepLinkTemplate ?? ""}
+              placeholder={catalog?.deepLinkTemplate ?? ""}
+              onChange={(e) => onChange({ deepLinkTemplate: e.target.value })}
+            />
+          </label>
+
+          {catalog?.supportsEncrypted ? (
+            <label className="flex cursor-pointer items-center justify-between gap-3 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm text-[var(--fg)]">
+              <span className="min-w-0">
+                <span className="block text-sm font-medium">
+                  {t("subBuilder.install.useEncrypted", {
+                    defaultValue: "Use encrypted deeplink (E2E)",
+                  })}
+                </span>
+                <span className="block text-[11px] text-[var(--fg-subtle)]">
+                  {t("subBuilder.install.useEncryptedDesc", {
+                    defaultValue:
+                      "Generate happ://crypt4 / v2raytun://crypt via the server when available.",
+                  })}
+                </span>
+              </span>
+              <Switch
+                checked={entry.useEncrypted === true}
+                onChange={(useEncrypted) => onChange({ useEncrypted })}
+              />
+            </label>
+          ) : null}
 
           <div>
             <div className="mb-1 flex items-center justify-between">

@@ -82,22 +82,6 @@
       ]
     },
     {
-      "id": "default-add-to-app",
-      "kind": "add-to-app",
-      "enabled": true,
-      "preferJsonUrl": false,
-      "buttons": [
-        { "id": "btn-happ", "app": "happ", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": true },
-        { "id": "btn-v2raytun", "app": "v2raytun", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": true },
-        { "id": "btn-v2rayng", "app": "v2rayng", "enabled": true, "label": "", "iconUrl": "", "platforms": ["android"], "deepLinkTemplate": "", "useEncrypted": false },
-        { "id": "btn-hiddify", "app": "hiddify", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos","linux"], "deepLinkTemplate": "", "useEncrypted": false },
-        { "id": "btn-streisand", "app": "streisand", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios"], "deepLinkTemplate": "", "useEncrypted": false },
-        { "id": "btn-shadowrocket", "app": "shadowrocket", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios"], "deepLinkTemplate": "", "useEncrypted": false },
-        { "id": "btn-clash-meta", "app": "clash-meta", "enabled": true, "label": "", "iconUrl": "", "platforms": ["android","windows","macos","linux"], "deepLinkTemplate": "", "useEncrypted": false },
-        { "id": "btn-karing", "app": "karing", "enabled": true, "label": "", "iconUrl": "", "platforms": ["ios","android","windows","macos"], "deepLinkTemplate": "", "useEncrypted": false }
-      ]
-    },
-    {
       "id": "default-links-list",
       "kind": "links-list",
       "enabled": true,

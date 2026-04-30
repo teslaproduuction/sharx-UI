@@ -4,7 +4,6 @@ import {
   LifeBuoy,
   LinkIcon,
   ListChecks,
-  Smartphone,
   UserRound,
   type LucideIcon,
 } from "lucide-react";
@@ -13,7 +12,6 @@ import type {
   SubpageBlockKind,
 } from "@/lib/sharxSubpageConfig";
 import {
-  defaultAppButtons,
   defaultInstallationGroups,
   genBlockId,
 } from "@/lib/sharxSubpageConfig";
@@ -74,6 +72,9 @@ export const BLOCK_DESCRIPTORS: BlockDescriptor[] = [
       kind: "installation-guide",
       enabled: true,
       style: "stepper",
+      platformView: "tabs",
+      appView: "chips",
+      stepsView: "timeline",
       groups: defaultInstallationGroups(),
       platforms: ["ios", "android", "windows", "macos", "linux"],
       showDeeplinks: true,
@@ -91,20 +92,6 @@ export const BLOCK_DESCRIPTORS: BlockDescriptor[] = [
       enabled: true,
       showQr: true,
       showCopy: true,
-    }),
-  },
-  {
-    kind: "add-to-app",
-    labelKey: "subBuilder.blocks.kinds.addToApp.label",
-    descriptionKey: "subBuilder.blocks.kinds.addToApp.summary",
-    icon: Smartphone,
-    tone: "info",
-    create: () => ({
-      id: genBlockId(),
-      kind: "add-to-app",
-      enabled: true,
-      preferJsonUrl: false,
-      buttons: defaultAppButtons(),
     }),
   },
   {
