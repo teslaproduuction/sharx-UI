@@ -2193,6 +2193,10 @@ export function ClientsPage() {
   const [sortDir, setSortDir] = useState<SortDir>(initialTablePrefs.sortDir);
   const headerSelectRef = useRef<HTMLInputElement>(null);
   const [subscriptionQrUrl, setSubscriptionQrUrl] = useState<string | null>(null);
+  const [subscriptionEncryptionData, setSubscriptionEncryptionData] = useState<{
+    happEncryptedUrl?: string;
+    v2raytunEncryptedUrl?: string;
+  } | null>(null);
   /** Full connection key / share link text to show as QR (same as copy). */
   const [connectionKeyQrText, setConnectionKeyQrText] = useState<string | null>(null);
   const [clientsConfirmAction, setClientsConfirmAction] = useState<ClientsConfirmAction>(null);
@@ -4062,7 +4066,16 @@ export function ClientsPage() {
             onOpenSessions={() => {
               if (sheetClient != null) void openSessionsModal(sheetClient.id);
             }}
-            onShowSubscriptionQr={(url) => setSubscriptionQrUrl(url)}
+            onShowSubscriptionQr={(url) => {
+               setSubscriptionQrUrl(url);
+               const id = new URL(url).pathname.split("/").filter(Boolean).pop();
+               if(!id) return;
+               fetch(`/panel/api/public/subscription?id=${id}`).then(res => res.json())
+                  .then(res => {
+                    if(res?.success) setSubscriptionEncryptionData(res.obj);
+                    else console.error("API Err", res);
+               }).catch(console.error);
+            }}
           />
         )}
       </Modal>
@@ -4101,13 +4114,37 @@ export function ClientsPage() {
         {subscriptionQrUrl ? (
           <div className="flex flex-col items-center gap-4 py-2">
             <div className="rounded-xl border border-[var(--border)] bg-white p-3 dark:bg-[var(--bg-elevated)]">
-              <QRCodeSVG value={subscriptionQrUrl} size={200} level="M" />
+              <QRCodeSVG value={subscriptionQrUrl} size={200} level="M" onClick={() => copyText(subscriptionQrUrl)}/>
             </div>
             <p className="max-w-full break-all text-center font-mono text-[11px] text-[var(--fg-muted)]">
               {subscriptionQrUrl}
             </p>
           </div>
         ) : null}
+        {subscriptionEncryptionData && (
+          <div className="flex flex-col gap-6">
+          {subscriptionEncryptionData.happEncryptedUrl && (
+            <div className="flex flex-col items-center gap-2 py-2">
+              <div className="rounded-xl border border-[var(--border)] bg-white p-3 dark:bg-[var(--bg-elevated)]">
+                 <QRCodeSVG value={subscriptionEncryptionData.happEncryptedUrl} size={200} level="M" onClick={() => copyText(subscriptionEncryptionData.happEncryptedUrl!)}/>
+              </div>
+              <p className="text-xs text-[var(--fg-muted)]">
+                Happ Encrypted
+              </p>
+            </div>
+          )}
+          {subscriptionEncryptionData.v2raytunEncryptedUrl && (
+          <div className="flex flex-col items-center gap-4 py-2">
+            <div className="rounded-xl border border-[var(--border)] bg-white p-3 dark:bg-[var(--bg-elevated)]">
+              <QRCodeSVG value={subscriptionEncryptionData.v2raytunEncryptedUrl} size={200} level="M" onClick={() => copyText(subscriptionEncryptionData.v2raytunEncryptedUrl!)} />
+            </div>
+            <p className="max-w-full break-all text-center font-mono text-[11px] text-[var(--fg-muted)]">
+              V2RayTun Encrypted
+            </p>
+          </div>
+          )}
+         </div>
+        )}
       </Modal>
 
       <Modal
