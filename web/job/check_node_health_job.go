@@ -107,19 +107,14 @@ func (j *CheckNodeHealthJob) Run() {
 	for _, node := range updatedNodes {
 		inbounds, _ := j.nodeService.GetInboundsForNode(node.Id)
 		profiles, _ := profileService.GetProfilesForNode(node.Id)
-		// Get Xray version from node (only if node is online)
-		xrayVersion := ""
-		if node.Status == "online" {
-			xrayVersion = j.nodeService.GetNodeXrayVersion(node)
-		}
 		result = append(result, NodeWithInbounds{
 			Node:        node,
 			Inbounds:    inbounds,
 			Profiles:    profiles,
-			XrayVersion: xrayVersion,
+			XrayVersion: node.XrayVersion,
 		})
 	}
-	
+
 	// Broadcast via WebSocket
 	websocket.BroadcastNodes(result)
 }

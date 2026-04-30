@@ -856,6 +856,9 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 				continue
 			}
 			
+			logger.Debugf("UpdateClient: rebuilding settings for inbound %d (%s), clientCount=%d",
+				inboundId, inbound.Protocol, len(clientEntities))
+
 			// Update inbound Settings in DB (to keep database in sync)
 			// Use retry logic to handle database lock errors
 			inbound.Settings = newSettings

@@ -706,14 +706,16 @@ function parseHeaderType(tcp: Record<string, unknown> | undefined): "none" | "ht
 }
 
 /** How the inbound transport editor maps to streamSettings (UI varies by protocol). */
-export type InboundStreamTransportMode = "hysteria" | "shadowsocks" | "wireguard" | "full";
+export type InboundStreamTransportMode = "hysteria" | "mixed" | "shadowsocks" | "wireguard" | "full";
 
 export function getInboundStreamTransportMode(
   protocol: InboundFormProtocol,
 ): InboundStreamTransportMode {
   if (protocol === "hysteria" || protocol === "hysteria2") return "hysteria";
-  /** TCP/WS, stream security none — same editor for SS and mixed (HTTP+SOCKS proxy). */
-  if (protocol === "shadowsocks" || protocol === "mixed") return "shadowsocks";
+  /** Mixed (HTTP+SOCKS proxy): plain TCP only, no WS/TLS. */
+  if (protocol === "mixed") return "mixed";
+  /** TCP/WS, stream security none — Shadowsocks has its own crypto. */
+  if (protocol === "shadowsocks") return "shadowsocks";
   if (protocol === "wireguard") return "wireguard";
   return "full";
 }
@@ -802,7 +804,10 @@ export function parseStreamSettingsToForm(
     return base;
   }
   if (protocol === "shadowsocks" || protocol === "mixed") {
-    return parseStreamSettingsShadowsocksForm(json);
+    const state = parseStreamSettingsShadowsocksForm(json);
+    // mixed only supports TCP — ignore any WebSocket state that might have been stored
+    if (protocol === "mixed") state.network = "tcp";
+    return state;
   }
   try {
     const root = JSON.parse(json) as Record<string, unknown>;
@@ -1283,9 +1288,22 @@ export function mergeFirstClientIntoSettings(
     const user = (patch.mixedUser || "proxy").trim() || "proxy";
     const pass = (patch.mixedPassword ?? "").trim() || randomPassword(12);
     root.auth = "password";
-    root.accounts = [{ user, pass }];
     root.udp = true;
     delete root.clients;
+    // Preserve all existing accounts, only update the one matching the form user
+    const existing = Array.isArray(root.accounts)
+      ? (root.accounts as Array<{ user: string; pass: string }>)
+      : [];
+    const idx = existing.findIndex((a) => a.user === user);
+    if (idx >= 0) {
+      existing[idx] = { user, pass };
+      root.accounts = existing;
+    } else if (existing.length > 0) {
+      // Form user not found in existing list — replace first slot (legacy single-user edit)
+      root.accounts = [{ user, pass }, ...existing.slice(1)];
+    } else {
+      root.accounts = [{ user, pass }];
+    }
     return JSON.stringify(root);
   }
 

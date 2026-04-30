@@ -1029,21 +1029,40 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 
 	// Check if only Settings changed (clients list) - if so, we can use fast API update
 	// If port/protocol/streamSettings changed, we need full config reload
-	onlySettingsChanged := oldInbound.Port == inbound.Port &&
-		oldInbound.Protocol == inbound.Protocol &&
-		oldInbound.Listen == inbound.Listen &&
+	// NOTE: compare against originalOldInbound.Settings (pre-update snapshot), NOT oldInbound.Settings,
+	// because oldInbound.Settings was already overwritten with inbound.Settings on line above.
+	onlySettingsChanged := originalOldInbound.Port == inbound.Port &&
+		originalOldInbound.Protocol == inbound.Protocol &&
+		originalOldInbound.Listen == inbound.Listen &&
 		oldInbound.Tag == tag &&
-		oldInbound.Settings != inbound.Settings &&
-		oldInbound.StreamSettings == inbound.StreamSettings &&
-		oldInbound.Sniffing == inbound.Sniffing
+		originalOldInbound.Settings != inbound.Settings &&
+		originalOldInbound.StreamSettings == inbound.StreamSettings &&
+		originalOldInbound.Sniffing == inbound.Sniffing
+
+	// In multinode mode, also use fast API when only settings changed (client list update) OR when
+	// the inbound structure is unchanged compared to what is already running on the node.
+	// This handles the race-condition case where another goroutine already committed the same
+	// Settings to DB: even if DB Settings == new Settings, we still want to push the update.
+	settingsMatchDB := originalOldInbound.Settings == inbound.Settings
+	structureUnchanged := originalOldInbound.Port == inbound.Port &&
+		originalOldInbound.Protocol == inbound.Protocol &&
+		originalOldInbound.Listen == inbound.Listen &&
+		oldInbound.Tag == tag &&
+		originalOldInbound.StreamSettings == inbound.StreamSettings &&
+		originalOldInbound.Sniffing == inbound.Sniffing
 
 	// Check multi-node mode (reuse variables already declared above)
 	// settingService and multiMode are already declared at the beginning of the function
 
 	// Use fast API update if:
-	// 1. Only Settings changed (clients list), OR
-	// 2. In single mode and Xray is running locally
-	useFastAPI := onlySettingsChanged || (p != nil && !multiMode)
+	// 1. Only Settings changed (clients list) compared to DB snapshot before this call, OR
+	// 2. Structure unchanged (tag/port/protocol/stream/sniff same) — covers race where DB was
+	//    already updated by a concurrent goroutine before we read oldInbound, OR
+	// 3. In single mode and Xray is running locally
+	useFastAPI := onlySettingsChanged || (multiMode && structureUnchanged) || (p != nil && !multiMode)
+
+	logger.Debugf("UpdateInbound: inboundId=%d tag=%s multiMode=%v onlySettingsChanged=%v settingsMatchDB=%v useFastAPI=%v structureUnchanged=%v",
+		inbound.Id, tag, multiMode, onlySettingsChanged, settingsMatchDB, useFastAPI, structureUnchanged)
 
 	if useFastAPI {
 		// Fast path: Use API to update inbound (instant, no restart)
@@ -1070,6 +1089,8 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 					logger.Debugf("Unable to marshal inbound config for API update: %v", err2)
 					needRestart = true
 				}
+			} else {
+				logger.Debugf("UpdateInbound: multiMode fast path skipped: err=%v nodesCount=%d inboundEnable=%v", err, len(nodes), inbound.Enable)
 			}
 		} else if p != nil {
 			// Single mode: update local Xray via API
