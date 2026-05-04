@@ -25,6 +25,7 @@ import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
+  HelpTooltip,
   IconTile,
   Input,
   Modal,
@@ -1386,8 +1387,9 @@ export function NodesPage() {
             </div>
             <div className="grid gap-1 sm:grid-cols-[1fr,6.5rem] sm:items-end sm:gap-3">
               <label className="grid min-w-0 gap-1">
-                <span className="text-xs text-[var(--fg-muted)]">
+                <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
                   {t("pages.nodes.nodeHost")}
+                  <HelpTooltip helpKey="nodes.address" />
                 </span>
                 <Input
                   value={form.host}
@@ -1399,8 +1401,9 @@ export function NodesPage() {
                 />
               </label>
               <label className="grid gap-1">
-                <span className="text-xs text-[var(--fg-muted)]">
+                <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
                   {t("pages.nodes.nodePort")}
+                  <HelpTooltip helpKey="nodes.port" />
                 </span>
                 <Input
                   value={form.port}
@@ -1417,8 +1420,9 @@ export function NodesPage() {
               {t("pages.nodes.authPairingDescription")}
             </p>
             <label className="grid gap-1">
-              <span className="text-xs text-[var(--fg-muted)]">
+              <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
                 {t("pages.nodes.trafficLimitGB")}
+                <HelpTooltip helpKey="nodes.trafficLimit" />
               </span>
               <Input
                 type="number"
@@ -1539,8 +1543,9 @@ export function NodesPage() {
           </div>
           <div className="grid gap-1 sm:grid-cols-[1fr,6.5rem] sm:items-end sm:gap-3">
             <label className="grid min-w-0 gap-1">
-              <span className="text-xs text-[var(--fg-muted)]">
+              <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
                 {t("pages.nodes.nodeHost")}
+                <HelpTooltip helpKey="nodes.address" />
               </span>
               <Input
                 value={editForm.host}
@@ -1550,8 +1555,9 @@ export function NodesPage() {
               />
             </label>
             <label className="grid gap-1">
-              <span className="text-xs text-[var(--fg-muted)]">
+              <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
                 {t("pages.nodes.nodePort")}
+                <HelpTooltip helpKey="nodes.port" />
               </span>
               <Input
                 value={editForm.port}
@@ -1564,8 +1570,9 @@ export function NodesPage() {
             </label>
           </div>
           <label className="grid gap-1">
-            <span className="text-xs text-[var(--fg-muted)]">
+            <span className="flex items-center gap-1 text-xs text-[var(--fg-muted)]">
               {t("pages.nodes.trafficLimitGB")}
+              <HelpTooltip helpKey="nodes.trafficLimit" />
             </span>
             <Input
               type="number"

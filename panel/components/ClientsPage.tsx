@@ -47,6 +47,7 @@ import {
   Button,
   CheckboxField,
   ConfirmDialog,
+  HelpTooltip,
   IconButton,
   IconTile,
   Input,
@@ -1724,10 +1725,11 @@ function ClientUnifiedCard({
                 {variant === "create" ? (
                   <div>
                     <label
-                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[var(--fg-muted)]"
                       htmlFor={id("subid-new")}
                     >
                       {t("pages.clients.subId", { defaultValue: "Subscription ID" })}
+                      <HelpTooltip helpKey="clients.remark" />
                     </label>
                     <Input
                       id={id("subid-new")}
@@ -1866,6 +1868,7 @@ function ClientUnifiedCard({
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
               <SectionLabel icon={Calendar}>
                 {t("pages.clients.expiryTime")}
+                <HelpTooltip helpKey="clients.expireDate" />
               </SectionLabel>
               <Input
                 id={id("expiry")}
@@ -1887,6 +1890,7 @@ function ClientUnifiedCard({
             <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
               <SectionLabel icon={Activity}>
                 {t("pages.clients.traffic")}
+                <HelpTooltip helpKey="clients.trafficLimit" />
               </SectionLabel>
               <div className="mb-3 space-y-1.5 text-xs text-[var(--fg-muted)]">
                 <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1946,10 +1950,11 @@ function ClientUnifiedCard({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
                   <label
-                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[var(--fg-muted)]"
                     htmlFor={id("totalgb")}
                   >
                     {t("pages.clients.trafficLimitGB")}
+                    <HelpTooltip helpKey="clients.trafficLimit" />
                   </label>
                   <Input
                     id={id("totalgb")}
