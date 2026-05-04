@@ -31,7 +31,7 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
             className="block text-xs font-medium text-[var(--fg-subtle)]"
             htmlFor="remark-model-sep"
           >
-            {t("pages.settings.remarkModelSep", { defaultValue: "Разделитель (один символ)" })}
+            {t("pages.settings.remarkModelSep")}
           </label>
           <Input
             id="remark-model-sep"
@@ -48,9 +48,7 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
         </div>
         <div className="min-w-0 flex-1 space-y-2">
           <div className="text-xs font-medium text-[var(--fg-subtle)]">
-            {t("pages.settings.remarkModelOrder", {
-              defaultValue: "Порядок полей (буквы i e o n p r)",
-            })}
+            {t("pages.settings.remarkModelOrder")}
           </div>
           <RemarkModelOrderBuilder
             sep={ui.sep}
@@ -60,16 +58,11 @@ export function RemarkModelConstructor({ value, onChange }: Props) {
         </div>
       </div>
       <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
-        {t("pages.settings.remarkModelOrderHint", {
-          defaultValue:
-            "Меняйте порядок стрелками; добавляйте сегменты кнопками +i … +r. По умолчанию -ieo: подключение, email, extra — склеены разделителем. Неизвестные буквы отбрасываются при сохранении.",
-        })}
+        {t("pages.settings.remarkModelOrderHint")}
       </p>
       <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2.5 text-xs text-[var(--fg-muted)]">
         <span className="font-semibold text-[var(--fg)]">
-          {t("pages.settings.remarkModelLegendFieldLabel", {
-            defaultValue: "Легенда:",
-          })}
+          {t("pages.settings.remarkModelLegendFieldLabel")}
         </span>{" "}
         i = {t("pages.settings.remarkModelField.i")}, e ={" "}
         {t("pages.settings.remarkModelField.e")}, o ={" "}

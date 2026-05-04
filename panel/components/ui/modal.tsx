@@ -4,6 +4,7 @@ import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import { useTranslation } from "react-i18next";
 import { Button } from "./button";
 
 type ModalProps = {
@@ -39,6 +40,7 @@ export function Modal({
   lockBodyScroll = true,
   closable = true,
 }: ModalProps) {
+  const { t } = useTranslation();
   const reduceMotion = useReducedMotion();
   useEffect(() => {
     if (!open || !closeOnEscape) return;
@@ -71,7 +73,7 @@ export function Modal({
           <motion.button
             type="button"
             className="absolute inset-0 bg-black/55 backdrop-blur-[2px]"
-            aria-label="Close"
+            aria-label={t("close")}
             onClick={onClose}
             initial={reduceMotion ? false : { opacity: 0 }}
             animate={{ opacity: 1 }}
@@ -96,7 +98,7 @@ export function Modal({
                     variant="ghost"
                     className="!p-2"
                     onClick={onClose}
-                    aria-label="Close"
+                    aria-label={t("close")}
                   >
                     <X size={18} />
                   </Button>

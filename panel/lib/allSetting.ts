@@ -42,6 +42,7 @@ export type AllSetting = {
   subEncrypt: boolean;
   subShowInfo: boolean;
   subURI: string;
+  subPageURI: string;
   subJsonPath: string;
   subJsonURI: string;
   subJsonFragment: string;
@@ -156,6 +157,7 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     subEncrypt: toBool(raw.subEncrypt),
     subShowInfo: toBool(raw.subShowInfo),
     subURI: toStr(raw.subURI),
+    subPageURI: toStr(raw.subPageURI),
     subJsonPath: toStr(raw.subJsonPath, "/json/"),
     subJsonURI: toStr(raw.subJsonURI),
     subJsonFragment: toStr(raw.subJsonFragment),

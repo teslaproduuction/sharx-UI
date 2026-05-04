@@ -333,7 +333,7 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
                         >
                           <Database className="size-3.5 shrink-0 opacity-80" />
                           <span className="min-w-0 pl-0.5">
-                            {t("menu.dbInspector", { defaultValue: "DB Inspector" })}
+                            {t("menu.dbInspector")}
                           </span>
                         </Link>
                       </div>

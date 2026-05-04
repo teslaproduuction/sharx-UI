@@ -121,7 +121,7 @@ export function GroupsPage() {
       setInbounds(
         (r.obj as InboundOption[]).map((x) => ({
           id: x.id,
-          remark: x.remark || `Inbound ${x.id}`,
+          remark: x.remark || t("pages.groups.inboundFallback", { id: x.id }),
           protocol: x.protocol,
           port: x.port,
         })),
@@ -412,7 +412,7 @@ export function GroupsPage() {
                     >
                       {r.description || "—"}
                     </td>
-                    <td className="p-3 font-mono text-xs">{r.clientCount}</td>
+                      <td className="p-3 font-mono text-xs">{t("pages.groups.clientDisplay", { count: r.clientCount })}</td>
                     <td className="p-3">
                       <div className="flex flex-wrap gap-1">
                         <Button
@@ -473,7 +473,7 @@ export function GroupsPage() {
         {bulkGroup ? (
           <div className="flex flex-col gap-2 text-sm">
             <p className="text-xs text-[var(--fg-muted)]">
-              {t("pages.groups.clientCount")}: {bulkGroup.clientCount}
+              {t("pages.groups.clientDisplay", { count: bulkGroup.clientCount })}
             </p>
             <div className="grid gap-2 sm:grid-cols-2">
               <Button
@@ -638,8 +638,7 @@ export function GroupsPage() {
         {hwidGroup ? (
           <div className="space-y-4 text-sm">
             <p className="text-xs text-[var(--fg-muted)]">
-              {hwidGroup.name} · {t("pages.groups.clientCount")}:{" "}
-              {hwidGroup.clientCount}
+              {hwidGroup.name} · {t("pages.groups.clientDisplay", { count: hwidGroup.clientCount })}
             </p>
             <div>
               <label

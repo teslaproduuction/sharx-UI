@@ -111,6 +111,10 @@ export function initI18n() {
       keySeparator: false,
       resources: { [lang]: { translation: tr } },
       interpolation: { escapeValue: false },
+      saveMissing: process.env.NODE_ENV === "development",
+      missingKeyHandler: (lngs, _ns, key) => {
+        console.warn(`[i18n] Missing key: "${key}" for lang "${lngs.join(", ")}"`);
+      },
     });
     return i18n;
   })();
