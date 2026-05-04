@@ -1,6 +1,19 @@
 "use client";
 
-import { Copy, Network, Plus, Trash2 } from "lucide-react";
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Copy,
+  HelpCircle,
+  Network,
+  Plus,
+  Trash2,
+  WifiOff,
+  Zap,
+  ZapOff,
+} from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
@@ -88,18 +101,90 @@ type ClientNodeMatrixPayload = {
 const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
 const REGISTER_HANDSHAKE_PREVIEW_MS = 3500;
 
-function xrayStateLabel(state: string | undefined, t: TFunction): string {
+// ---------------------------------------------------------------------------
+// Status badges — icon + label pill, styled like page section icons
+// ---------------------------------------------------------------------------
+
+type NodeStatusBadgeProps = { status: string; t: TFunction };
+
+function NodeStatusBadge({ status, t }: NodeStatusBadgeProps) {
+  const s = (status || "unknown").toLowerCase();
+
+  const configs = {
+    online: {
+      icon: CheckCircle2,
+      label: t("pages.nodes.online", { defaultValue: "Online" }),
+      dot: "bg-emerald-400",
+      text: "text-emerald-300",
+    },
+    offline: {
+      icon: WifiOff,
+      label: t("pages.nodes.offline", { defaultValue: "Offline" }),
+      dot: "bg-rose-400",
+      text: "text-rose-300",
+    },
+    error: {
+      icon: AlertCircle,
+      label: t("pages.nodes.error", { defaultValue: "Error" }),
+      dot: "bg-rose-400",
+      text: "text-rose-300",
+    },
+    unknown: {
+      icon: HelpCircle,
+      label: t("pages.nodes.unknown", { defaultValue: "Unknown" }),
+      dot: "bg-[var(--fg-subtle)]",
+      text: "text-[var(--fg-muted)]",
+    },
+  } as const;
+
+  const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
+  const Icon = cfg.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${cfg.text}`}>
+      <Icon size={13} aria-hidden />
+      {cfg.label}
+    </span>
+  );
+}
+
+type XrayStateBadgeProps = { state: string | undefined; t: TFunction };
+
+function XrayStateBadge({ state, t }: XrayStateBadgeProps) {
   const s = (state || "unknown").toLowerCase();
-  if (s === "running") {
-    return t("pages.nodes.xrayStateRunning", { defaultValue: "Running" });
-  }
-  if (s === "stopped") {
-    return t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" });
-  }
-  if (s === "error") {
-    return t("pages.nodes.xrayStateError", { defaultValue: "Error" });
-  }
-  return t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" });
+
+  const configs = {
+    running: {
+      icon: Zap,
+      label: t("pages.nodes.xrayStateRunning", { defaultValue: "Running" }),
+      text: "text-emerald-300",
+    },
+    stopped: {
+      icon: ZapOff,
+      label: t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" }),
+      text: "text-amber-300",
+    },
+    error: {
+      icon: AlertTriangle,
+      label: t("pages.nodes.xrayStateError", { defaultValue: "Error" }),
+      text: "text-rose-300",
+    },
+    unknown: {
+      icon: Activity,
+      label: t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" }),
+      text: "text-[var(--fg-muted)]",
+    },
+  } as const;
+
+  const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
+  const Icon = cfg.icon;
+
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${cfg.text}`}>
+      <Icon size={13} aria-hidden />
+      {cfg.label}
+    </span>
+  );
 }
 
 type PendingRegistration = {
@@ -369,13 +454,6 @@ export function NodesPage() {
     resetAddModal();
   };
 
-  const statusLabel = (s: string) => {
-    const k = s?.toLowerCase();
-    if (k === "online") return t("pages.nodes.online");
-    if (k === "offline") return t("pages.nodes.offline");
-    if (k === "unknown") return t("pages.nodes.unknown");
-    return s || t("pages.nodes.unknown");
-  };
 
   const getAddBody = useCallback(():
     | { name: string; address: string; body: Record<string, unknown> }
@@ -1022,7 +1100,9 @@ export function NodesPage() {
                     <td className="p-3 text-[var(--fg)]">{r.name}</td>
                     <td className="p-3 font-mono text-xs">{r.address}</td>
                     <td className="p-3 text-xs">{authModeLabel(r.authMode)}</td>
-                    <td className="p-3">{statusLabel(r.status)}</td>
+                    <td className="p-3">
+                      <NodeStatusBadge status={r.status} t={t} />
+                    </td>
                     <td className="p-3 font-mono text-xs">
                       {onlineUsersByNode[r.id] ?? 0}
                     </td>
@@ -1034,8 +1114,8 @@ export function NodesPage() {
                     <td className="p-3 font-mono text-xs">
                       {r.xrayVersion || "—"}
                     </td>
-                    <td className="p-3 text-xs">
-                      {xrayStateLabel(r.xrayState, t)}
+                    <td className="p-3">
+                      <XrayStateBadge state={r.xrayState} t={t} />
                     </td>
                     <td className="p-3 max-w-[220px] text-xs">
                       {!r.inbounds?.length
