@@ -3169,6 +3169,11 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
 			return fmt.Errorf("HWID limit exceeded: %w", err)
 		}
+		if errors.Is(err, service.ErrHWIDUsedByAnotherClient) {
+			logger.Errorf("HWID already registered to another client for client %d (subId: %s, email: %s, hwid: %s) - BLOCKING subscription",
+				clientEntity.Id, clientEntity.SubID, clientEntity.Email, hwid)
+			return fmt.Errorf("HWID is already in use by another subscription: %w", err)
+		}
 		// Check if error is HWID limit exceeded
 		if strings.Contains(err.Error(), "HWID limit exceeded") {
 			// Log as error - this should block subscription access

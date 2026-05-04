@@ -10,11 +10,19 @@ import (
 )
 
 // FirstPartySubPageURL builds the public subscription page URL (Next static /panel/sub/?id=).
-// Uses panel webDomain + webPort when configured; otherwise falls back to requestHost (e.g. sub server redirect).
+// If subPageURI is configured it is used as-is (highest priority, for reverse-proxy setups).
+// Otherwise uses panel webDomain + webPort, falling back to requestHost.
 func FirstPartySubPageURL(settingService SettingService, subID, requestHost string, requestTLS bool) string {
 	if strings.TrimSpace(subID) == "" {
 		return ""
 	}
+
+	// Highest priority: explicit override for the public subscription page URL
+	if pageURI, err := settingService.GetSubPageURI(); err == nil && strings.TrimSpace(pageURI) != "" {
+		base := strings.TrimRight(strings.TrimSpace(pageURI), "/")
+		return base + "?id=" + subID
+	}
+
 	bp, _ := settingService.GetBasePath()
 	scheme := "http"
 	if cf, _ := settingService.GetCertFile(); cf != "" {

@@ -268,7 +268,7 @@ type Node struct {
 	UpdatedAt    int64  `json:"updatedAt" gorm:"autoUpdateTime"`                                         // Last update timestamp
 	Enable       bool   `json:"enable" form:"enable" gorm:"column:enable;default:true"`                  // When false, panel skips health checks, stats collection, and config push
 	XrayState    string `json:"xrayState" gorm:"column:xray_state;default:unknown"`   // running | stopped | error | unknown (worker Xray)
-	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`    // cached Xray version from worker (e.g. "26.4.17"), empty when unknown
+	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`    // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
 
 	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy values accepted; see IsPairingMode.
 	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing

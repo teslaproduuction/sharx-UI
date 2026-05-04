@@ -24,6 +24,10 @@ type ClientHWIDService struct{}
 // ErrHWIDAdminBlocked is returned when a HWID row is blocked in the panel (subscription/HWID checks should deny).
 var ErrHWIDAdminBlocked = errors.New("HWID is blocked for this client")
 
+// ErrHWIDUsedByAnotherClient is returned when a HWID is already registered to a different client.
+// This prevents sharing HWID values across multiple subscriptions.
+var ErrHWIDUsedByAnotherClient = errors.New("HWID is already registered to another client")
+
 // getMoscowTime returns current time in Moscow timezone (UTC+3)
 func (s *ClientHWIDService) getMoscowTime() time.Time {
 	moscow, err := time.LoadLocation("Europe/Moscow")
@@ -80,6 +84,19 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 			tx.Commit()
 		}
 	}()
+
+	// Check if HWID is already registered to a different client (global uniqueness enforcement).
+	// If the HWID belongs to another client, reject the request to prevent cross-account sharing.
+	var conflictHWID model.ClientHWID
+	conflictErr := tx.Where("hwid = ? AND client_id != ?", hwid, clientId).First(&conflictHWID).Error
+	if conflictErr == nil {
+		// Found a record for a different client — block this HWID
+		err = ErrHWIDUsedByAnotherClient
+		return nil, err
+	} else if conflictErr != gorm.ErrRecordNotFound {
+		err = fmt.Errorf("failed to check global HWID uniqueness: %w", conflictErr)
+		return nil, err
+	}
 
 	// Check if HWID already exists for this client
 	var existingHWID model.ClientHWID

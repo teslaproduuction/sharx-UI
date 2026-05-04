@@ -5,6 +5,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useCallback, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { Button, Modal, useToast } from "@/components/ui";
+import { supported } from "@/lib/i18n";
 import { copyTextToClipboard } from "@/lib/copyToClipboard";
 import { isSharxV2Config, isSharxV1Config } from "@/lib/sharxSubpageConfig";
 import type {
@@ -282,18 +283,9 @@ function LanguagePicker({ locales }: { locales: string[] }) {
   const { i18n } = useTranslation();
   const currentLang = i18n.language?.slice(0, 2) ?? "en";
 
-  const LANG_LABELS: Record<string, string> = {
-    en: "English",
-    ru: "Русский",
-    zh: "中文",
-    fa: "فارسی",
-    fr: "Français",
-    de: "Deutsch",
-    es: "Español",
-    tr: "Türkçe",
-    ar: "العربية",
-    uk: "Українська",
-  };
+  const LANG_LABELS: Record<string, string> = Object.fromEntries(
+    supported.map((s) => [s.code, s.label]),
+  );
 
   return (
     <div className="flex items-center justify-center gap-2">

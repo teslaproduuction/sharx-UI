@@ -145,21 +145,29 @@ type SettingsTabConfig = {
   icon: LucideIcon;
 };
 
-const TG_BOT_LANGUAGE_OPTIONS = [
-  { value: "en-US", label: "English" },
-  { value: "ru-RU", label: "Русский" },
-  { value: "fa-IR", label: "فارسی" },
-  { value: "zh-CN", label: "简体中文" },
-  { value: "zh-TW", label: "繁體中文" },
-  { value: "ar-EG", label: "العربية" },
-  { value: "es-ES", label: "Español" },
-  { value: "ja-JP", label: "日本語" },
-  { value: "id-ID", label: "Indonesia" },
-  { value: "tr-TR", label: "Türkçe" },
-  { value: "pt-BR", label: "Português" },
-  { value: "uk-UA", label: "Українська" },
-  { value: "vi-VN", label: "Tiếng Việt" },
-] as const;
+/** Maps BCP-47 locale codes (used by the bot) to panel short codes for label lookup. */
+const BCP47_TO_PANEL_CODE: Record<string, (typeof supported)[number]["code"]> = {
+  "en-US": "en",
+  "ru-RU": "ru",
+  "fa-IR": "fa",
+  "zh-CN": "zh",
+  "zh-TW": "tw",
+  "ar-EG": "ar",
+  "es-ES": "es",
+  "ja-JP": "ja",
+  "id-ID": "id",
+  "tr-TR": "tr",
+  "pt-BR": "pt",
+  "uk-UA": "uk",
+  "vi-VN": "vi",
+};
+
+const PANEL_CODE_LABEL = Object.fromEntries(supported.map((s) => [s.code, s.label]));
+
+const TG_BOT_LANGUAGE_OPTIONS = Object.entries(BCP47_TO_PANEL_CODE).map(([bcp47, code]) => ({
+  value: bcp47,
+  label: PANEL_CODE_LABEL[code] ?? bcp47,
+}));
 
 export function SettingsPage() {
   const { t, i18n } = useTranslation();
@@ -359,10 +367,7 @@ export function SettingsPage() {
     );
   }
 
-  const envHint = t("pages.settings.envOnlyHint", {
-    defaultValue:
-      "Effective values for these options are usually set via environment variables; shown values are what the API reports.",
-  });
+  const envHint = t("pages.settings.envOnlyHint");
 
   const tabNav = (
     <nav
@@ -508,7 +513,7 @@ export function SettingsPage() {
                   onChange={(e) => patch("expireDiff", parseInt(e.target.value, 10) || 0)}
                 />
                 <span className="shrink-0 text-xs tabular-nums text-[var(--fg-muted)]">
-                  {t("pages.settings.thresholdUnitDays", { defaultValue: "days" })}
+                  {t("pages.settings.thresholdUnitDays")}
                 </span>
               </div>
             </Row>
@@ -522,21 +527,16 @@ export function SettingsPage() {
                   onChange={(e) => patch("trafficDiff", parseInt(e.target.value, 10) || 0)}
                 />
                 <span className="shrink-0 text-xs tabular-nums text-[var(--fg-muted)]">
-                  {t("pages.settings.thresholdUnitGb", { defaultValue: "GB" })}
+                  {t("pages.settings.thresholdUnitGb")}
                 </span>
               </div>
             </Row>
             <div className="space-y-2 px-4 py-3">
               <div className="text-sm font-medium text-[var(--fg-muted)]">
-                {t("pages.settings.remarkModelLegendTitle", {
-                  defaultValue: "Модель примечания и символ разделения",
-                })}
+                {t("pages.settings.remarkModelLegendTitle")}
               </div>
               <div className="text-xs leading-relaxed text-[var(--fg-subtle)]">
-                {t("pages.settings.remarkModelLegendIntro", {
-                  defaultValue:
-                    "Первый символ — разделитель частей в названии (подписка/QR). Остальное — порядок полей: i = имя подключения, e = email, o = remark клиента, n = нода, p = хост ноды, r = порт.",
-                })}
+                {t("pages.settings.remarkModelLegendIntro")}
               </div>
               <RemarkModelConstructor
                 value={form.remarkModel}
@@ -555,14 +555,10 @@ export function SettingsPage() {
                   <option value={form.datepicker}>{form.datepicker}</option>
                 ) : null}
                 <option value="gregorian">
-                  {t("pages.settings.datepickerGregorian", {
-                    defaultValue: "Gregorian (standard)",
-                  })}
+                  {t("pages.settings.datepickerGregorian")}
                 </option>
                 <option value="jalalian">
-                  {t("pages.settings.datepickerJalalian", {
-                    defaultValue: "Jalali (Solar Hijri)",
-                  })}
+                  {t("pages.settings.datepickerJalalian")}
                 </option>
               </SelectNative>
             </Row>
@@ -572,9 +568,7 @@ export function SettingsPage() {
                   list={timeZoneListId}
                   value={form.timeLocation}
                   onChange={(e) => patch("timeLocation", e.target.value)}
-                  placeholder={t("pages.settings.timeZonePlaceholder", {
-                    defaultValue: "Local, UTC, or IANA zone",
-                  })}
+                  placeholder={t("pages.settings.timeZonePlaceholder")}
                   autoComplete="off"
                 />
                 <datalist id={timeZoneListId}>
@@ -592,10 +586,8 @@ export function SettingsPage() {
             iconTone="success"
           >
             <Row
-              label={t("pages.settings.panelLogLevel", { defaultValue: "Panel log level" })}
-              hint={t("pages.settings.panelLogLevelDesc", {
-                defaultValue: "Log verbosity for the panel process (when Grafana Loki is disabled).",
-              })}
+              label={t("pages.settings.panelLogLevel")}
+              hint={t("pages.settings.panelLogLevelDesc")}
             >
               <SelectNative value={form.panelLogLevel} onChange={(e) => patch("panelLogLevel", e.target.value)}>
                 <option value="debug">debug</option>
@@ -615,20 +607,17 @@ export function SettingsPage() {
                     patch("multiNodeMode", on);
                   }
                 }}
-                ariaLabel={t("pages.settings.enableMultiNodeMode", { defaultValue: "Enable multi-node mode" })}
+                ariaLabel={t("pages.settings.enableMultiNodeMode")}
               />
             </Row>
             <Row
-              label={t("pages.settings.enableIPv6", { defaultValue: "Enable IPv6 in dashboard" })}
-              hint={t("pages.settings.enableIPv6Desc", {
-                defaultValue:
-                  "When disabled, dashboard public IPv6 detection is turned off and IPv6 is hidden.",
-              })}
+              label={t("pages.settings.enableIPv6")}
+              hint={t("pages.settings.enableIPv6Desc")}
             >
               <Switch
                 checked={form.enableIPv6}
                 onChange={(on) => patch("enableIPv6", on)}
-                ariaLabel={t("pages.settings.enableIPv6", { defaultValue: "Enable IPv6 in dashboard" })}
+                ariaLabel={t("pages.settings.enableIPv6")}
               />
             </Row>
             {form.multiNodeMode ? (
@@ -688,12 +677,12 @@ export function SettingsPage() {
             ) : null}
             <Row label={t("hwidSettings")} hint={t("hwidBetaWarningDesc")}>
               <SelectNative value={form.hwidMode} onChange={(e) => patch("hwidMode", e.target.value)}>
-                <option value="off">{t("pages.settings.hwidMode.off", { defaultValue: "Off" })}</option>
+                <option value="off">{t("pages.settings.hwidMode.off")}</option>
                 <option value="client_header">
-                  {t("pages.settings.hwidMode.header", { defaultValue: "Client header (x-hwid)" })}
+                  {t("pages.settings.hwidMode.header")}
                 </option>
                 <option value="legacy_fingerprint">
-                  {t("pages.settings.hwidMode.legacy", { defaultValue: "Legacy fingerprint (deprecated)" })}
+                  {t("pages.settings.hwidMode.legacy")}
                 </option>
               </SelectNative>
             </Row>
@@ -982,30 +971,43 @@ export function SettingsPage() {
           </SettingsSection>
 
           <SettingsSection
-            title={t("pages.settings.sections.subUriTitles", { defaultValue: "Public URLs" })}
+            title={t("pages.settings.sections.subUriTitles")}
             icon={Type}
             iconTone="neutral"
           >
             <div className="px-4 pt-3">
               <AlertBanner
                 type="info"
-                title={t("pages.settings.envOnlyNetworkTitle", {
-                  defaultValue: "Network is configured via environment variables",
-                })}
-                description={t("pages.settings.envOnlyNetworkDesc", {
-                  defaultValue:
-                    "Port, path, domain and TLS cert/key for the subscription endpoint are read from XUI_SUB_PORT / XUI_SUB_PATH / XUI_SUB_DOMAIN / XUI_SUB_CERT_FILE / XUI_SUB_KEY_FILE. Edit .env and restart the panel.",
-                })}
+                title={t("pages.settings.envOnlyNetworkTitle")}
+                description={t("pages.settings.envOnlyNetworkDesc")}
               />
             </div>
             <Row label={t("pages.settings.subURI")} hint={t("pages.settings.subURIDesc")} helpKey="settings.subUri">
-              <Input value={form.subURI} onChange={(e) => patch("subURI", e.target.value)} />
+              <Input
+                value={form.subURI}
+                onChange={(e) => patch("subURI", e.target.value)}
+                placeholder={t("pages.settings.subURIPlaceholder")}
+              />
             </Row>
-            <Row label={t("pages.settings.subJsonPath", { defaultValue: "JSON sub path" })}>
-              <Input value={form.subJsonPath} onChange={(e) => patch("subJsonPath", e.target.value)} />
+            <Row
+              label={t("pages.settings.subPageURI")}
+              hint={t("pages.settings.subPageURIDesc")}
+            >
+              <Input
+                value={form.subPageURI}
+                onChange={(e) => patch("subPageURI", e.target.value)}
+                placeholder={t("pages.settings.subPageURIPlaceholder")}
+              />
             </Row>
-            <Row label={t("pages.settings.subJsonURI", { defaultValue: "JSON subscription URI" })}>
-              <Input value={form.subJsonURI} onChange={(e) => patch("subJsonURI", e.target.value)} />
+            <Row label={t("pages.settings.subJsonPath")} hint={t("pages.settings.subJsonPathDesc")}>
+              <Input value={form.subJsonPath} onChange={(e) => patch("subJsonPath", e.target.value)} placeholder="/json/" />
+            </Row>
+            <Row label={t("pages.settings.subJsonURI")} hint={t("pages.settings.subJsonURIDesc")}>
+              <Input
+                value={form.subJsonURI}
+                onChange={(e) => patch("subJsonURI", e.target.value)}
+                placeholder={t("pages.settings.subJsonURIPlaceholder")}
+              />
             </Row>
           </SettingsSection>
 
@@ -1048,13 +1050,8 @@ export function SettingsPage() {
           </SettingsSection>
 
           <SettingsSection
-            title={t("pages.settings.sections.subpageBuilder", {
-              defaultValue: "Public subscription page (SharX)",
-            })}
-            hint={t("pages.settings.sections.subpageBuilderHint", {
-              defaultValue:
-                "Branding, blocks, response headers, app settings and JSON templates — all in one live-preview builder for /panel/sub/?id=…",
-            })}
+            title={t("pages.settings.sections.subpageBuilder")}
+            hint={t("pages.settings.sections.subpageBuilderHint")}
             icon={Palette}
             iconTone="accent"
             full
@@ -1070,34 +1067,32 @@ export function SettingsPage() {
         <SettingsGrid>
           <SettingsSection
             title={t("pages.settings.sections.ldapServerTls")}
-            hint={t("pages.settings.ldapSectionDesc", {
-              defaultValue: "Directory sync and authentication (optional).",
-            })}
+            hint={t("pages.settings.ldapSectionDesc")}
             icon={Building2}
             iconTone="info"
           >
-            <Row label={t("pages.settings.ldapEnable", { defaultValue: "Enable LDAP" })}>
+            <Row label={t("pages.settings.ldapEnable")}>
               <Switch
                 checked={form.ldapEnable}
                 onChange={(v) => patch("ldapEnable", v)}
-                ariaLabel={t("pages.settings.ldapEnable", { defaultValue: "Enable LDAP" })}
+                ariaLabel={t("pages.settings.ldapEnable")}
               />
             </Row>
             <Row label={t("host")}>
               <Input value={form.ldapHost} onChange={(e) => patch("ldapHost", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapPortLabel", { defaultValue: "LDAP port" })}>
+            <Row label={t("pages.settings.ldapPortLabel")}>
               <Input
                 type="number"
                 value={form.ldapPort}
                 onChange={(e) => patch("ldapPort", parseInt(e.target.value, 10) || 0)}
               />
             </Row>
-            <Row label={t("pages.settings.certs", { defaultValue: "TLS" })}>
+            <Row label={t("pages.settings.certs")}>
               <Switch
                 checked={form.ldapUseTLS}
                 onChange={(v) => patch("ldapUseTLS", v)}
-                ariaLabel={t("pages.settings.ldapUseTLS", { defaultValue: "Use TLS" })}
+                ariaLabel={t("pages.settings.ldapUseTLS")}
               />
             </Row>
           </SettingsSection>
@@ -1107,7 +1102,7 @@ export function SettingsPage() {
             icon={KeyRound}
             iconTone="neutral"
           >
-            <Row label={t("pages.settings.ldapBindDN", { defaultValue: "Bind DN" })}>
+            <Row label={t("pages.settings.ldapBindDN")}>
               <Input value={form.ldapBindDN} onChange={(e) => patch("ldapBindDN", e.target.value)} autoComplete="off" />
             </Row>
             <Row label={t("password")}>
@@ -1118,16 +1113,16 @@ export function SettingsPage() {
                 autoComplete="new-password"
               />
             </Row>
-            <Row label={t("pages.settings.ldapBaseDN", { defaultValue: "Base DN" })}>
+            <Row label={t("pages.settings.ldapBaseDN")}>
               <Input value={form.ldapBaseDN} onChange={(e) => patch("ldapBaseDN", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapUserFilter", { defaultValue: "User filter" })}>
+            <Row label={t("pages.settings.ldapUserFilter")}>
               <Input value={form.ldapUserFilter} onChange={(e) => patch("ldapUserFilter", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapUserAttr", { defaultValue: "User attribute" })}>
+            <Row label={t("pages.settings.ldapUserAttr")}>
               <Input value={form.ldapUserAttr} onChange={(e) => patch("ldapUserAttr", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapVlessField", { defaultValue: "VLESS flag field" })}>
+            <Row label={t("pages.settings.ldapVlessField")}>
               <Input value={form.ldapVlessField} onChange={(e) => patch("ldapVlessField", e.target.value)} />
             </Row>
           </SettingsSection>
@@ -1137,23 +1132,23 @@ export function SettingsPage() {
             icon={CalendarSync}
             iconTone="accent"
           >
-            <Row label={t("pages.settings.ldapSyncCron", { defaultValue: "Sync schedule (cron)" })}>
+            <Row label={t("pages.settings.ldapSyncCron")}>
               <Input value={form.ldapSyncCron} onChange={(e) => patch("ldapSyncCron", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapFlagField", { defaultValue: "Flag field" })}>
+            <Row label={t("pages.settings.ldapFlagField")}>
               <Input value={form.ldapFlagField} onChange={(e) => patch("ldapFlagField", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapTruthyValues", { defaultValue: "Truthy values" })}>
+            <Row label={t("pages.settings.ldapTruthyValues")}>
               <Input value={form.ldapTruthyValues} onChange={(e) => patch("ldapTruthyValues", e.target.value)} />
             </Row>
-            <Row label={t("pages.settings.ldapInvertFlag", { defaultValue: "Invert flag" })}>
+            <Row label={t("pages.settings.ldapInvertFlag")}>
               <Switch
                 checked={form.ldapInvertFlag}
                 onChange={(v) => patch("ldapInvertFlag", v)}
-                ariaLabel={t("pages.settings.ldapInvertFlag", { defaultValue: "Invert flag" })}
+                ariaLabel={t("pages.settings.ldapInvertFlag")}
               />
             </Row>
-            <Row label={t("pages.settings.ldapInboundTags", { defaultValue: "Inbound tags" })}>
+            <Row label={t("pages.settings.ldapInboundTags")}>
               <Input value={form.ldapInboundTags} onChange={(e) => patch("ldapInboundTags", e.target.value)} />
             </Row>
           </SettingsSection>
@@ -1163,35 +1158,35 @@ export function SettingsPage() {
             icon={UserCog}
             iconTone="success"
           >
-            <Row label={t("pages.settings.ldapAutoCreate", { defaultValue: "Auto-create clients" })}>
+            <Row label={t("pages.settings.ldapAutoCreate")}>
               <Switch
                 checked={form.ldapAutoCreate}
                 onChange={(v) => patch("ldapAutoCreate", v)}
-                ariaLabel={t("pages.settings.ldapAutoCreate", { defaultValue: "Auto-create clients" })}
+                ariaLabel={t("pages.settings.ldapAutoCreate")}
               />
             </Row>
-            <Row label={t("pages.settings.ldapAutoDelete", { defaultValue: "Auto-delete clients" })}>
+            <Row label={t("pages.settings.ldapAutoDelete")}>
               <Switch
                 checked={form.ldapAutoDelete}
                 onChange={(v) => patch("ldapAutoDelete", v)}
-                ariaLabel={t("pages.settings.ldapAutoDelete", { defaultValue: "Auto-delete clients" })}
+                ariaLabel={t("pages.settings.ldapAutoDelete")}
               />
             </Row>
-            <Row label={t("pages.settings.ldapDefaultTotalGB", { defaultValue: "Default traffic (GB)" })}>
+            <Row label={t("pages.settings.ldapDefaultTotalGB")}>
               <Input
                 type="number"
                 value={form.ldapDefaultTotalGB}
                 onChange={(e) => patch("ldapDefaultTotalGB", parseInt(e.target.value, 10) || 0)}
               />
             </Row>
-            <Row label={t("pages.settings.ldapDefaultExpiryDays", { defaultValue: "Default expiry (days)" })}>
+            <Row label={t("pages.settings.ldapDefaultExpiryDays")}>
               <Input
                 type="number"
                 value={form.ldapDefaultExpiryDays}
                 onChange={(e) => patch("ldapDefaultExpiryDays", parseInt(e.target.value, 10) || 0)}
               />
             </Row>
-            <Row label={t("pages.settings.ldapDefaultLimitIP", { defaultValue: "Default IP limit" })}>
+            <Row label={t("pages.settings.ldapDefaultLimitIP")}>
               <Input
                 type="number"
                 value={form.ldapDefaultLimitIP}
@@ -1221,10 +1216,8 @@ export function SettingsPage() {
               <Input value={form.grafanaLokiUrl} onChange={(e) => patch("grafanaLokiUrl", e.target.value)} />
             </Row>
             <Row
-              label={t("pages.settings.grafanaVictoriaMetricsUrl", { defaultValue: "VictoriaMetrics URL" })}
-              hint={t("pages.settings.grafanaVictoriaMetricsUrlDesc", {
-                defaultValue: "Remote write / import endpoint for metrics.",
-              })}
+              label={t("pages.settings.grafanaVictoriaMetricsUrl")}
+              hint={t("pages.settings.grafanaVictoriaMetricsUrlDesc")}
             >
               <Input
                 value={form.grafanaVictoriaMetricsUrl}
@@ -1337,7 +1330,7 @@ export function SettingsPage() {
 
       {dirty ? (
         <div className="mb-4 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-[var(--fg)]">
-          {t("pages.settings.unsavedHint", { defaultValue: "You have unsaved changes." })}
+          {t("pages.settings.unsavedHint")}
         </div>
       ) : null}
 

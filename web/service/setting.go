@@ -76,6 +76,7 @@ var defaultValueMap = map[string]string{
 	"subEncrypt":                  "true",
 	"subShowInfo":                 "true",
 	"subURI":                      "",
+	"subPageURI":                  "",
 	"subJsonPath":                 "/json/",
 	"subJsonURI":                  "",
 	"subJsonFragment":             "",
@@ -750,6 +751,10 @@ func (s *SettingService) GetPageSize() (int, error) {
 
 func (s *SettingService) GetSubURI() (string, error) {
 	return s.getString("subURI")
+}
+
+func (s *SettingService) GetSubPageURI() (string, error) {
+	return s.getString("subPageURI")
 }
 
 func (s *SettingService) GetSubJsonURI() (string, error) {

@@ -130,7 +130,7 @@ function NewRowModal({ open, columns, onClose, onSave }: NewRowModalProps) {
                 value={String(form[col.name] ?? "")}
                 onChange={(e) => set(col.name, e.target.value)}
                 rows={3}
-                placeholder="JSON value…"
+                placeholder={t("ui.table.jsonValuePlaceholder")}
                 className="w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-xs text-[var(--fg)] placeholder:text-[var(--fg-subtle)] outline-none focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
               />
             ) : (
@@ -261,7 +261,7 @@ function Pagination({ page, pageSize, total, onPage, onPageSize }: PaginationPro
           onClick={() => onPage(1)}
           disabled={page <= 1}
           className="rounded p-1.5 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="First page"
+          aria-label={t("ui.table.firstPage")}
         >
           <ChevronLeft className="size-3.5" />
         </button>
@@ -270,7 +270,7 @@ function Pagination({ page, pageSize, total, onPage, onPageSize }: PaginationPro
           onClick={() => onPage(page - 1)}
           disabled={page <= 1}
           className="rounded p-1.5 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="Previous page"
+          aria-label={t("ui.table.previousPage")}
         >
           <ChevronLeft className="size-3.5" />
         </button>
@@ -282,7 +282,7 @@ function Pagination({ page, pageSize, total, onPage, onPageSize }: PaginationPro
           onClick={() => onPage(page + 1)}
           disabled={page >= totalPages}
           className="rounded p-1.5 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="Next page"
+          aria-label={t("ui.table.nextPage")}
         >
           <ChevronRight className="size-3.5" />
         </button>
@@ -291,7 +291,7 @@ function Pagination({ page, pageSize, total, onPage, onPageSize }: PaginationPro
           onClick={() => onPage(totalPages)}
           disabled={page >= totalPages}
           className="rounded p-1.5 transition-colors hover:bg-[var(--surface)] disabled:opacity-40"
-          aria-label="Last page"
+          aria-label={t("ui.table.lastPage")}
         >
           <ChevronRight className="size-3.5" />
         </button>
@@ -566,7 +566,7 @@ export function TableViewer({ tableName, tableData, onError, onSuccess }: TableV
                   </th>
                 ))}
                 <th className="sticky right-0 border-b border-[var(--border)] bg-[var(--surface)] px-2 py-2 text-right">
-                  <span className="sr-only">Actions</span>
+                  <span className="sr-only">{t("ui.table.actions")}</span>
                 </th>
               </tr>
             </thead>
@@ -647,7 +647,7 @@ export function TableViewer({ tableName, tableData, onError, onSuccess }: TableV
                             type="button"
                             onClick={() => setDeleteTarget(row)}
                             className="rounded p-1.5 text-[var(--fg-subtle)] transition-all hover:text-red-400 sm:opacity-0 sm:group-hover:opacity-100"
-                            aria-label="Delete row"
+                            aria-label={t("ui.table.deleteRow")}
                           >
                             <Trash2 className="size-3.5" />
                           </button>

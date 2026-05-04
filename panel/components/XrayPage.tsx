@@ -457,7 +457,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
         toast.error(r.msg || t("fail"));
       }
       showGeoResult(
-        t("pages.xray.geoRollbackTitle", { defaultValue: "Rollback {{file}}", file: fileName }),
+        t("pages.xray.geoRollbackTitle", { file: fileName }),
         r.obj || null,
       );
     } finally {
@@ -467,7 +467,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
 
   const saveDownloadToStorage = async (fileName: GeoFileName, sourceURL: string) => {
     if (!sourceURL.trim()) {
-      toast.error(t("pages.xray.geoUrlRequired", { defaultValue: "URL is required" }));
+      toast.error(t("pages.xray.geoUrlRequired"));
       return;
     }
     setGeoBusy(true);
@@ -522,23 +522,14 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
   const pageDescription = useMemo(() => {
     if (view === "template") {
       return standalone
-        ? t("pages.xray.TemplateDescStandalone", {
-            defaultValue:
-              "Edit the JSON and save to apply the config to the local Xray core. In stand-alone mode there is no separate profile to publish — saving updates the server template used by the core.",
-          })
+        ? t("pages.xray.TemplateDescStandalone")
         : t("pages.xray.TemplateDesc");
     }
     if (view === "geo") {
-      return t("pages.xray.geoSectionDesc", {
-        defaultValue:
-          "Manage geoip.dat and geosite.dat for the core: upload, rollback, or download by URL with progress.",
-      });
+      return t("pages.xray.geoSectionDesc");
     }
     return standalone
-      ? t("pages.xray.runtimeViewStandalone", {
-          defaultValue:
-            "Read-only: effective configuration JSON currently loaded by the core on this machine.",
-        })
+      ? t("pages.xray.runtimeViewStandalone")
       : t("pages.xray.runtimeView");
   }, [view, standalone, t]);
 
@@ -561,7 +552,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                 >
                   <FileCode2 size={16} />
                   {standalone
-                    ? t("pages.xray.configEditorTab", { defaultValue: "Core configuration" })
+                    ? t("pages.xray.configEditorTab")
                     : t("pages.xray.Template")}
                 </Button>
                 <Button
@@ -571,7 +562,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                   className="!gap-2"
                 >
                   <Radio size={16} />
-                  {t("pages.xray.runtimeViewTab", { defaultValue: "Effective config" })}
+                  {t("pages.xray.runtimeViewTab")}
                 </Button>
               </div>
             ) : null}
@@ -593,7 +584,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                   <Button variant="primary" onClick={() => void save()} loading={saving} disabled={!dirty} className="!gap-2">
                     <Save size={16} />
                     {standalone
-                      ? t("pages.xray.saveApply", { defaultValue: "Save & apply" })
+                      ? t("pages.xray.saveApply")
                       : t("pages.xray.save")}
                   </Button>
                 </div>
@@ -662,7 +653,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
           <Surface>
             <div className="mb-3 flex items-center gap-2">
               <h3 className="text-sm font-semibold text-[var(--fg)]">
-                {t("pages.xray.geoSectionTitle", { defaultValue: "Geo / Гео" })}
+                {t("pages.xray.geoSectionTitle")}
               </h3>
             </div>
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
@@ -671,14 +662,14 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" onClick={() => void rollbackGeofile("geoip.dat")} loading={geoBusy}>
                     <RotateCcw size={16} />
-                    {t("pages.settings.geofileRollback", { defaultValue: "Rollback" })}
+                    {t("pages.settings.geofileRollback")}
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
                   <Input
                     value={geoipUrl}
                     onChange={(e) => setGeoipUrl(e.target.value)}
-                    placeholder={t("pages.xray.geoUrlPlaceholder", { defaultValue: "https://.../geoip.dat" })}
+                    placeholder={t("pages.xray.geoUrlPlaceholder")}
                   />
                   <Button type="button" variant="secondary" onClick={() => void saveDownloadToStorage("geoip.dat", geoipUrl)} loading={geoBusy}>
                     <Download size={16} />
@@ -688,12 +679,12 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" onClick={() => void uploadGeofileToStorage("geoip.dat")} loading={geoBusy}>
                     <Upload size={16} />
-                    {t("pages.xray.geoStoreUploadDevice", { defaultValue: "Upload from device to storage" })}
+                    {t("pages.xray.geoStoreUploadDevice")}
                   </Button>
                 </div>
                 <div className="space-y-2 rounded-md border border-[var(--border)]/80 p-2">
                   <p className="text-xs text-[var(--fg-muted)]">
-                    {t("pages.xray.geoStorageList", { defaultValue: "Stored files" })}
+                    {t("pages.xray.geoStorageList")}
                   </p>
                   {(() => {
                     const active = (geoAssets["geoip.dat"] || []).find((x) => x.isActive);
@@ -701,10 +692,10 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                     return (
                       <div className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 p-2 text-xs">
                         <p className="font-medium text-[var(--fg)]">
-                          {t("pages.xray.geoActiveApplied", { defaultValue: "Active applied file" })}: {active.displayName}
+                          {t("pages.xray.geoActiveApplied")}: {active.displayName}
                         </p>
                         <p className="mt-1 text-[var(--fg-muted)] break-all">
-                          {active.sourceUrl || t("pages.xray.geoSourceManual", { defaultValue: "Source: manual upload" })}
+                          {active.sourceUrl || t("pages.xray.geoSourceManual")}
                         </p>
                       </div>
                     );
@@ -713,7 +704,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                     <div key={asset.id} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)]/70 px-2 py-1">
                       <div className="min-w-0">
                         <p className="truncate text-xs text-[var(--fg)]">
-                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive", { defaultValue: "active" })})` : ""}
+                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive")})` : ""}
                         </p>
                         <p className="text-[11px] text-[var(--fg-muted)]">
                           {Math.max(1, Math.round(asset.sizeBytes / 1024))} KB • {new Date(asset.createdAt * 1000).toLocaleString()}
@@ -721,10 +712,10 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button type="button" variant="secondary" onClick={() => void applyGeofileAsset(asset.id)} loading={geoBusy}>
-                          {t("pages.xray.geoApply", { defaultValue: "Apply" })}
+                          {t("pages.xray.geoApply")}
                         </Button>
                         <Button type="button" variant="secondary" onClick={() => void deleteGeofileAsset(asset.id)} loading={geoBusy}>
-                          {t("delete", { defaultValue: "Delete" })}
+                          {t("delete")}
                         </Button>
                       </div>
                     </div>
@@ -737,14 +728,14 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" onClick={() => void rollbackGeofile("geosite.dat")} loading={geoBusy}>
                     <RotateCcw size={16} />
-                    {t("pages.settings.geofileRollback", { defaultValue: "Rollback" })}
+                    {t("pages.settings.geofileRollback")}
                   </Button>
                 </div>
                 <div className="flex items-center gap-2">
                   <Input
                     value={geositeUrl}
                     onChange={(e) => setGeositeUrl(e.target.value)}
-                    placeholder={t("pages.xray.geoUrlPlaceholder2", { defaultValue: "https://.../geosite.dat" })}
+                    placeholder={t("pages.xray.geoUrlPlaceholder2")}
                   />
                   <Button type="button" variant="secondary" onClick={() => void saveDownloadToStorage("geosite.dat", geositeUrl)} loading={geoBusy}>
                     <Download size={16} />
@@ -754,12 +745,12 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" onClick={() => void uploadGeofileToStorage("geosite.dat")} loading={geoBusy}>
                     <Upload size={16} />
-                    {t("pages.xray.geoStoreUploadDevice", { defaultValue: "Upload from device to storage" })}
+                    {t("pages.xray.geoStoreUploadDevice")}
                   </Button>
                 </div>
                 <div className="space-y-2 rounded-md border border-[var(--border)]/80 p-2">
                   <p className="text-xs text-[var(--fg-muted)]">
-                    {t("pages.xray.geoStorageList", { defaultValue: "Stored files" })}
+                    {t("pages.xray.geoStorageList")}
                   </p>
                   {(() => {
                     const active = (geoAssets["geosite.dat"] || []).find((x) => x.isActive);
@@ -767,10 +758,10 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                     return (
                       <div className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent)]/10 p-2 text-xs">
                         <p className="font-medium text-[var(--fg)]">
-                          {t("pages.xray.geoActiveApplied", { defaultValue: "Active applied file" })}: {active.displayName}
+                          {t("pages.xray.geoActiveApplied")}: {active.displayName}
                         </p>
                         <p className="mt-1 text-[var(--fg-muted)] break-all">
-                          {active.sourceUrl || t("pages.xray.geoSourceManual", { defaultValue: "Source: manual upload" })}
+                          {active.sourceUrl || t("pages.xray.geoSourceManual")}
                         </p>
                       </div>
                     );
@@ -779,7 +770,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                     <div key={asset.id} className="flex items-center justify-between gap-2 rounded-md border border-[var(--border)]/70 px-2 py-1">
                       <div className="min-w-0">
                         <p className="truncate text-xs text-[var(--fg)]">
-                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive", { defaultValue: "active" })})` : ""}
+                          {asset.displayName} {asset.isActive ? `(${t("pages.xray.geoActive")})` : ""}
                         </p>
                         <p className="text-[11px] text-[var(--fg-muted)]">
                           {Math.max(1, Math.round(asset.sizeBytes / 1024))} KB • {new Date(asset.createdAt * 1000).toLocaleString()}
@@ -787,10 +778,10 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
                       </div>
                       <div className="flex shrink-0 gap-1">
                         <Button type="button" variant="secondary" onClick={() => void applyGeofileAsset(asset.id)} loading={geoBusy}>
-                          {t("pages.xray.geoApply", { defaultValue: "Apply" })}
+                          {t("pages.xray.geoApply")}
                         </Button>
                         <Button type="button" variant="secondary" onClick={() => void deleteGeofileAsset(asset.id)} loading={geoBusy}>
-                          {t("delete", { defaultValue: "Delete" })}
+                          {t("delete")}
                         </Button>
                       </div>
                     </div>
@@ -810,10 +801,7 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
             <div className="space-y-2">
               <p className="text-xs text-[var(--fg-muted)]">
                 {standalone
-                  ? t("pages.xray.sliceEditorHintStandalone", {
-                      defaultValue:
-                        "Edit this section as JSON or use the steps above. Saving applies changes to the core on this server.",
-                    })
+                  ? t("pages.xray.sliceEditorHintStandalone")
                   : t("pages.xray.sliceEditorHint")}
               </p>
               {navId === "routing" ? (
@@ -829,15 +817,12 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
               ) : null}
               {navId === "inbounds" ? (
                 <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
-                  {t("pages.xray.inboundsTemplateHint", {
-                    defaultValue:
-                      "User-facing inbounds are usually managed under Inbounds. This template slice is for defaults and the API inbound.",
-                  })}{" "}
+                  {t("pages.xray.inboundsTemplateHint")}{" "}
                   <Link
                     href={linkP("panel/inbounds")}
                     className="text-[var(--accent)] underline-offset-2 hover:underline"
                   >
-                    {t("menu.inbounds", { defaultValue: "Inbounds" })}
+                    {t("menu.inbounds")}
                   </Link>
                 </p>
               ) : null}
@@ -891,24 +876,24 @@ export function XrayPage({ initialView = "template" }: { initialView?: XrayView 
       <Modal
         open={geoResultOpen}
         onClose={() => setGeoResultOpen(false)}
-        title={geoResultTitle || t("pages.settings.geofileResultTitle", { defaultValue: "Geofile result" })}
+        title={geoResultTitle || t("pages.settings.geofileResultTitle")}
         width={640}
       >
         <div className="space-y-3 text-sm">
           <p className="text-[var(--fg-muted)]">
             {geoResult?.localOk
-              ? t("pages.settings.geofileLocalOk", { defaultValue: "Local panel update: success" })
-              : t("pages.settings.geofileLocalFail", { defaultValue: "Local panel update: failed" })}
+              ? t("pages.settings.geofileLocalOk")
+              : t("pages.settings.geofileLocalFail")}
           </p>
           <div>
             <p className="mb-1 font-medium text-[var(--fg)]">
-              {t("pages.settings.geofileNodesSuccess", { defaultValue: "Nodes success" })}:{" "}
+              {t("pages.settings.geofileNodesSuccess")}:{" "}
               {geoResult?.nodeSuccess?.length ?? 0}
             </p>
           </div>
           <div>
             <p className="mb-1 font-medium text-[var(--fg)]">
-              {t("pages.settings.geofileNodesErrors", { defaultValue: "Nodes errors" })}:{" "}
+              {t("pages.settings.geofileNodesErrors")}:{" "}
               {geoResult?.nodeErrors?.length ?? 0}
             </p>
           </div>
