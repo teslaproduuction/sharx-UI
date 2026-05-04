@@ -136,7 +136,5 @@ export function useLogStream({
       esRef.current?.close();
       esRef.current = null;
     };
-  // Re-open whenever level, source, or enabled changes.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, level, source]);
 }

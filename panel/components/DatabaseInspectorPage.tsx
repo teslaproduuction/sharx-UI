@@ -117,7 +117,7 @@ export function DatabaseInspectorPage() {
             <PageHeader
               title={t("pages.dbInspector.title")}
               eyebrow={t("pages.dbInspector.eyebrow")}
-              description={t("pages.dbInspector.description")}
+              description={t("pages.dbInspector.subtitle")}
               icon={Database}
               iconTone="accent"
             />

@@ -430,7 +430,6 @@ export function TableViewer({ tableName, tableData, onError, onSuccess }: TableV
   };
 
   const columns = schema?.columns ?? [];
-  const hasPendingForRow = (row: TableRow) => pendingChanges.has(rowKey(row));
 
   return (
     <div className="flex h-full flex-col">

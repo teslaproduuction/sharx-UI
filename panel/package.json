@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev --turbopack",
     "prebuild": "node scripts/gen-locales.mjs",
+    "sync-toml": "node scripts/sync-toml-from-en.mjs",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

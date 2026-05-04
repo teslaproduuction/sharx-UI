@@ -129,7 +129,7 @@ export function GroupsPage() {
     } else {
       setInbounds([]);
     }
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     void load();
