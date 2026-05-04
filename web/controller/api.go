@@ -14,6 +14,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
+	"github.com/konstpic/sharx-code/v2/web/logsse"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
@@ -229,7 +230,7 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 			Component: "node",
 		})
 
-		websocket.BroadcastLogsStream(logger.Entry{
+		logsse.Emit(logger.Entry{
 			Ts:        strings.TrimSpace(ts),
 			Level:     level,
 			Source:    websocket.LogStreamSourceNode,

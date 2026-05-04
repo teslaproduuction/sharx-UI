@@ -2,9 +2,6 @@
 package websocket
 
 import (
-	"strings"
-	"time"
-
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/global"
 )
@@ -110,31 +107,3 @@ func BroadcastClientTrafficPerNode(userId int, matrix any) {
 	hub.BroadcastToUser(userId, MessageTypeClientTrafficPerNode, matrix)
 }
 
-// BroadcastLogsStream broadcasts one normalized realtime log line.
-func BroadcastLogsStream(entry logger.Entry) {
-	hub := GetHub()
-	if hub == nil {
-		return
-	}
-
-	ts := entry.TsUnixMs
-	if ts == 0 {
-		ts = time.Now().UnixMilli()
-	}
-	payload := UnifiedLogEntry{
-		Source:   strings.ToLower(strings.TrimSpace(entry.Source)),
-		Channel:  strings.TrimSpace(entry.Channel),
-		Level:    strings.ToLower(strings.TrimSpace(entry.Level)),
-		Message:  strings.TrimSpace(entry.Msg),
-		Ts:       ts,
-		NodeID:   strings.TrimSpace(entry.NodeID),
-		NodeName: strings.TrimSpace(entry.NodeName),
-	}
-	if payload.Source == "" {
-		payload.Source = LogStreamSourcePanel
-	}
-	if payload.Level == "" {
-		payload.Level = "info"
-	}
-	hub.Broadcast(MessageTypeLogsStream, payload)
-}

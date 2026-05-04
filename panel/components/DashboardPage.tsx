@@ -5,26 +5,30 @@ import {
   ArrowDown,
   ArrowLeftRight,
   ArrowUp,
+  CircleStop,
   Clock,
   CloudDownload,
   CloudUpload,
   Cpu,
   Database,
+  Download,
   Globe,
   History,
   LayoutDashboard,
   LayoutGrid,
   Link2,
   Network,
+  Play,
   Power,
   RefreshCw,
   Server,
   SlidersHorizontal,
+  Trash2,
   Users,
   Wrench,
 } from "lucide-react";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson, api } from "@/lib/api";
 import { formatSecond, sizeFormat, toFixed } from "@/lib/format";
@@ -52,6 +56,7 @@ import {
   useToast,
 } from "@/components/ui";
 import { useCountUp } from "@/lib/useCountUp";
+import { useLogStream, type LogEntry } from "@/lib/useLogStream";
 import {
   DASHBOARD_WIDGET_I18N,
   DASHBOARD_WIDGET_ORDER,
@@ -61,6 +66,7 @@ import {
   toggleDashboardWidget,
 } from "@/lib/dashboardLayout";
 import { getUiPref, setUiPref } from "@/lib/uiPrefs";
+import { FixedSizeList } from "react-window";
 
 type StatusData = {
   cpu: number;
@@ -95,20 +101,7 @@ type StatusData = {
   usersOnline?: number;
 };
 
-type UnifiedLogEntry = {
-  source: "panel" | "xray" | "node";
-  channel?: string;
-  level: string;
-  message: string;
-  ts: number;
-  nodeId?: number | string;
-  nodeName?: string;
-};
-
-type IncomingUnifiedLogEntry = Partial<UnifiedLogEntry> & {
-  msg?: string;
-  tsUnixMs?: number;
-};
+type UnifiedLogEntry = LogEntry;
 
 function metricColor(percent: number, accent: string) {
   if (percent < 80) return accent;
@@ -338,6 +331,66 @@ function ResourceHistoryChart({
   );
 }
 
+const LOG_ROW_HEIGHT = 36;
+
+type LogVirtualListProps = {
+  logs: UnifiedLogEntry[];
+  levelBadgeClass: (lvl: string) => string;
+  listRef: React.RefObject<FixedSizeList | null>;
+};
+
+function LogVirtualList({ logs, levelBadgeClass, listRef }: LogVirtualListProps) {
+
+  const Row = useCallback(
+    ({ index, style }: { index: number; style: React.CSSProperties }) => {
+      const row = logs[index];
+      if (!row) return null;
+      return (
+        <div
+          style={style}
+          className="grid grid-cols-[160px_84px_130px_1fr] gap-2 border-b border-[var(--border)]/50 px-3 font-mono text-xs text-[var(--fg-muted)] last:border-b-0"
+        >
+          <span className="flex items-center truncate">
+            {new Date(row.ts || Date.now()).toLocaleTimeString(undefined, {
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            })}
+          </span>
+          <span className="flex items-center">
+            <span
+              className={`inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${levelBadgeClass(row.level)}`}
+            >
+              {row.level}
+            </span>
+          </span>
+          <span className="flex items-center truncate">
+            {row.source === "node" && row.nodeName ? `node:${row.nodeName}` : row.source}
+          </span>
+          <span className="flex items-center whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--fg)]">
+            {row.message}
+          </span>
+        </div>
+      );
+    },
+    [logs, levelBadgeClass]
+  );
+
+  return (
+    <FixedSizeList
+      ref={listRef}
+      height={520}
+      itemCount={logs.length}
+      itemSize={LOG_ROW_HEIGHT}
+      width="100%"
+      overscanCount={10}
+      className="font-mono text-xs"
+    >
+      {Row}
+    </FixedSizeList>
+  );
+}
+
 export function DashboardPage() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -364,8 +417,11 @@ export function DashboardPage() {
   const [logSource, setLogSource] = useState("all");
   const [logSearch, setLogSearch] = useState("");
   const [logAuto, setLogAuto] = useState(true);
+  const [logPaused, setLogPaused] = useState(false);
   const [logEntries, setLogEntries] = useState<UnifiedLogEntry[]>([]);
-  const logsBodyRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<FixedSizeList | null>(null);
+
+  const MAX_LOG_ENTRIES = 2000;
   const [cpuBucket, setCpuBucket] = useState(2);
   const [cpuLong, setCpuLong] = useState<ResourceHistoryPoint[]>([]);
   /** Last points for dashboard sparklines (CPU from API, RAM from status samples). */
@@ -382,25 +438,20 @@ export function DashboardPage() {
 
   const ws = usePanelWebSocket();
 
-  const normalizeLogEntry = useCallback((raw: unknown): UnifiedLogEntry | null => {
-    if (!raw || typeof raw !== "object") return null;
-    const entry = raw as IncomingUnifiedLogEntry;
-    const message = String(entry.message ?? entry.msg ?? "").trim();
-    if (!message) return null;
-    const sourceRaw = String(entry.source ?? "panel").toLowerCase();
-    const source: UnifiedLogEntry["source"] =
-      sourceRaw === "xray" || sourceRaw === "node" ? sourceRaw : "panel";
-    const ts = Number(entry.tsUnixMs ?? entry.ts ?? Date.now());
-    return {
-      source,
-      channel: entry.channel ? String(entry.channel) : undefined,
-      level: String(entry.level ?? "info").toLowerCase(),
-      message,
-      ts: Number.isFinite(ts) ? ts : Date.now(),
-      nodeId: entry.nodeId,
-      nodeName: entry.nodeName ? String(entry.nodeName) : undefined,
-    };
+  const onLogBatch = useCallback((batch: LogEntry[]) => {
+    setLogEntries((prev) => {
+      const next = [...batch.slice().reverse(), ...prev];
+      return next.length > MAX_LOG_ENTRIES ? next.slice(0, MAX_LOG_ENTRIES) : next;
+    });
   }, []);
+
+  useLogStream({
+    level: logLevel === "all" ? "debug" : logLevel,
+    source: logSource,
+    enabled: logsOpen && !logPaused,
+    onBatch: onLogBatch,
+  });
+
 
   useEffect(() => {
     void setUiPref("dashboardWidgets", encodeDashboardWidgets(enabledWidgets));
@@ -491,20 +542,13 @@ export function DashboardPage() {
         };
       });
     };
-    const onLog = (payload: unknown) => {
-      const entry = normalizeLogEntry(payload);
-      if (!entry) return;
-      setLogEntries((prev) => [entry, ...prev]);
-    };
     ws.on("status", onStatus);
     ws.on("xray_state", onXray);
-    ws.on("logs_stream", onLog);
     return () => {
       ws.off("status", onStatus);
       ws.off("xray_state", onXray);
-      ws.off("logs_stream", onLog);
     };
-  }, [ws, normalizeLogEntry]);
+  }, [ws]);
 
   useEffect(() => {
     if (!multi) return;
@@ -555,12 +599,6 @@ export function DashboardPage() {
     setMemHistory((prev) => [...prev, { value: pct(memCurrent, memTotal), ts: Date.now() }].slice(-120));
   }, [memCurrent, memTotal]);
 
-  useEffect(() => {
-    if (!logsOpen || !logAuto) return;
-    const el = logsBodyRef.current;
-    if (!el) return;
-    el.scrollTop = 0;
-  }, [logsOpen, logAuto, logEntries.length, logSearch, logSource]);
 
   const dashboardHwidUserAgentPie = useMemo(() => {
     const palette = [
@@ -594,6 +632,54 @@ export function DashboardPage() {
         : "conic-gradient(var(--border) 0% 100%)";
     return { parts, gradient };
   }, [dashboardHwidUserAgentStats]);
+
+  const levelRank = useCallback((lvl: string) => {
+    const k = String(lvl || "").toLowerCase();
+    if (k.startsWith("err") || k === "error") return 40;
+    if (k.startsWith("warn") || k === "warning") return 30;
+    if (k === "notice") return 25;
+    if (k === "info") return 20;
+    if (k === "debug") return 10;
+    return 0;
+  }, []);
+
+  const levelBadgeClass = useCallback((lvl: string) => {
+    const k = String(lvl || "").toLowerCase();
+    if (k.startsWith("err") || k === "error") {
+      return "border-red-500/40 bg-red-500/10 text-red-300";
+    }
+    if (k.startsWith("warn") || k === "warning") {
+      return "border-amber-500/40 bg-amber-500/10 text-amber-200";
+    }
+    if (k === "info" || k === "notice") {
+      return "border-sky-500/40 bg-sky-500/10 text-sky-200";
+    }
+    if (k === "debug") {
+      return "border-violet-500/35 bg-violet-500/10 text-violet-200";
+    }
+    return "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-muted)]";
+  }, []);
+
+  const filteredLogs = useMemo(() => {
+    return logEntries.filter((row) => {
+      if (logSource !== "all" && row.source !== logSource) return false;
+      if (logLevel !== "all" && levelRank(row.level) < levelRank(logLevel)) return false;
+      if (!logSearch.trim()) return true;
+      const q = logSearch.toLowerCase();
+      return (
+        row.message.toLowerCase().includes(q) ||
+        row.level.toLowerCase().includes(q) ||
+        (row.nodeName || "").toLowerCase().includes(q)
+      );
+    });
+  }, [logEntries, logSource, logLevel, logSearch, levelRank]);
+
+  useEffect(() => {
+    if (!logsOpen || !logAuto) return;
+    if (listRef.current && filteredLogs.length > 0) {
+      listRef.current.scrollToItem(0);
+    }
+  }, [logsOpen, logAuto, filteredLogs.length]);
 
   if (loading) {
     return (
@@ -658,44 +744,6 @@ export function DashboardPage() {
       ? `${toFixed(st.cpuSpeedMhz / 1000, 2)} GHz`
       : `${toFixed(st.cpuSpeedMhz, 0)} MHz`
     : "—";
-  const levelRank = (lvl: string) => {
-    const k = String(lvl || "").toLowerCase();
-    if (k.startsWith("err") || k === "error") return 40;
-    if (k.startsWith("warn") || k === "warning") return 30;
-    if (k === "notice") return 25;
-    if (k === "info") return 20;
-    if (k === "debug") return 10;
-    return 0;
-  };
-  const levelBadgeClass = (lvl: string) => {
-    const k = String(lvl || "").toLowerCase();
-    if (k.startsWith("err") || k === "error") {
-      return "border-red-500/40 bg-red-500/10 text-red-300";
-    }
-    if (k.startsWith("warn") || k === "warning") {
-      return "border-amber-500/40 bg-amber-500/10 text-amber-200";
-    }
-    if (k === "info" || k === "notice") {
-      return "border-sky-500/40 bg-sky-500/10 text-sky-200";
-    }
-    if (k === "debug") {
-      return "border-violet-500/35 bg-violet-500/10 text-violet-200";
-    }
-    return "border-[var(--border)] bg-[var(--surface)] text-[var(--fg-muted)]";
-  };
-  const filteredLogs = logEntries.filter((row) => {
-    if (logSource !== "all" && row.source !== logSource) return false;
-    // Display filter: show selected level and above (e.g. info => info+notice+warning+error).
-    if (logLevel !== "all" && levelRank(row.level) < levelRank(logLevel)) return false;
-    if (!logSearch.trim()) return true;
-    const q = logSearch.toLowerCase();
-    return (
-      row.message.toLowerCase().includes(q) ||
-      row.level.toLowerCase().includes(q) ||
-      (row.nodeName || "").toLowerCase().includes(q)
-    );
-  }).sort((a, b) => b.ts - a.ts);
-  const visibleLogs = filteredLogs;
 
   const stopX = async () => {
     setSpin(true);
@@ -744,18 +792,40 @@ export function DashboardPage() {
     }
   };
 
+  const normalizeHistoryEntry = (raw: unknown): UnifiedLogEntry | null => {
+    if (!raw || typeof raw !== "object") return null;
+    const e = raw as Record<string, unknown>;
+    const message = String(e.message ?? e.msg ?? "").trim();
+    if (!message) return null;
+    const srcRaw = String(e.source ?? "panel").toLowerCase();
+    const source: UnifiedLogEntry["source"] =
+      srcRaw === "xray" || srcRaw === "node" ? srcRaw : "panel";
+    const ts = Number(e.ts ?? e.tsUnixMs ?? Date.now());
+    return {
+      source,
+      channel: e.channel ? String(e.channel) : undefined,
+      level: String(e.level ?? "info").toLowerCase(),
+      message,
+      ts: Number.isFinite(ts) ? ts : Date.now(),
+      nodeId: e.nodeId !== undefined ? (e.nodeId as string | number) : undefined,
+      nodeName: e.nodeName ? String(e.nodeName) : undefined,
+    };
+  };
+
   const openLogs = async () => {
-    // Always open logs modal in "info and above" mode.
-    setLogLevel("info");
     setSpin(true);
     try {
-      // 0 = full available history from backend storage.
       const r = await getJson<unknown[]>(panel("api/server/logs/unified/0"));
       if (r.success) {
         const rows = Array.isArray(r.obj)
-          ? r.obj.map((x) => normalizeLogEntry(x)).filter((x): x is UnifiedLogEntry => Boolean(x))
+          ? r.obj
+              .map((x) => normalizeHistoryEntry(x))
+              .filter((x): x is UnifiedLogEntry => Boolean(x))
+              .sort((a, b) => b.ts - a.ts)
+              .slice(0, MAX_LOG_ENTRIES)
           : [];
-        setLogEntries(rows.sort((a, b) => b.ts - a.ts));
+        setLogEntries(rows);
+        setLogPaused(false);
         setLogsOpen(true);
       } else {
         toast.error(r.msg || t("fail"));
@@ -1371,67 +1441,131 @@ export function DashboardPage() {
         </ul>
       </Modal>
 
-      <Modal open={logsOpen} onClose={() => setLogsOpen(false)} title={t("pages.index.logs")} width={900}>
+      <Modal
+        open={logsOpen}
+        onClose={() => setLogsOpen(false)}
+        title={
+          <span className="flex items-center gap-2">
+            {t("pages.index.logs")}
+            {logPaused ? (
+              <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                {t("pages.index.logPaused", { defaultValue: "Paused" })}
+              </span>
+            ) : (
+              <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-300">
+                {t("pages.index.logLive", { defaultValue: "Live" })}
+              </span>
+            )}
+            <span className="text-xs font-normal text-[var(--fg-muted)]">
+              {filteredLogs.length}{logEntries.length !== filteredLogs.length ? `/${logEntries.length}` : ""}
+            </span>
+          </span>
+        }
+        width="95vw"
+        dialogClassName="!max-h-[90vh]"
+      >
         <div className="mb-3 flex flex-wrap items-center gap-2">
-          <SelectNative className="w-36" value={logLevel} onChange={(e) => setLogLevel(e.target.value)}>
+          <SelectNative
+            className="w-32"
+            value={logLevel}
+            onChange={(e) => setLogLevel(e.target.value)}
+            title={t("pages.index.logLevel", { defaultValue: "Level" })}
+          >
             {["all", "debug", "info", "notice", "warning", "error"].map((x) => (
               <option key={x} value={x}>
                 {x}
               </option>
             ))}
           </SelectNative>
-          <SelectNative className="w-32" value={logSource} onChange={(e) => setLogSource(e.target.value)}>
+          <SelectNative
+            className="w-28"
+            value={logSource}
+            onChange={(e) => setLogSource(e.target.value)}
+            title={t("pages.index.logSource", { defaultValue: "Source" })}
+          >
             <option value="all">{t("all")}</option>
             <option value="panel">panel</option>
             <option value="xray">xray</option>
             <option value="node">node</option>
           </SelectNative>
           <Input
-            className="min-w-[200px] flex-1"
+            className="min-w-[160px] flex-1"
             value={logSearch}
             onChange={(e) => setLogSearch(e.target.value)}
             placeholder={t("search")}
           />
-          <Button variant={logAuto ? "primary" : "secondary"} onClick={() => setLogAuto((v) => !v)}>
-            {t("pages.index.toggleAutoScroll", { defaultValue: "Auto-scroll" })}
+          <Button
+            variant={logAuto ? "primary" : "secondary"}
+            className="!gap-1.5"
+            onClick={() => setLogAuto((v) => !v)}
+            title={t("pages.index.toggleAutoScroll", { defaultValue: "Auto-scroll" })}
+          >
+            <ArrowDown size={14} />
+            {t("pages.index.toggleAutoScroll", { defaultValue: "Auto" })}
           </Button>
-          <Button variant="secondary" onClick={openLogs}>
+          <Button
+            variant={logPaused ? "primary" : "secondary"}
+            className="!gap-1.5"
+            onClick={() => setLogPaused((v) => !v)}
+            title={logPaused ? t("pages.index.logResume", { defaultValue: "Resume" }) : t("pages.index.logPause", { defaultValue: "Pause" })}
+          >
+            {logPaused ? <Play size={14} /> : <CircleStop size={14} />}
+            {logPaused ? t("pages.index.logResume", { defaultValue: "Resume" }) : t("pages.index.logPause", { defaultValue: "Pause" })}
+          </Button>
+          <Button
+            variant="secondary"
+            className="!gap-1.5"
+            onClick={() => setLogEntries([])}
+            title={t("pages.index.logClear", { defaultValue: "Clear" })}
+          >
+            <Trash2 size={14} />
+            {t("pages.index.logClear", { defaultValue: "Clear" })}
+          </Button>
+          <Button
+            variant="secondary"
+            className="!gap-1.5"
+            onClick={() => {
+              const ndjson = filteredLogs
+                .slice()
+                .reverse()
+                .map((r) => JSON.stringify(r))
+                .join("\n");
+              const blob = new Blob([ndjson], { type: "application/x-ndjson" });
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.href = url;
+              a.download = `logs-${new Date().toISOString().replace(/[:.]/g, "-")}.ndjson`;
+              a.click();
+              URL.revokeObjectURL(url);
+            }}
+            title={t("pages.index.logExport", { defaultValue: "Export .ndjson" })}
+          >
+            <Download size={14} />
+            {t("pages.index.logExport", { defaultValue: "Export" })}
+          </Button>
+          <Button variant="secondary" className="!gap-1.5" onClick={openLogs}>
+            <RefreshCw size={14} />
             {t("refresh")}
           </Button>
         </div>
-        <div
-          ref={logsBodyRef}
-          className="max-h-[45vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]"
-        >
-          <div className="sticky top-0 z-20 grid grid-cols-[150px_90px_120px_1fr] gap-2 border-b border-[var(--border)] bg-[var(--surface)]/95 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)] backdrop-blur supports-[backdrop-filter]:bg-[var(--surface)]/80">
+        <div className="flex flex-col overflow-hidden rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)]">
+          <div className="grid shrink-0 grid-cols-[160px_84px_130px_1fr] gap-2 border-b border-[var(--border)] bg-[var(--surface)]/95 px-3 py-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)] backdrop-blur supports-[backdrop-filter]:bg-[var(--surface)]/80">
             <span>{t("pages.index.logTime", { defaultValue: "Time" })}</span>
             <span>{t("pages.index.logLevel", { defaultValue: "Level" })}</span>
             <span>{t("pages.index.logSource", { defaultValue: "Source" })}</span>
             <span>{t("pages.index.logMessage", { defaultValue: "Message" })}</span>
           </div>
-          <div className="font-mono text-xs">
-            {visibleLogs.map((row, i) => (
-              <div key={`${row.ts}-${i}`} className="grid grid-cols-[150px_90px_120px_1fr] gap-2 border-b border-[var(--border)]/50 px-3 py-1.5 text-[var(--fg-muted)] last:border-b-0">
-                <span>{new Date(row.ts || Date.now()).toLocaleTimeString()}</span>
-                <span
-                  className={`inline-flex w-fit items-center rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${levelBadgeClass(
-                    row.level
-                  )}`}
-                >
-                  {row.level}
-                </span>
-                <span>{row.source === "node" && row.nodeName ? `node:${row.nodeName}` : row.source}</span>
-                <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-[var(--fg)]">
-                  {row.message}
-                </span>
-              </div>
-            ))}
-            {visibleLogs.length === 0 ? (
-              <p className="px-3 py-3 text-[var(--fg-subtle)]">
-                {t("pages.index.noLogs", { defaultValue: "No logs" })}
-              </p>
-            ) : null}
-          </div>
+          {filteredLogs.length === 0 ? (
+            <p className="px-3 py-4 text-sm text-[var(--fg-subtle)]">
+              {t("pages.index.noLogs", { defaultValue: "No logs" })}
+            </p>
+          ) : (
+            <LogVirtualList
+              logs={filteredLogs}
+              levelBadgeClass={levelBadgeClass}
+              listRef={listRef}
+            />
+          )}
         </div>
       </Modal>
 
