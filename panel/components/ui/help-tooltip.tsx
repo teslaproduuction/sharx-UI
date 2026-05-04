@@ -73,7 +73,7 @@ function TooltipPortal({ id, x, y, text }: TooltipPortalProps) {
 // HelpTooltip
 // ---------------------------------------------------------------------------
 export function HelpTooltip({ helpKey, mode = "tooltip", className = "" }: HelpTooltipProps) {
-  const { t, i18n } = useTranslation();
+  const { t } = useTranslation();
   const i18nKey = `help.${helpKey}`;
   const text = t(i18nKey, { defaultValue: "" });
 
@@ -83,16 +83,17 @@ export function HelpTooltip({ helpKey, mode = "tooltip", className = "" }: HelpT
   return mode === "modal" ? (
     <HelpModalTrigger helpKey={helpKey} text={text} className={className} />
   ) : (
-    <HelpTooltipTrigger helpKey={helpKey} text={text} className={className} />
+    <HelpTooltipTrigger text={text} className={className} />
   );
 }
 
 // ---------------------------------------------------------------------------
 // Tooltip mode
 // ---------------------------------------------------------------------------
-type TriggerProps = { helpKey: string; text: string; className: string };
+type TriggerProps = { text: string; className: string };
+type ModalTriggerProps = TriggerProps & { helpKey: string };
 
-function HelpTooltipTrigger({ helpKey, text, className }: TriggerProps) {
+function HelpTooltipTrigger({ text, className }: TriggerProps) {
   const tipId = useId();
   const btnRef = useRef<HTMLButtonElement | null>(null);
   const [open, setOpen] = useState(false);
@@ -147,7 +148,7 @@ function HelpTooltipTrigger({ helpKey, text, className }: TriggerProps) {
 // ---------------------------------------------------------------------------
 // Modal mode
 // ---------------------------------------------------------------------------
-function HelpModalTrigger({ helpKey, text, className }: TriggerProps) {
+function HelpModalTrigger({ helpKey, text, className }: ModalTriggerProps) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
 
