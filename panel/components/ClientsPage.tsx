@@ -72,6 +72,40 @@ function TextArea({
   );
 }
 
+/** Strip worker HTTP/RPC noise and return inner error text for classification. */
+function extractSessionsErrorInner(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(/^node returned\s+\d+\s*:\s*/i, "").trim();
+  if (s.startsWith("{")) {
+    try {
+      const j = JSON.parse(s) as { error?: string };
+      if (typeof j.error === "string" && j.error.trim()) {
+        return j.error.trim();
+      }
+    } catch {
+      const m = s.match(/"error"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+      if (m) {
+        try {
+          return JSON.parse(`"${m[1]}"`) as string;
+        } catch {
+          return m[1].replace(/\\"/g, '"').replace(/\\u003e/gi, ">").replace(/\\u003c/gi, "<");
+        }
+      }
+    }
+  }
+  return s.replace(/\\u003e/gi, ">").replace(/\\u003c/gi, "<");
+}
+
+/** True when the backend/node reports no online-session stats — treat as "no IPs", not an error. */
+function isSessionsNoOnlineDataError(raw: string): boolean {
+  const inner = extractSessionsErrorInner(raw);
+  const low = inner.toLowerCase();
+  return (
+    low.includes("online not found") ||
+    (low.includes("notfound") && low.includes("online"))
+  );
+}
+
 type InboundBrief = {
   id: number;
   remark: string;
@@ -4331,7 +4365,7 @@ export function ClientsPage() {
                 disabled={sessionsDropBusy}
                 onClick={() => void refreshSessionsModal()}
               >
-                {t("pages.clients.sessions.refresh", { defaultValue: "Refresh" })}
+                {t("pages.clients.sessions.refresh")}
               </Button>
               <Button
                 type="button"
@@ -4343,9 +4377,7 @@ export function ClientsPage() {
                 }
                 onClick={() => void dropAllSessions()}
               >
-                {t("pages.clients.sessions.dropAll", {
-                  defaultValue: "Disconnect all",
-                })}
+                {t("pages.clients.sessions.dropAll")}
               </Button>
               <Button
                 type="button"
@@ -4396,13 +4428,13 @@ export function ClientsPage() {
                     </span>
                   ) : null}
                 </div>
-                {block.error ? (
-                  <p className="text-xs text-red-600 dark:text-red-400">{block.error}</p>
+                {block.error && !isSessionsNoOnlineDataError(block.error) ? (
+                  <p className="text-xs text-red-600 dark:text-red-400">
+                    {t("pages.clients.sessions.errorNodeBrief")}
+                  </p>
                 ) : !block.sessions?.length ? (
                   <p className="text-xs text-[var(--fg-muted)]">
-                    {t("pages.clients.sessions.empty", {
-                      defaultValue: "No active IP entries (client offline or stats not ready).",
-                    })}
+                    {t("pages.clients.sessions.empty")}
                   </p>
                 ) : (
                   <table className="w-full border-collapse text-left text-xs">
