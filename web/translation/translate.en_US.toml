@@ -2245,3 +2245,28 @@ title = "Node Outbounds"
 "brandText" = "Brand Text"
 "brandTextDesc" = "Text to display next to the logo"
 "brandTextPlaceholder" = "Brand name or text"
+
+# Help tooltips / hints
+[help.subscription]
+"expireDate" = "The date when your subscription expires. After this date, the subscription will be deactivated and you will lose access to the service."
+"traffic" = "The amount of data (upload + download) allowed for this subscription. When the limit is reached, the subscription will stop working until it is reset."
+"subId" = "The unique identifier for this subscription. Used to generate the subscription URL that clients use to fetch server configurations."
+"status" = "The current status of the subscription: active, expired, depleted, or disabled."
+
+[help.clients]
+"remark" = "A unique label for this client. It is used as the subscription ID in many client applications and must be unique across all clients."
+"trafficLimit" = "The maximum allowed traffic (upload + download) for this client in gigabytes. Set to 0 for unlimited traffic."
+"expireDate" = "The date when this client's access expires. Leave empty for no expiry."
+
+[help.nodes]
+"address" = "The hostname or IP address of the node. Clients connect to this address."
+"port" = "The port number used by this inbound on the node. Must be an unused port on the server."
+"trafficLimit" = "Maximum traffic allowed for this node in gigabytes (upload + download combined). Set to 0 for unlimited. When the limit is reached, the node stops forwarding traffic."
+
+[help.settings]
+"panelPort" = "The port on which the admin panel listens. Using the default port (54321) is a security risk — set a random port."
+"panelUri" = "The URI path prefix for the admin panel (e.g. /mysecretpath/). A complex path significantly improves security."
+"subUri" = "The URI path for the subscription service. Must start and end with '/'."
+"subEnable" = "Enable or disable the subscription service. When disabled, client apps cannot fetch server configurations from the subscription URL."
+"subListen" = "The IP address the subscription service binds to. Leave blank to listen on all network interfaces (0.0.0.0)."
+"subProviderId" = "A unique identifier sent to client apps to identify this provider. Required for apps that support the Provider ID protocol (e.g. Happ, V2RayTun) to receive updates from multiple providers."

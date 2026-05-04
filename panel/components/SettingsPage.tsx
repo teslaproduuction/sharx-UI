@@ -56,6 +56,7 @@ import {
   AlertBanner,
   Button,
   ConfirmDialog,
+  HelpTooltip,
   IconTile,
   Input,
   Modal,
@@ -65,6 +66,7 @@ import {
   useToast,
   type IconTileTone,
 } from "@/components/ui";
+import type { HelpKey } from "@/components/ui/help-tooltip";
 
 type ApiTokenRow = {
   id: number;
@@ -115,16 +117,21 @@ function SettingsGrid({ children }: { children: ReactNode }) {
 function Row({
   label,
   hint,
+  helpKey,
   children,
 }: {
   label: string;
   hint?: string;
+  helpKey?: HelpKey;
   children: ReactNode;
 }) {
   return (
     <div className="grid gap-2 px-4 py-3 sm:grid-cols-[minmax(160px,280px)_1fr] sm:items-start">
       <div className="min-w-0">
-        <div className="text-sm font-medium text-[var(--fg-muted)]">{label}</div>
+        <div className="flex items-center gap-1 text-sm font-medium text-[var(--fg-muted)]">
+          {label}
+          {helpKey ? <HelpTooltip helpKey={helpKey} /> : null}
+        </div>
         {hint ? <div className="mt-0.5 text-xs text-[var(--fg-subtle)]">{hint}</div> : null}
       </div>
       <div className="min-w-0">{children}</div>
@@ -451,7 +458,7 @@ export function SettingsPage() {
             <Row label={t("pages.settings.panelListeningDomain")} hint={t("pages.settings.panelListeningDomainDesc")}>
               <Input value={form.webDomain} readOnly className="opacity-80" />
             </Row>
-            <Row label={t("pages.settings.panelPort")} hint={t("pages.settings.panelPortDesc")}>
+            <Row label={t("pages.settings.panelPort")} hint={t("pages.settings.panelPortDesc")} helpKey="settings.panelPort">
               <Input type="number" value={form.webPort} readOnly className="opacity-80" />
             </Row>
             <Row label={t("pages.settings.publicKeyPath")} hint={t("pages.settings.publicKeyPathDesc")}>
@@ -460,7 +467,7 @@ export function SettingsPage() {
             <Row label={t("pages.settings.privateKeyPath")} hint={t("pages.settings.privateKeyPathDesc")}>
               <Input value={form.webKeyFile} readOnly className="opacity-80" />
             </Row>
-            <Row label={t("pages.settings.panelUrlPath")} hint={t("pages.settings.panelUrlPathDesc")}>
+            <Row label={t("pages.settings.panelUrlPath")} hint={t("pages.settings.panelUrlPathDesc")} helpKey="settings.panelUri">
               <Input value={form.webBasePath} readOnly className="opacity-80" />
             </Row>
           </SettingsSection>
@@ -955,7 +962,7 @@ export function SettingsPage() {
             icon={Link2}
             iconTone="accent"
           >
-            <Row label={t("pages.settings.subEnable")} hint={t("pages.settings.subEnableDesc")}>
+            <Row label={t("pages.settings.subEnable")} hint={t("pages.settings.subEnableDesc")} helpKey="settings.subEnable">
               <Switch
                 checked={form.subEnable}
                 onChange={(v) => patch("subEnable", v)}
@@ -969,7 +976,7 @@ export function SettingsPage() {
                 ariaLabel={t("pages.settings.subJsonEnable")}
               />
             </Row>
-            <Row label={t("pages.settings.subListen")} hint={t("pages.settings.subListenDesc")}>
+            <Row label={t("pages.settings.subListen")} hint={t("pages.settings.subListenDesc")} helpKey="settings.subListen">
               <Input value={form.subListen} onChange={(e) => patch("subListen", e.target.value)} />
             </Row>
           </SettingsSection>
@@ -991,7 +998,7 @@ export function SettingsPage() {
                 })}
               />
             </div>
-            <Row label={t("pages.settings.subURI")} hint={t("pages.settings.subURIDesc")}>
+            <Row label={t("pages.settings.subURI")} hint={t("pages.settings.subURIDesc")} helpKey="settings.subUri">
               <Input value={form.subURI} onChange={(e) => patch("subURI", e.target.value)} />
             </Row>
             <Row label={t("pages.settings.subJsonPath", { defaultValue: "JSON sub path" })}>
@@ -1024,7 +1031,7 @@ export function SettingsPage() {
             icon={Tags}
             iconTone="accent"
           >
-            <Row label={t("pages.settings.subProviderID")} hint={t("pages.settings.subProviderIDDesc")}>
+            <Row label={t("pages.settings.subProviderID")} hint={t("pages.settings.subProviderIDDesc")} helpKey="settings.subProviderId">
               <Input value={form.subProviderID} onChange={(e) => patch("subProviderID", e.target.value)} />
             </Row>
             <Row label={t("pages.settings.subProviderIDMethod")} hint={t("pages.settings.subProviderIDMethodDesc")}>

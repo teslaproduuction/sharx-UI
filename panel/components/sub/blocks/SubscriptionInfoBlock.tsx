@@ -12,6 +12,7 @@ import {
 import type { BlockSubscriptionInfo } from "@/lib/sharxSubpageConfig";
 import shell from "../subscription-shell.module.css";
 import type { BlockRenderContext } from "./index";
+import { HelpTooltip } from "@/components/ui/help-tooltip";
 
 function statusInfo(userStatus: string, daysLeft: number) {
   if (userStatus === "ACTIVE" && daysLeft > 3) {
@@ -113,8 +114,9 @@ export function SubscriptionInfoBlock({
                 <StatusIcon aria-hidden />
               </div>
               <div className="min-w-0">
-                <div className={shell.metricLabel}>
+                <div className={`${shell.metricLabel} flex items-center gap-1`}>
                   {t("pages.publicSub.status", { defaultValue: "Status" })}
+                  <HelpTooltip helpKey="subscription.status" />
                 </div>
                 <div className={shell.metricValue}>{user.userStatus}</div>
                 {user.isOnline != null ? (
@@ -133,8 +135,9 @@ export function SubscriptionInfoBlock({
                 <Calendar aria-hidden />
               </div>
               <div className="min-w-0">
-                <div className={shell.metricLabel}>
+                <div className={`${shell.metricLabel} flex items-center gap-1`}>
                   {t("pages.publicSub.expires", { defaultValue: "Expires" })}
+                  <HelpTooltip helpKey="subscription.expireDate" />
                 </div>
                 <div className={shell.metricValue}>{expiresLabel}</div>
                 {expiresExtra ? (
@@ -151,8 +154,9 @@ export function SubscriptionInfoBlock({
                 <ArrowDownUp aria-hidden />
               </div>
               <div className="min-w-0">
-                <div className={shell.metricLabel}>
+                <div className={`${shell.metricLabel} flex items-center gap-1`}>
                   {t("pages.publicSub.traffic", { defaultValue: "Traffic" })}
+                  <HelpTooltip helpKey="subscription.traffic" />
                 </div>
                 <div className={shell.metricValue}>
                   {user.trafficUsed} / {user.trafficLimit}
@@ -204,8 +208,9 @@ export function SubscriptionInfoBlock({
               <StatusIcon aria-hidden />
             </div>
             <div className="min-w-0">
-              <div className={shell.metricLabel}>
+              <div className={`${shell.metricLabel} flex items-center gap-1`}>
                 {t("pages.publicSub.status", { defaultValue: "Status" })}
+                <HelpTooltip helpKey="subscription.status" />
               </div>
               <div className={shell.metricValue}>{user.userStatus}</div>
               {user.isOnline != null ? (
@@ -224,8 +229,9 @@ export function SubscriptionInfoBlock({
               <Calendar aria-hidden />
             </div>
             <div className="min-w-0">
-              <div className={shell.metricLabel}>
+              <div className={`${shell.metricLabel} flex items-center gap-1`}>
                 {t("pages.publicSub.expires", { defaultValue: "Expires" })}
+                <HelpTooltip helpKey="subscription.expireDate" />
               </div>
               <div className={shell.metricValue}>{expiresLabel}</div>
             </div>
@@ -237,8 +243,9 @@ export function SubscriptionInfoBlock({
               <ArrowDownUp aria-hidden />
             </div>
             <div className="min-w-0">
-              <div className={shell.metricLabel}>
+              <div className={`${shell.metricLabel} flex items-center gap-1`}>
                 {t("pages.publicSub.traffic", { defaultValue: "Traffic" })}
+                <HelpTooltip helpKey="subscription.traffic" />
               </div>
               <div className={shell.metricValue}>
                 {user.trafficUsed} / {user.trafficLimit}
