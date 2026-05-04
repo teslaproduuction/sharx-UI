@@ -13,8 +13,10 @@ import {
   WifiOff,
   Zap,
   ZapOff,
+  type LucideIcon,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -102,6 +104,76 @@ const NODE_DOCKER_IMAGE = "registry.konstpic.ru/sharx/sharxnode:latest";
 const REGISTER_HANDSHAKE_PREVIEW_MS = 3500;
 
 // ---------------------------------------------------------------------------
+// TileWithTooltip — IconTile that shows a portaled tooltip on hover/focus
+// ---------------------------------------------------------------------------
+
+import type { IconTileTone } from "@/components/ui/icon-tile";
+
+type TileWithTooltipProps = {
+  icon: LucideIcon;
+  tone: IconTileTone;
+  label: string;
+};
+
+function TileWithTooltip({ icon, tone, label }: TileWithTooltipProps) {
+  const tipId = useId();
+  const ref = useRef<HTMLSpanElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [xy, setXy] = useState({ x: 0, y: 0 });
+
+  const updatePos = useCallback(() => {
+    if (!ref.current) return;
+    const r = ref.current.getBoundingClientRect();
+    setXy({ x: r.left + r.width / 2, y: r.bottom + 6 });
+  }, []);
+
+  const show = useCallback(() => { updatePos(); setOpen(true); }, [updatePos]);
+  const hide = useCallback(() => setOpen(false), []);
+
+  useEffect(() => {
+    if (!open) return;
+    const close = () => hide();
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("resize", close);
+    return () => {
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("resize", close);
+    };
+  }, [open, hide]);
+
+  return (
+    <>
+      <span
+        ref={ref}
+        aria-describedby={open ? tipId : undefined}
+        aria-label={label}
+        onMouseEnter={show}
+        onMouseLeave={hide}
+        onFocus={show}
+        onBlur={hide}
+        tabIndex={0}
+        className="cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)] rounded-xl"
+      >
+        <IconTile icon={icon} tone={tone} size="sm" />
+      </span>
+      {open && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              id={tipId}
+              role="tooltip"
+              className="pointer-events-none fixed z-[10000] w-max max-w-[min(16rem,calc(100vw-1rem))] rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2.5 py-1.5 text-[11px] font-medium leading-snug text-[var(--fg)] shadow-lg"
+              style={{ left: xy.x, top: xy.y, transform: "translateX(-50%)" }}
+            >
+              {label}
+            </div>,
+            document.body,
+          )
+        : null}
+    </>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Status badges — IconTile + label, matching page section icon style
 // ---------------------------------------------------------------------------
 
@@ -135,12 +207,7 @@ function NodeStatusBadge({ status, t }: NodeStatusBadgeProps) {
 
   const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
 
-  return (
-    <span className="inline-flex items-center gap-2">
-      <IconTile icon={cfg.icon} tone={cfg.tone} size="sm" />
-      <span className="text-xs font-medium text-[var(--fg-muted)]">{cfg.label}</span>
-    </span>
-  );
+  return <TileWithTooltip icon={cfg.icon} tone={cfg.tone} label={cfg.label} />;
 }
 
 type XrayStateBadgeProps = { state: string | undefined; t: TFunction };
@@ -173,12 +240,7 @@ function XrayStateBadge({ state, t }: XrayStateBadgeProps) {
 
   const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
 
-  return (
-    <span className="inline-flex items-center gap-2">
-      <IconTile icon={cfg.icon} tone={cfg.tone} size="sm" />
-      <span className="text-xs font-medium text-[var(--fg-muted)]">{cfg.label}</span>
-    </span>
-  );
+  return <TileWithTooltip icon={cfg.icon} tone={cfg.tone} label={cfg.label} />;
 }
 
 type PendingRegistration = {
