@@ -8,6 +8,8 @@ type IconTileProps = {
   size?: "sm" | "md" | "lg";
   className?: string;
   "aria-hidden"?: boolean;
+  "aria-label"?: string;
+  title?: string;
 };
 
 const sizeClass: Record<NonNullable<IconTileProps["size"]>, string> = {
@@ -22,11 +24,15 @@ export function IconTile({
   size = "md",
   className = "",
   "aria-hidden": ariaHidden = true,
+  "aria-label": ariaLabel,
+  title,
 }: IconTileProps) {
   return (
     <span
       className={`icon-tile icon-tile--${tone} inline-flex shrink-0 items-center justify-center rounded-xl ${sizeClass[size]} ${className}`}
       aria-hidden={ariaHidden}
+      aria-label={ariaLabel}
+      title={title}
     >
       <Icon strokeWidth={1.65} />
     </span>
