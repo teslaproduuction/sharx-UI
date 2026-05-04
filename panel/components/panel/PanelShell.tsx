@@ -5,6 +5,7 @@ import {
   BookOpen,
   Building2,
   ChevronDown,
+  Database,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -98,11 +99,17 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
     setMobileNav(false);
   }, [pathname]);
 
+  const dbInspectorHref = useMemo(() => p("panel/db-inspector").replace(/\/$/, ""), []);
   const settingsPrefix = useMemo(() => p("panel/settings").replace(/\/$/, ""), []);
   const inSettings = useMemo(() => {
     const u = (pathname || "").replace(/\/$/, "") || "/";
-    return u === settingsPrefix || u.startsWith(`${settingsPrefix}/`);
-  }, [pathname, settingsPrefix]);
+    return (
+      u === settingsPrefix ||
+      u.startsWith(`${settingsPrefix}/`) ||
+      u === dbInspectorHref ||
+      u.startsWith(`${dbInspectorHref}/`)
+    );
+  }, [pathname, settingsPrefix, dbInspectorHref]);
 
   const nodesListHref = useMemo(() => p("panel/nodes").replace(/\/$/, ""), []);
   const nodesStatsHref = useMemo(
@@ -319,6 +326,16 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
                             <span className="min-w-0 pl-0.5">{tSettingsTabLabel(t, id)}</span>
                           </Link>
                         ))}
+                        <Link
+                          href={linkP("panel/db-inspector")}
+                          className={`${navLinkClass((pathname || "").replace(/\/$/, "") === dbInspectorHref)} panel-menu-link--sub`}
+                          onClick={closeMobile}
+                        >
+                          <Database className="size-3.5 shrink-0 opacity-80" />
+                          <span className="min-w-0 pl-0.5">
+                            {t("menu.dbInspector", { defaultValue: "DB Inspector" })}
+                          </span>
+                        </Link>
                       </div>
                     ) : null}
                   </div>
