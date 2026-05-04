@@ -551,7 +551,7 @@ export function NodesGeographyPage() {
       ) : (
         <div className="flex flex-col gap-6">
           <Surface className="overflow-hidden p-0">
-            <div className="flex flex-wrap items-start justify-between gap-2 border-b border-[var(--border)] px-4 py-3">
+            <div className="flex flex-col gap-2 border-b border-[var(--border)] px-4 py-3 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
               <p className="min-w-0 flex-1 text-sm text-[var(--ifm-color-secondary)]">
                 {t("pages.nodes.geography.legendHint")}
                 <span className="mt-1 block text-xs opacity-90">
@@ -561,7 +561,7 @@ export function NodesGeographyPage() {
               <Button
                 type="button"
                 variant="secondary"
-                className="shrink-0"
+                className="w-full shrink-0 sm:w-auto"
                 onClick={() => setMapViewKey((k) => k + 1)}
               >
                 <RotateCcw className="mr-1.5 size-4" aria-hidden />
