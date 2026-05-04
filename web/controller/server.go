@@ -16,6 +16,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/database/model"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/global"
+	"github.com/konstpic/sharx-code/v2/web/logsse"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
@@ -80,6 +81,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/geofileAssets/delete/:id", a.deleteGeofileAsset)
 	g.POST("/logs/:count", a.getLogs)
 	g.GET("/logs/unified/:count", a.getUnifiedLogs)
+	g.GET("/logs/stream", a.getLogsSSE)
 	g.POST("/xraylogs/:count", a.getXrayLogs)
 	g.POST("/importDB", a.importDB)
 	g.POST("/getNewEchCert", a.getNewEchCert)
@@ -811,4 +813,49 @@ func (a *ServerController) getMetrics(c *gin.Context) {
 	metrics := service.CollectMetrics()
 	c.Header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	c.String(http.StatusOK, metrics)
+}
+
+// getLogsSSE streams real-time log entries to the client via Server-Sent Events.
+// Query params: level (debug|info|warn|error, default "debug"), source (panel|xray|node|all, default "all").
+func (a *ServerController) getLogsSSE(c *gin.Context) {
+	level := strings.ToLower(strings.TrimSpace(c.Query("level")))
+	if level == "" {
+		level = "debug"
+	}
+	source := strings.ToLower(strings.TrimSpace(c.Query("source")))
+	if source == "" {
+		source = "all"
+	}
+
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Header("X-Accel-Buffering", "no")
+
+	sub, cancel := logsse.Subscribe(level, source)
+	defer cancel()
+
+	ctx := c.Request.Context()
+	c.Stream(func(w io.Writer) bool {
+		select {
+		case <-ctx.Done():
+			return false
+		case batch, ok := <-sub.Chan():
+			if !ok {
+				return false
+			}
+			data, err := logsse.MarshalSSEBatch(batch)
+			if err != nil {
+				return true
+			}
+			_, writeErr := w.Write(data)
+			if writeErr != nil {
+				return false
+			}
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+			return true
+		}
+	})
 }

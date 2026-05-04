@@ -21,6 +21,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/web/controller"
 	"github.com/konstpic/sharx-code/v2/web/job"
 	"github.com/konstpic/sharx-code/v2/web/locale"
+	"github.com/konstpic/sharx-code/v2/web/logsse"
 	"github.com/konstpic/sharx-code/v2/web/middleware"
 	"github.com/konstpic/sharx-code/v2/web/network"
 	"github.com/konstpic/sharx-code/v2/web/service"
@@ -389,7 +390,7 @@ func (s *Server) Start() (err error) {
 		s.httpServer.Serve(listener)
 	}()
 
-	// Forward panel process logs into unified WS logs stream.
+	// Forward panel process logs into the SSE log stream.
 	// Node-forwarded lines are emitted separately in APIController with node metadata.
 	logger.SetLogPusher(func(logLine string) {
 		var e logger.Entry
@@ -419,7 +420,7 @@ func (s *Server) Start() (err error) {
 				e.Channel = "access"
 			}
 
-			websocket.BroadcastLogsStream(e)
+			logsse.Emit(e)
 			return
 		}
 	})
