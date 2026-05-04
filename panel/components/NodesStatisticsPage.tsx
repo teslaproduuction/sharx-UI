@@ -316,10 +316,8 @@ export function NodesStatisticsPage() {
         title={t("pages.nodes.statsTitle")}
         icon={Network}
         iconTone="success"
+        description={t("pages.nodes.statsHint")}
       />
-      <p className="mb-4 max-w-3xl text-xs text-[var(--fg-muted)]">
-        {t("pages.nodes.statsHint")}
-      </p>
       <div className="mb-6 grid gap-3 sm:grid-cols-3">
         <Surface className="p-4">
           <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
