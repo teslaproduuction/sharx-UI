@@ -1,5 +1,6 @@
 export { PageScaffold } from "./PageScaffold";
 export { PageHeader } from "./PageHeader";
+export { SectionHelpModal } from "./SectionHelpModal";
 export { Surface } from "./Surface";
 export { StatusPill } from "./StatusPill";
 export { PanelShell } from "./PanelShell";

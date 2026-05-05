@@ -249,7 +249,7 @@ func (s *ClientService) GetClientByEmail(userId int, email string) (*model.Clien
 func (s *ClientService) GetInboundIdsForClient(clientId int) ([]int, error) {
 	db := database.GetDB()
 	var mappings []model.ClientInboundMapping
-	err := db.Where("client_id = ?", clientId).Find(&mappings).Error
+	err := db.Where("client_id = ?", clientId).Order("sort_order ASC, id ASC").Find(&mappings).Error
 	if err != nil {
 		return nil, err
 	}
@@ -661,7 +661,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	}
 
 	var mappingRows []model.ClientInboundMapping
-	tx.Where("client_id = ?", client.Id).Find(&mappingRows)
+	tx.Where("client_id = ?", client.Id).Order("sort_order ASC, id ASC").Find(&mappingRows)
 	assignedInboundIds := make([]int, 0, len(mappingRows))
 	for _, m := range mappingRows {
 		assignedInboundIds = append(assignedInboundIds, m.InboundId)
@@ -1080,10 +1080,11 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 
 // AssignClientToInbounds assigns a client to multiple inbounds.
 func (s *ClientService) AssignClientToInbounds(tx *gorm.DB, clientId int, inboundIds []int) error {
-	for _, inboundId := range inboundIds {
+	for i, inboundId := range inboundIds {
 		mapping := &model.ClientInboundMapping{
 			ClientId:  clientId,
 			InboundId: inboundId,
+			SortOrder: i * 10,
 		}
 		if err := tx.Create(mapping).Error; err != nil {
 			logger.Warningf("Failed to assign client %d to inbound %d: %v", clientId, inboundId, err)

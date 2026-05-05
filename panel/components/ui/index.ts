@@ -3,6 +3,7 @@ export { Button } from "./button";
 export { Input } from "./input";
 export { SelectNative } from "./select-native";
 export { Modal } from "./modal";
+export { Drawer } from "./drawer";
 export { LinearProgress } from "./linear-progress";
 export { AlertBanner } from "./alert-banner";
 export { StatBlock } from "./stat-block";

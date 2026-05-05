@@ -42,7 +42,7 @@ import { panelTimestampToMs, sizeFormat, speedMbpsFormat } from "@/lib/format";
 import { panel } from "@/lib/paths";
 import { getUiPref, setUiPref } from "@/lib/uiPrefs";
 import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
-import { PageScaffold, PageHeader, Surface } from "@/components/panel";
+import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
@@ -1415,7 +1415,9 @@ type ClientUnifiedCardProps = {
   form: ClientFormState;
   setForm: Dispatch<SetStateAction<ClientFormState>>;
   inboundIds: Record<number, boolean>;
-  setInboundIds: Dispatch<SetStateAction<Record<number, boolean>>>;
+  inboundSubscriptionOrder: number[];
+  onToggleInboundId: (id: number) => void;
+  onMoveInboundSubscription: (idx: number, dir: -1 | 1) => void;
   inbounds: InboundOption[];
   groups: GroupOption[];
   isEdit: boolean;
@@ -1439,7 +1441,9 @@ function ClientUnifiedCard({
   form,
   setForm,
   inboundIds,
-  setInboundIds,
+  inboundSubscriptionOrder,
+  onToggleInboundId,
+  onMoveInboundSubscription,
   inbounds,
   groups,
   isEdit,
@@ -2045,12 +2049,7 @@ function ClientUnifiedCard({
                         <InboundCapsuleToggle
                           key={ib.id}
                           selected={!!inboundIds[ib.id]}
-                          onToggle={() =>
-                            setInboundIds((m) => ({
-                              ...m,
-                              [ib.id]: !m[ib.id],
-                            }))
-                          }
+                          onToggle={() => onToggleInboundId(ib.id)}
                           label={capLabel}
                           sublabel={capSub}
                         />
@@ -2059,6 +2058,49 @@ function ClientUnifiedCard({
                   </div>
                 </div>
               )}
+              {inbounds.length > 0 && inboundSubscriptionOrder.length >= 2 ? (
+                <div className="mt-3 space-y-2 border-t border-[var(--border)] pt-3">
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
+                    {t("pages.clients.subscriptionInboundOrder", {
+                      defaultValue: "Subscription order",
+                    })}
+                  </p>
+                  {inboundSubscriptionOrder.map((iid, idx) => {
+                    const ib = inbounds.find((x) => x.id === iid);
+                    const label = ib?.remark?.trim() || `Inbound ${iid}`;
+                    return (
+                      <div
+                        key={iid}
+                        className="flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface)] px-2 py-1.5"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-xs text-[var(--fg)]">
+                          {label}
+                        </span>
+                        <IconButton
+                          type="button"
+                          label={t("pages.clients.moveInboundUp", {
+                            defaultValue: "Move up",
+                          })}
+                          disabled={idx === 0}
+                          onClick={() => onMoveInboundSubscription(idx, -1)}
+                        >
+                          <ArrowUp size={14} />
+                        </IconButton>
+                        <IconButton
+                          type="button"
+                          label={t("pages.clients.moveInboundDown", {
+                            defaultValue: "Move down",
+                          })}
+                          disabled={idx >= inboundSubscriptionOrder.length - 1}
+                          onClick={() => onMoveInboundSubscription(idx, 1)}
+                        >
+                          <ArrowDown size={14} />
+                        </IconButton>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : null}
               {isEdit ? (
                 <p className="mt-2 text-xs text-[var(--fg-subtle)]">
                   {t("pages.clients.editInboundsHint", {
@@ -2180,6 +2222,7 @@ export function ClientsPage() {
   const [groups, setGroups] = useState<GroupOption[]>([]);
   const [form, setForm] = useState<ClientFormState>(FORM_DEFAULT);
   const [inboundIds, setInboundIds] = useState<Record<number, boolean>>({});
+  const [inboundSubscriptionOrder, setInboundSubscriptionOrder] = useState<number[]>([]);
 
   const [keysModalClientId, setKeysModalClientId] = useState<number | null>(null);
   const [keysLoading, setKeysLoading] = useState(false);
@@ -2245,6 +2288,30 @@ export function ClientsPage() {
   const keysModalClient =
     keysModalClientId != null ? rows.find((c) => c.id === keysModalClientId) : undefined;
   const keysModalInboundCount = keysModalClient?.inbounds?.length ?? 0;
+
+  const toggleInboundSelection = useCallback((ibId: number) => {
+    setInboundIds((m) => {
+      const willSelect = !m[ibId];
+      setInboundSubscriptionOrder((order) => {
+        if (willSelect) {
+          if (order.includes(ibId)) return order;
+          return [...order, ibId];
+        }
+        return order.filter((x) => x !== ibId);
+      });
+      return { ...m, [ibId]: willSelect };
+    });
+  }, []);
+
+  const moveInboundSubscription = useCallback((idx: number, dir: -1 | 1) => {
+    setInboundSubscriptionOrder((o) => {
+      const j = idx + dir;
+      if (j < 0 || j >= o.length) return o;
+      const n = [...o];
+      [n[idx], n[j]] = [n[j], n[idx]];
+      return n;
+    });
+  }, []);
 
   const copyText = (text: string) => {
     void copyTextToClipboard(text)
@@ -2657,6 +2724,7 @@ export function ClientsPage() {
       setSheetClientId(null);
       setForm({ ...FORM_DEFAULT });
       setInboundIds({});
+      setInboundSubscriptionOrder([]);
       setEditingId(null);
       setFetchingClient(false);
     }
@@ -3063,6 +3131,7 @@ export function ClientsPage() {
   const resetModal = useCallback(() => {
     setForm({ ...FORM_DEFAULT });
     setInboundIds({});
+    setInboundSubscriptionOrder([]);
     setEditingId(null);
     setFetchingClient(false);
   }, []);
@@ -3217,11 +3286,13 @@ export function ClientsPage() {
         hwidEnabled: !!c.hwidEnabled,
         maxHwid: String(c.maxHwid ?? 0),
       });
+      const ids = (c.inboundIds ?? []).filter((iid) => iid > 0);
       const m: Record<number, boolean> = {};
-      for (const iid of c.inboundIds ?? []) {
-        if (iid > 0) m[iid] = true;
+      for (const iid of ids) {
+        m[iid] = true;
       }
       setInboundIds(m);
+      setInboundSubscriptionOrder(ids);
     } catch {
       toast.error(t("pages.clients.addError"));
       closeSheet();
@@ -3252,10 +3323,7 @@ export function ClientsPage() {
       toast.error(t("pages.clients.addModalAnnounceTooLong"));
       return;
     }
-    const selectedInboundIds = Object.entries(inboundIds)
-      .filter(([, v]) => v)
-      .map(([k]) => Number(k))
-      .filter((n) => n > 0);
+    const selectedInboundIds = inboundSubscriptionOrder.filter((id) => inboundIds[id]);
 
     const totalGB = Number(form.totalGB);
     if (Number.isNaN(totalGB) || totalGB < 0) {
@@ -3403,6 +3471,15 @@ export function ClientsPage() {
               <Plus size={16} />
               {t("pages.clients.addClient")}
             </Button>
+            <SectionHelpModal
+              titleKey="pages.clients.helpModalTitle"
+              paragraphKeys={[
+                "pages.clients.helpModalP1",
+                "pages.clients.helpModalP2",
+                "pages.clients.helpModalP3",
+                "pages.clients.helpModalP4",
+              ]}
+            />
           </>
         }
       />
@@ -4082,7 +4159,9 @@ export function ClientsPage() {
             form={form}
             setForm={setForm}
             inboundIds={inboundIds}
-            setInboundIds={setInboundIds}
+            inboundSubscriptionOrder={inboundSubscriptionOrder}
+            onToggleInboundId={toggleInboundSelection}
+            onMoveInboundSubscription={moveInboundSubscription}
             inbounds={inbounds}
             groups={groups}
             isEdit={isEdit}

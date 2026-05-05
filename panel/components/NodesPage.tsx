@@ -36,7 +36,7 @@ import {
 import { NodeRegisterStep } from "@/components/NodeRegisterStep";
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
-import { PageScaffold, PageHeader, Surface } from "@/components/panel";
+import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
@@ -1021,6 +1021,15 @@ export function NodesPage() {
               <Plus size={16} />
               {t("pages.nodes.addNode")}
             </Button>
+            <SectionHelpModal
+              titleKey="pages.nodes.helpModalTitle"
+              paragraphKeys={[
+                "pages.nodes.helpModalP1",
+                "pages.nodes.helpModalP2",
+                "pages.nodes.helpModalP3",
+                "pages.nodes.helpModalP4",
+              ]}
+            />
           </>
         }
       />

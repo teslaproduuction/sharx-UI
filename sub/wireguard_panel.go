@@ -123,7 +123,7 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 	var b strings.Builder
 	b.WriteString("WireGuard (UDP) — this is not a v2ray:// link; use the data below in a WireGuard app.\n\n")
 
-	addrs := s.getAddressesForInbound(inbound)
+	addrs, _ := s.getAddressesForInbound(inbound)
 	var firstEndpoint string
 	if len(addrs) == 0 {
 		b.WriteString("Endpoint: (set panel Host / node address, or subscription web domain, so a host:port appears here.)\n\n")

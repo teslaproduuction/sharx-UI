@@ -328,7 +328,7 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 	if err == nil {
 		// Found client in new architecture, get inbounds through mapping
 		var mappings []model.ClientInboundMapping
-		err = db.Where("client_id = ?", client.Id).Find(&mappings).Error
+		err = db.Where("client_id = ?", client.Id).Order("sort_order ASC, id ASC").Find(&mappings).Error
 		if err != nil {
 			return nil, err
 		}
@@ -345,12 +345,10 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 		var all []*model.Inbound
 		err = db.Model(model.Inbound{}).Preload("ClientStats").
 			Where("id IN ? AND enable = ?", inboundIds, true).
-			Order("id ASC").
 			Find(&all).Error
 		if err != nil {
 			return nil, err
 		}
-		// Filter by normalized protocol (DB may store mixed case; SQL IN would skip shadowsocks/mixed).
 		allowedSub := map[model.Protocol]struct{}{
 			model.VMESS:       {},
 			model.VLESS:       {},
@@ -360,11 +358,20 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 			model.Hysteria:    {},
 			model.Hysteria2:   {},
 		}
-		inbounds := make([]*model.Inbound, 0, len(all))
+		inboundById := make(map[int]*model.Inbound, len(all))
 		for _, inb := range all {
-			if _, ok := allowedSub[model.NormalizeProtocol(inb.Protocol)]; ok {
-				inbounds = append(inbounds, inb)
+			inboundById[inb.Id] = inb
+		}
+		inbounds := make([]*model.Inbound, 0, len(inboundIds))
+		for _, id := range inboundIds {
+			inb, ok := inboundById[id]
+			if !ok {
+				continue
 			}
+			if _, allowed := allowedSub[model.NormalizeProtocol(inb.Protocol)]; !allowed {
+				continue
+			}
+			inbounds = append(inbounds, inb)
 		}
 		return inbounds, nil
 	}
@@ -575,7 +582,7 @@ func (s *SubService) genMixedLinkWithClient(inbound *model.Inbound, client *mode
 		return ""
 	}
 	user := mixedProxyUserFromEmail(client.Email)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, _ := s.getAddressesForInbound(inbound)
 	if len(nodeAddresses) == 0 {
 		return ""
 	}
@@ -623,85 +630,143 @@ func (s *SubService) genMixedLink(inbound *model.Inbound, email string) string {
 	return ""
 }
 
-// AddressPort represents an address and port for subscription links
+// AddressPort represents an address and port for subscription links.
 type AddressPort struct {
-	Address string
-	Port    int // 0 means use inbound.Port
+	Address           string
+	Port              int // 0 means use inbound.Port
+	RemarkSuffix      string
+	RemarkNodeName    string
+	RemarkDisplayHost string
+	// ApplyHostSubscriptionOverrides is true only for the endpoint row derived from the panel Host (CDN/front).
+	// Host TLS/stream overrides apply to those rows only; node-derived rows keep inbound stream settings.
+	ApplyHostSubscriptionOverrides bool
 }
 
-// getAddressesForInbound returns addresses for subscription links.
-// Priority: Host (if enabled) > Node addresses > default address
-// Returns addresses and ports (0 means use inbound.Port)
-func (s *SubService) getAddressesForInbound(inbound *model.Inbound) []AddressPort {
-	// First, check if there's a Host assigned to this inbound
-	host, err := s.hostService.GetHostForInbound(inbound.Id)
-	if err == nil && host != nil && host.Enable {
-		// Use host address and port
-		hostPort := host.Port
-		if hostPort > 0 {
-			return []AddressPort{{Address: host.Address, Port: hostPort}}
-		}
-		return []AddressPort{{Address: host.Address, Port: 0}} // 0 means use inbound.Port
+// RemarkTplNode overrides remark template n/p slots for per-endpoint links.
+type RemarkTplNode struct {
+	Name        string
+	DisplayHost string
+}
+
+func remarkTplFromAP(ap AddressPort) *RemarkTplNode {
+	if strings.TrimSpace(ap.RemarkNodeName) == "" && strings.TrimSpace(ap.RemarkDisplayHost) == "" {
+		return nil
 	}
-	
-	// Second, get node addresses if in multi-node mode
-	var nodeAddresses []AddressPort
-	multiMode, _ := s.settingService.GetMultiNodeMode()
-	if multiMode {
-		nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
-		if err == nil && len(nodes) > 0 {
-			// Extract addresses from all nodes
-			for _, node := range nodes {
-				nodeAddr := s.extractNodeHost(node.Address)
-				if nodeAddr != "" {
-					nodeAddresses = append(nodeAddresses, AddressPort{Address: nodeAddr, Port: 0})
-				}
-			}
+	return &RemarkTplNode{Name: ap.RemarkNodeName, DisplayHost: ap.RemarkDisplayHost}
+}
+
+func hostAddressPort(h *model.Host) AddressPort {
+	ap := AddressPort{
+		Address:                        h.Address,
+		ApplyHostSubscriptionOverrides: true,
+	}
+	if h.Port > 0 {
+		ap.Port = h.Port
+	}
+	return ap
+}
+
+func (s *SubService) defaultAddressPorts(inbound *model.Inbound) []AddressPort {
+	var defaultAddress string
+	if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
+		defaultAddress = s.address
+	} else {
+		defaultAddress = inbound.Listen
+	}
+	if defaultAddress == "" {
+		if d, err := s.settingService.GetSubDomain(); err == nil {
+			defaultAddress = strings.TrimSpace(d)
 		}
 	}
-	
-	// Fallback to default logic if no nodes found
-	if len(nodeAddresses) == 0 {
-		var defaultAddress string
-		if inbound.Listen == "" || inbound.Listen == "0.0.0.0" || inbound.Listen == "::" || inbound.Listen == "::0" {
-			defaultAddress = s.address
-		} else {
-			defaultAddress = inbound.Listen
-		}
-		if defaultAddress == "" {
-			if d, err := s.settingService.GetSubDomain(); err == nil {
-				defaultAddress = strings.TrimSpace(d)
-			}
-		}
-		if defaultAddress == "" {
-			if d, err := s.settingService.GetWebDomain(); err == nil {
-				defaultAddress = strings.TrimSpace(d)
-				if strings.Contains(defaultAddress, "://") {
-					if u, err := url.Parse(defaultAddress); err == nil && u.Host != "" {
-						defaultAddress = u.Host
-						if i := strings.Index(defaultAddress, ":"); i >= 0 {
-							defaultAddress = defaultAddress[:i]
-						}
+	if defaultAddress == "" {
+		if d, err := s.settingService.GetWebDomain(); err == nil {
+			defaultAddress = strings.TrimSpace(d)
+			if strings.Contains(defaultAddress, "://") {
+				if u, err := url.Parse(defaultAddress); err == nil && u.Host != "" {
+					defaultAddress = u.Host
+					if i := strings.Index(defaultAddress, ":"); i >= 0 {
+						defaultAddress = defaultAddress[:i]
 					}
 				}
 			}
 		}
-		nodeAddresses = []AddressPort{{Address: defaultAddress, Port: 0}}
+	}
+	return []AddressPort{{Address: defaultAddress, Port: 0}}
+}
+
+func (s *SubService) buildNodeAddressPorts(inbound *model.Inbound) []AddressPort {
+	multiMode, _ := s.settingService.GetMultiNodeMode()
+	if !multiMode {
+		return nil
+	}
+	rows, err := s.nodeService.GetInboundNodeSubscriptionRows(inbound.Id)
+	if err != nil || len(rows) == 0 {
+		return nil
+	}
+	out := make([]AddressPort, 0, len(rows))
+	for _, row := range rows {
+		if !row.Mapping.IncludeInSubscription {
+			continue
+		}
+		addr := strings.TrimSpace(row.Mapping.PublishedAddress)
+		if addr == "" {
+			addr = s.extractNodeHost(row.Node.Address)
+		}
+		if addr == "" {
+			continue
+		}
+		out = append(out, AddressPort{
+			Address:           addr,
+			Port:              row.Mapping.PublishedPort,
+			RemarkSuffix:      row.Mapping.SubscriptionRemarkSuffix,
+			RemarkNodeName:    row.Node.Name,
+			RemarkDisplayHost: addr,
+		})
+	}
+	return out
+}
+
+// getAddressesForInbound returns addresses for subscription links.
+// Host mode replace uses only the host; prepend/append merge host with node-derived addresses.
+// When the second value is non-nil, it is the enabled Host mapped to this inbound (for subscription TLS/stream overrides).
+func (s *SubService) getAddressesForInbound(inbound *model.Inbound) ([]AddressPort, *model.Host) {
+	nodeAddrs := s.buildNodeAddressPorts(inbound)
+	if len(nodeAddrs) == 0 {
+		nodeAddrs = s.defaultAddressPorts(inbound)
 	}
 
-	nonEmpty := make([]AddressPort, 0, len(nodeAddresses))
-	for _, ap := range nodeAddresses {
+	var subHost *model.Host
+	host, err := s.hostService.GetHostForInbound(inbound.Id)
+	if err != nil {
+		host = nil
+	}
+	if host != nil && host.Enable {
+		subHost = host
+		mode := model.NormalizeHostSubscriptionApplyMode(host.SubscriptionApplyMode)
+		hp := hostAddressPort(host)
+		switch mode {
+		case model.HostSubscriptionApplyPrepend:
+			nodeAddrs = append([]AddressPort{hp}, nodeAddrs...)
+		case model.HostSubscriptionApplyAppend:
+			nodeAddrs = append(nodeAddrs, hp)
+		default:
+			nodeAddrs = []AddressPort{hp}
+		}
+	}
+
+	nonEmpty := make([]AddressPort, 0, len(nodeAddrs))
+	for _, ap := range nodeAddrs {
 		if strings.TrimSpace(ap.Address) != "" {
 			nonEmpty = append(nonEmpty, ap)
 		}
 	}
 	if len(nonEmpty) > 0 {
-		return nonEmpty
+		return nonEmpty, subHost
 	}
 	if h := strings.TrimSpace(s.address); h != "" {
-		return []AddressPort{{Address: h, Port: 0}}
+		return []AddressPort{{Address: h, Port: 0}}, subHost
 	}
-	return nodeAddresses
+	return nodeAddrs, subHost
 }
 
 func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
@@ -710,7 +775,7 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	// Base object template (address will be set per node)
 	baseObj := map[string]any{
 		"v":    "2",
@@ -834,12 +899,15 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 					newObj[key] = value
 				}
 			}
-			newObj["ps"] = s.genRemark(inbound, email, ep["remark"].(string))
+			newObj["ps"] = s.genRemark(inbound, email, ep["remark"].(string), nil)
 			newObj["add"] = ep["dest"].(string)
 			newObj["port"] = int(ep["port"].(float64))
 
 			if newSecurity != "same" {
 				newObj["tls"] = newSecurity
+			}
+			if subHost != nil {
+				applyHostOverridesToVmessBase(subHost, network, newObj)
 			}
 			if linkIndex > 0 {
 				links += "\n"
@@ -853,16 +921,16 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 
 	// Generate links for each node address
 	for _, addrPort := range nodeAddresses {
-		obj := make(map[string]any)
-		for k, v := range baseObj {
-			obj[k] = v
+		obj := shallowCopyAnyMap(baseObj)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToVmessBase(subHost, network, obj)
 		}
 		obj["add"] = addrPort.Address
 		// Use port from Host if specified, otherwise use inbound.Port
 		if addrPort.Port > 0 {
 			obj["port"] = addrPort.Port
 		}
-		obj["ps"] = s.genRemark(inbound, email, "")
+		obj["ps"] = s.genRemark(inbound, email, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -882,7 +950,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	// Base object template (address will be set per node)
 	baseObj := map[string]any{
 		"v":    "2",
@@ -999,12 +1067,15 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 					newObj[key] = value
 				}
 			}
-			newObj["ps"] = s.genRemarkWithClient(inbound, client, ep["remark"].(string))
+			newObj["ps"] = s.genRemarkWithClient(inbound, client, ep["remark"].(string), nil)
 			newObj["add"] = ep["dest"].(string)
 			newObj["port"] = int(ep["port"].(float64))
 
 			if newSecurity != "same" {
 				newObj["tls"] = newSecurity
+			}
+			if subHost != nil {
+				applyHostOverridesToVmessBase(subHost, network, newObj)
 			}
 			if linkIndex > 0 {
 				links += "\n"
@@ -1018,16 +1089,16 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 
 	// Generate links for each node address
 	for _, addrPort := range nodeAddresses {
-		obj := make(map[string]any)
-		for k, v := range baseObj {
-			obj[k] = v
+		obj := shallowCopyAnyMap(baseObj)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToVmessBase(subHost, network, obj)
 		}
 		obj["add"] = addrPort.Address
 		// Use port from Host if specified, otherwise use inbound.Port
 		if addrPort.Port > 0 {
 			obj["port"] = addrPort.Port
 		}
-		obj["ps"] = s.genRemarkWithClient(inbound, client, "")
+		obj["ps"] = s.genRemarkWithClient(inbound, client, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -1098,7 +1169,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
 	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	uuid := client.UUID
@@ -1246,6 +1317,12 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		params["security"] = "none"
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	externalProxies, _ := stream["externalProxy"].([]any)
 
 	// Generate links for each node address (or external proxy)
@@ -1266,22 +1343,27 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 			epPort := int(ep["port"].(float64))
 			link := fmt.Sprintf("vless://%s@%s:%d", uuid, dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			url, _ := url.Parse(link)
 			q := url.Query()
 
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
 
 			url.RawQuery = q.Encode()
-			url.Fragment = s.genRemarkWithClient(inbound, client, ep["remark"].(string))
+			url.Fragment = s.genRemarkWithClient(inbound, client, ep["remark"].(string), nil)
 			links = append(links, url.String())
 		}
 		return strings.Join(links, "\n")
@@ -1297,12 +1379,17 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		url, _ := url.Parse(link)
 		q := url.Query()
 
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 
 		url.RawQuery = q.Encode()
-		url.Fragment = s.genRemarkWithClient(inbound, client, "")
+		url.Fragment = s.genRemarkWithClient(inbound, client, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 		links = append(links, url.String())
 	}
 	
@@ -1315,7 +1402,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
 	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	clients, _ := s.inboundService.GetClients(inbound)
@@ -1460,6 +1547,12 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		params["security"] = "none"
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	externalProxies, _ := stream["externalProxy"].([]any)
 
 	// Generate links for each node address (or external proxy)
@@ -1481,15 +1574,20 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 			epPort := int(ep["port"].(float64))
 			link := fmt.Sprintf("vless://%s@%s:%d", uuid, dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			url, _ := url.Parse(link)
 			q := url.Query()
 
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
@@ -1498,7 +1596,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 			// Set the new query values on the URL
 			url.RawQuery = q.Encode()
 
-			url.Fragment = s.genRemark(inbound, email, ep["remark"].(string))
+			url.Fragment = s.genRemark(inbound, email, ep["remark"].(string), nil)
 
 			links = append(links, url.String())
 		}
@@ -1516,14 +1614,19 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		url, _ := url.Parse(link)
 		q := url.Query()
 
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 
 		// Set the new query values on the URL
 		url.RawQuery = q.Encode()
 
-		url.Fragment = s.genRemark(inbound, email, "")
+		url.Fragment = s.genRemark(inbound, email, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		links = append(links, url.String())
 	}
@@ -1538,7 +1641,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
 	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	password := client.Password
@@ -1663,6 +1766,12 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 		params["security"] = "none"
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	externalProxies, _ := stream["externalProxy"].([]any)
 
 	links := ""
@@ -1676,22 +1785,27 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 			epPort := int(ep["port"].(float64))
 			link := fmt.Sprintf("trojan://%s@%s:%d", password, dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			url, _ := url.Parse(link)
 			q := url.Query()
 
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
 
 			url.RawQuery = q.Encode()
-			url.Fragment = s.genRemarkWithClient(inbound, client, ep["remark"].(string))
+			url.Fragment = s.genRemarkWithClient(inbound, client, ep["remark"].(string), nil)
 
 			if linkIndex > 0 {
 				links += "\n"
@@ -1711,12 +1825,17 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 		url, _ := url.Parse(link)
 		q := url.Query()
 
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 
 		url.RawQuery = q.Encode()
-		url.Fragment = s.genRemarkWithClient(inbound, client, "")
+		url.Fragment = s.genRemarkWithClient(inbound, client, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -1734,7 +1853,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 	}
 	
 	// Get addresses (Host > Nodes > Default)
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
 	json.Unmarshal([]byte(inbound.StreamSettings), &stream)
 	clients, _ := s.inboundService.GetClients(inbound)
@@ -1867,6 +1986,12 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 		params["security"] = "none"
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	externalProxies, _ := stream["externalProxy"].([]any)
 
 	// Generate links for each node address (or external proxy)
@@ -1882,15 +2007,20 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 			epPort := int(ep["port"].(float64))
 			link := fmt.Sprintf("trojan://%s@%s:%d", password, dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			url, _ := url.Parse(link)
 			q := url.Query()
 
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
@@ -1899,7 +2029,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 			// Set the new query values on the URL
 			url.RawQuery = q.Encode()
 
-			url.Fragment = s.genRemark(inbound, email, ep["remark"].(string))
+			url.Fragment = s.genRemark(inbound, email, ep["remark"].(string), nil)
 
 			if linkIndex > 0 {
 				links += "\n"
@@ -1921,14 +2051,19 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 		url, _ := url.Parse(link)
 		q := url.Query()
 
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 
 		// Set the new query values on the URL
 		url.RawQuery = q.Encode()
 
-		url.Fragment = s.genRemark(inbound, email, "")
+		url.Fragment = s.genRemark(inbound, email, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -2000,7 +2135,7 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 		return ""
 	}
 
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	stream := parseJSONMap(inbound.StreamSettings)
 	settings := parseJSONMap(inbound.Settings)
 
@@ -2102,6 +2237,12 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 		}
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	encPart := fmt.Sprintf("%s:%s", method, clientPass)
 	if strings.HasPrefix(method, "2022") {
 		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, clientPass)
@@ -2126,23 +2267,28 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 			}
 			link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			u, err := url.Parse(link)
 			if err != nil {
 				continue
 			}
 			q := u.Query()
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
 			u.RawQuery = q.Encode()
-			u.Fragment = s.genRemarkWithClient(inbound, client, mapGetString(ep, "remark"))
+			u.Fragment = s.genRemarkWithClient(inbound, client, mapGetString(ep, "remark"), nil)
 
 			if linkIndex > 0 {
 				links += "\n"
@@ -2168,11 +2314,15 @@ func (s *SubService) genShadowsocksLinkWithClient(inbound *model.Inbound, client
 			continue
 		}
 		q := u.Query()
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 		u.RawQuery = q.Encode()
-		u.Fragment = s.genRemarkWithClient(inbound, client, "")
+		u.Fragment = s.genRemarkWithClient(inbound, client, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -2189,7 +2339,7 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 		return ""
 	}
 
-	nodeAddresses := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	stream := parseJSONMap(inbound.StreamSettings)
 	clients, _ := s.inboundService.GetClients(inbound)
 
@@ -2307,6 +2457,12 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 		}
 	}
 
+	sn := streamNetwork
+	if sn == "" {
+		sn = "tcp"
+	}
+	baseParams := shallowCopyStringMap(params)
+
 	encPart := fmt.Sprintf("%s:%s", method, clientPass)
 	if strings.HasPrefix(method, "2022") {
 		encPart = fmt.Sprintf("%s:%s:%s", method, inboundPassword, clientPass)
@@ -2331,23 +2487,28 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 			}
 			link := fmt.Sprintf("ss://%s@%s:%d", base64.StdEncoding.EncodeToString([]byte(encPart)), dest, epPort)
 
+			epParams := shallowCopyStringMap(baseParams)
+			if subHost != nil {
+				applyHostOverridesToParams(subHost, sn, epParams)
+			}
+
 			if newSecurity != "same" {
-				params["security"] = newSecurity
+				epParams["security"] = newSecurity
 			} else {
-				params["security"] = security
+				epParams["security"] = security
 			}
 			u, err := url.Parse(link)
 			if err != nil {
 				continue
 			}
 			q := u.Query()
-			for k, v := range params {
+			for k, v := range epParams {
 				if !(newSecurity == "none" && (k == "alpn" || k == "sni" || k == "fp" || k == "allowInsecure")) {
 					q.Add(k, v)
 				}
 			}
 			u.RawQuery = q.Encode()
-			u.Fragment = s.genRemark(inbound, email, mapGetString(ep, "remark"))
+			u.Fragment = s.genRemark(inbound, email, mapGetString(ep, "remark"), nil)
 
 			if linkIndex > 0 {
 				links += "\n"
@@ -2373,11 +2534,15 @@ func (s *SubService) genShadowsocksLink(inbound *model.Inbound, email string) st
 			continue
 		}
 		q := u.Query()
-		for k, v := range params {
+		rowParams := shallowCopyStringMap(baseParams)
+		if subHost != nil && addrPort.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToParams(subHost, sn, rowParams)
+		}
+		for k, v := range rowParams {
 			q.Add(k, v)
 		}
 		u.RawQuery = q.Encode()
-		u.Fragment = s.genRemark(inbound, email, "")
+		u.Fragment = s.genRemark(inbound, email, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 
 		if linkIndex > 0 {
 			links += "\n"
@@ -2485,6 +2650,9 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		}
 	}
 
+	_, subHost := s.getAddressesForInbound(inbound)
+	applyHostOverridesToHysteriaParams(subHost, params)
+
 	var settings map[string]interface{}
 	json.Unmarshal([]byte(inbound.Settings), &settings)
 	version, _ := settings["version"].(float64)
@@ -2515,7 +2683,7 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 				q.Add(k, v)
 			}
 			u.RawQuery = q.Encode()
-			u.Fragment = s.genRemark(inbound, email, epRemark)
+			u.Fragment = s.genRemark(inbound, email, epRemark, nil)
 			links = append(links, u.String())
 		}
 		return strings.Join(links, "\n")
@@ -2528,7 +2696,7 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		q.Add(k, v)
 	}
 	u.RawQuery = q.Encode()
-	u.Fragment = s.genRemark(inbound, email, "")
+	u.Fragment = s.genRemark(inbound, email, "", nil)
 	return u.String()
 }
 
@@ -2549,23 +2717,26 @@ func splitRemarkModel(model string) (separationChar string, orderChars string) {
 	return separationChar, string(r[1:])
 }
 
-func (s *SubService) genRemark(inbound *model.Inbound, email string, extra string) string {
+func (s *SubService) genRemark(inbound *model.Inbound, email string, extra string, tpl *RemarkTplNode) string {
 	model := s.remarkModel
 	if model == "" {
 		model = "-ieo"
 	}
 	separationChar, orderChars := splitRemarkModel(model)
-	
-	// Get node information if available (for 'n' and 'p' options)
+
 	var nodeName, nodeIP string
-	nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
-	if err == nil && len(nodes) > 0 {
-		// Use first node for template variables
-		node := nodes[0]
-		nodeName = node.Name
-		nodeIP = s.extractNodeHost(node.Address)
+	if tpl != nil && (strings.TrimSpace(tpl.Name) != "" || strings.TrimSpace(tpl.DisplayHost) != "") {
+		nodeName = strings.TrimSpace(tpl.Name)
+		nodeIP = strings.TrimSpace(tpl.DisplayHost)
+	} else {
+		nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
+		if err == nil && len(nodes) > 0 {
+			node := nodes[0]
+			nodeName = node.Name
+			nodeIP = s.extractNodeHost(node.Address)
+		}
 	}
-	
+
 	orders := map[byte]string{
 		'i': "",
 		'e': "",
@@ -2659,23 +2830,26 @@ func (s *SubService) genRemark(inbound *model.Inbound, email string, extra strin
 }
 
 // genRemarkWithClient generates remark for ClientEntity, checking Enable and Status
-func (s *SubService) genRemarkWithClient(inbound *model.Inbound, client *model.ClientEntity, extra string) string {
+func (s *SubService) genRemarkWithClient(inbound *model.Inbound, client *model.ClientEntity, extra string, tpl *RemarkTplNode) string {
 	model := s.remarkModel
 	if model == "" {
 		model = "-ieo"
 	}
 	separationChar, orderChars := splitRemarkModel(model)
-	
-	// Get node information if available (for 'n' and 'p' options)
+
 	var nodeName, nodeIP string
-	nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
-	if err == nil && len(nodes) > 0 {
-		// Use first node for template variables
-		node := nodes[0]
-		nodeName = node.Name
-		nodeIP = s.extractNodeHost(node.Address)
+	if tpl != nil && (strings.TrimSpace(tpl.Name) != "" || strings.TrimSpace(tpl.DisplayHost) != "") {
+		nodeName = strings.TrimSpace(tpl.Name)
+		nodeIP = strings.TrimSpace(tpl.DisplayHost)
+	} else {
+		nodes, err := s.nodeService.GetNodesForInbound(inbound.Id)
+		if err == nil && len(nodes) > 0 {
+			node := nodes[0]
+			nodeName = node.Name
+			nodeIP = s.extractNodeHost(node.Address)
+		}
 	}
-	
+
 	orders := map[byte]string{
 		'i': "",
 		'e': "",

@@ -23,6 +23,22 @@ type inboundBindBody struct {
 	Wireguard *service.WireGuardInboundRequest `json:"wireguard" form:"-"`
 }
 
+func parseInboundNodeBindingsPayload(jsonData map[string]interface{}) ([]service.InboundNodeBindingInput, bool) {
+	raw, ok := jsonData["nodeBindings"]
+	if !ok || raw == nil {
+		return nil, false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return nil, false
+	}
+	var out []service.InboundNodeBindingInput
+	if err := json.Unmarshal(b, &out); err != nil || len(out) == 0 {
+		return nil, false
+	}
+	return out, true
+}
+
 // applyWireGuardPanelForm sets Inbound.Settings from `wireguard` or defaults when the protocol is wireguard.
 func applyWireGuardPanelForm(in *model.Inbound, wg *service.WireGuardInboundRequest) error {
 	if model.NormalizeProtocol(in.Protocol) != model.WireGuard {
@@ -228,6 +244,8 @@ func (a *InboundController) addInbound(c *gin.Context) {
 	var nodeIdsFromJSON []int
 	var nodeIdFromJSON *int
 	var hasNodeIdsInJSON, hasNodeIdInJSON bool
+	var nodeBindingsFromJSON []service.InboundNodeBindingInput
+	var hasNodeBindingsInJSON bool
 
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract nodeIds
@@ -263,6 +281,10 @@ func (a *InboundController) addInbound(c *gin.Context) {
 					} else if num, ok := nodeIdVal.(int); ok {
 						nodeIdFromJSON = &num
 					}
+				}
+				if nb, ok := parseInboundNodeBindingsPayload(jsonData); ok {
+					nodeBindingsFromJSON = nb
+					hasNodeBindingsInJSON = true
 				}
 			}
 			// Restore body for ShouldBind
@@ -324,10 +346,16 @@ func (a *InboundController) addInbound(c *gin.Context) {
 	nodeIdStr := c.PostForm("nodeId")
 
 	// Determine which source to use: JSON takes precedence over form data
-	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON
+	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON || hasNodeBindingsInJSON
 	useForm := (len(nodeIdsStr) > 0 || nodeIdStr != "") && !useJSON
 
-	if useJSON || useForm {
+	if hasNodeBindingsInJSON {
+		if err := nodeService.AssignInboundToNodesWithBindings(inbound.Id, nodeBindingsFromJSON); err != nil {
+			logger.Errorf("Failed to assign inbound %d with node bindings: %v", inbound.Id, err)
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
+	} else if useJSON || useForm {
 		var nodeIds []int
 		var nodeId *int
 
@@ -428,6 +456,8 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 	var nodeIdsFromJSON []int
 	var nodeIdFromJSON *int
 	var hasNodeIdsInJSON, hasNodeIdInJSON bool
+	var nodeBindingsFromJSON []service.InboundNodeBindingInput
+	var hasNodeBindingsInJSON bool
 
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract nodeIds
@@ -463,6 +493,10 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 					} else if num, ok := nodeIdVal.(int); ok {
 						nodeIdFromJSON = &num
 					}
+				}
+				if nb, ok := parseInboundNodeBindingsPayload(jsonData); ok {
+					nodeBindingsFromJSON = nb
+					hasNodeBindingsInJSON = true
 				}
 			}
 			// Restore body for ShouldBind
@@ -513,10 +547,17 @@ func (a *InboundController) updateInbound(c *gin.Context) {
 	nodeService := service.NodeService{}
 
 	// Determine which source to use: JSON takes precedence over form data
-	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON
+	useJSON := hasNodeIdsInJSON || hasNodeIdInJSON || hasNodeBindingsInJSON
 	useForm := (hasNodeIds || hasNodeId) && !useJSON
 
-	if useJSON || useForm {
+	if hasNodeBindingsInJSON {
+		if err := nodeService.AssignInboundToNodesWithBindings(inbound.Id, nodeBindingsFromJSON); err != nil {
+			logger.Errorf("Failed to assign inbound %d with node bindings: %v", inbound.Id, err)
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+			return
+		}
+		logger.Debugf("Successfully assigned inbound %d with nodeBindings count=%d", inbound.Id, len(nodeBindingsFromJSON))
+	} else if useJSON || useForm {
 		var nodeIds []int
 		var nodeId *int
 		var hasNodeIdsFlag bool
