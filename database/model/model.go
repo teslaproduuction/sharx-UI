@@ -83,6 +83,7 @@ type Inbound struct {
 	Sniffing       string   `json:"sniffing" form:"sniffing"`
 	NodeId         *int     `json:"nodeId,omitempty" form:"-" gorm:"-"`  // Node ID (not stored in Inbound table, from mapping) - DEPRECATED: kept only for backward compatibility with old clients, use NodeIds instead
 	NodeIds        []int    `json:"nodeIds,omitempty" form:"-" gorm:"-"` // Node IDs array (not stored in Inbound table, from mapping) - use this for multi-node support
+	NodeBindings   []InboundNodeBindingView `json:"nodeBindings,omitempty" form:"-" gorm:"-"` // Subscription-facing node rows (panel only)
 }
 
 // OutboundTraffics tracks traffic statistics for Xray outbound connections.
@@ -327,11 +328,48 @@ type PanelPairing struct {
 // TableName returns the DB table name for PanelPairing.
 func (PanelPairing) TableName() string { return "panel_pairing" }
 
+// Host subscription apply modes (addresses shown in client subscription links).
+const (
+	HostSubscriptionApplyReplace = "replace"
+	HostSubscriptionApplyPrepend = "prepend"
+	HostSubscriptionApplyAppend  = "append"
+)
+
+// NormalizeHostSubscriptionApplyMode returns a supported subscription apply mode.
+func NormalizeHostSubscriptionApplyMode(s string) string {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case HostSubscriptionApplyPrepend:
+		return HostSubscriptionApplyPrepend
+	case HostSubscriptionApplyAppend:
+		return HostSubscriptionApplyAppend
+	default:
+		return HostSubscriptionApplyReplace
+	}
+}
+
 // InboundNodeMapping maps inbounds to nodes in multi-node mode.
 type InboundNodeMapping struct {
 	Id        int `json:"id" gorm:"primaryKey;autoIncrement"`                             // Unique identifier
 	InboundId int `json:"inboundId" form:"inboundId" gorm:"uniqueIndex:idx_inbound_node"` // Inbound ID
 	NodeId    int `json:"nodeId" form:"nodeId" gorm:"uniqueIndex:idx_inbound_node"`       // Node ID
+	SortOrder int `json:"sortOrder" gorm:"column:sort_order;default:0"`                  // Order in subscription / UI
+
+	// Subscription link overrides (worker connection still uses node.Address).
+	PublishedAddress         string `json:"publishedAddress" gorm:"column:published_address"`
+	PublishedPort            int    `json:"publishedPort" gorm:"column:published_port"` // 0 = use inbound port
+	IncludeInSubscription    bool   `json:"includeInSubscription" gorm:"column:include_in_subscription;default:true"`
+	SubscriptionRemarkSuffix string `json:"subscriptionRemarkSuffix" gorm:"column:subscription_remark_suffix"`
+}
+
+// InboundNodeBindingView is returned to the panel for editing subscription-facing node rows.
+type InboundNodeBindingView struct {
+	NodeId                   int    `json:"nodeId"`
+	NodeName                 string `json:"nodeName,omitempty"`
+	SortOrder                int    `json:"sortOrder"`
+	PublishedAddress         string `json:"publishedAddress"`
+	PublishedPort            int    `json:"publishedPort"`
+	IncludeInSubscription    bool   `json:"includeInSubscription"`
+	SubscriptionRemarkSuffix string `json:"subscriptionRemarkSuffix"`
 }
 
 // Outbound represents an Xray outbound configuration.
@@ -394,6 +432,7 @@ type ClientInboundMapping struct {
 	Id        int `json:"id" gorm:"primaryKey;autoIncrement"`                               // Unique identifier
 	ClientId  int `json:"clientId" form:"clientId" gorm:"uniqueIndex:idx_client_inbound"`   // Client ID
 	InboundId int `json:"inboundId" form:"inboundId" gorm:"uniqueIndex:idx_client_inbound"` // Inbound ID
+	SortOrder int `json:"sortOrder" gorm:"column:sort_order;default:0"`                     // Order in subscription output
 }
 
 // ClientNodeTraffic stores cumulative per-node client traffic (multi-node).
@@ -420,6 +459,15 @@ type Host struct {
 	Protocol  string `json:"protocol" form:"protocol"`           // Protocol override (optional)
 	Remark    string `json:"remark" form:"remark"`               // Host remark/description
 	Enable    bool   `json:"enable" form:"enable"`               // Whether the host is enabled
+	// SubscriptionApplyMode: replace (default) | prepend | append — how Host combines with multi-node addresses in subscription links.
+	SubscriptionApplyMode string `json:"subscriptionApplyMode" gorm:"column:subscription_apply_mode;default:replace"`
+	// Subscription link overrides (optional); empty string = inherit from inbound stream settings.
+	SubscriptionSNI           string `json:"subscriptionSni" gorm:"column:subscription_sni"`
+	SubscriptionHttpHost      string `json:"subscriptionHttpHost" gorm:"column:subscription_http_host"`
+	SubscriptionPath          string `json:"subscriptionPath" gorm:"column:subscription_path"`
+	SubscriptionAlpn          string `json:"subscriptionAlpn" gorm:"column:subscription_alpn"`
+	SubscriptionFingerprint   string `json:"subscriptionFingerprint" gorm:"column:subscription_fp"`
+	SubscriptionAllowInsecure *bool  `json:"subscriptionAllowInsecure,omitempty" gorm:"column:subscription_allow_insecure"` // nil = inherit from inbound
 	CreatedAt int64  `json:"createdAt" gorm:"autoCreateTime"`    // Creation timestamp
 	UpdatedAt int64  `json:"updatedAt" gorm:"autoUpdateTime"`    // Last update timestamp
 

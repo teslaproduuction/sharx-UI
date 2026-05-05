@@ -63,7 +63,7 @@ import {
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
 import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
-import { PageScaffold, PageHeader, Surface } from "@/components/panel";
+import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
@@ -314,6 +314,48 @@ function InboundSortableTh({
 
 type NodeRow = { id: number; name: string };
 
+type InboundNodeBindingApi = {
+  nodeId: number;
+  nodeName?: string;
+  publishedAddress?: string;
+  publishedPort?: number;
+  includeInSubscription?: boolean;
+  subscriptionRemarkSuffix?: string;
+};
+
+type NodeBindingFormRow = {
+  nodeId: number;
+  publishedAddress: string;
+  publishedPort: string;
+  includeInSubscription: boolean;
+  subscriptionRemarkSuffix: string;
+};
+
+function inboundBindingsToForm(ib: {
+  nodeBindings?: InboundNodeBindingApi[];
+  nodeIds?: number[];
+}): NodeBindingFormRow[] {
+  const nb = ib.nodeBindings?.filter((b) => (b.nodeId ?? 0) > 0) ?? [];
+  if (nb.length > 0) {
+    return nb.map((b) => ({
+      nodeId: b.nodeId,
+      publishedAddress: (b.publishedAddress ?? "").trim(),
+      publishedPort: String(b.publishedPort ?? 0),
+      includeInSubscription: b.includeInSubscription !== false,
+      subscriptionRemarkSuffix: (b.subscriptionRemarkSuffix ?? "").trim(),
+    }));
+  }
+  return (ib.nodeIds ?? [])
+    .filter((id) => id > 0)
+    .map((nodeId) => ({
+      nodeId,
+      publishedAddress: "",
+      publishedPort: "0",
+      includeInSubscription: true,
+      subscriptionRemarkSuffix: "",
+    }));
+}
+
 type InboundDetail = {
   id: number;
   remark: string;
@@ -331,6 +373,7 @@ type InboundDetail = {
   expiryTime: number;
   trafficReset: string;
   nodeIds?: number[];
+  nodeBindings?: InboundNodeBindingApi[];
 };
 
 function randomPort() {
@@ -510,7 +553,7 @@ export function InboundsPage() {
   const [step, setStep] = useState<InboundStepId>("basics");
   const [nodes, setNodes] = useState<NodeRow[]>([]);
   const [form, setForm] = useState(defaultForm);
-  const [nodeIds, setNodeIds] = useState<Record<number, boolean>>({});
+  const [nodeBindings, setNodeBindings] = useState<NodeBindingFormRow[]>([]);
   /** When false/loading, the wizard omits the “Nodes” step (standalone / single node). */
   const [multiNodeMode, setMultiNodeMode] = useState<boolean | null>(null);
   const [baselineSettings, setBaselineSettings] = useState("");
@@ -604,7 +647,7 @@ export function InboundsPage() {
 
   const resetAddForm = useCallback(() => {
     setForm(defaultForm());
-    setNodeIds({});
+    setNodeBindings([]);
     setBaselineSettings("");
     setEditId(null);
     setStep("basics");
@@ -673,11 +716,7 @@ export function InboundsPage() {
           ib.sniffing || defaultSniffingString(),
         ),
       });
-      const nids: Record<number, boolean> = {};
-      for (const nid of ib.nodeIds ?? []) {
-        if (nid > 0) nids[nid] = true;
-      }
-      setNodeIds(nids);
+      setNodeBindings(inboundBindingsToForm(ib));
     } catch {
       toast.error(t("fail"));
       setModalOpen(false);
@@ -686,6 +725,25 @@ export function InboundsPage() {
       setFetchingInbound(false);
     }
   };
+
+  const moveNodeBinding = useCallback((idx: number, dir: -1 | 1) => {
+    setNodeBindings((rows) => {
+      const j = idx + dir;
+      if (j < 0 || j >= rows.length) return rows;
+      const next = [...rows];
+      [next[idx], next[j]] = [next[j], next[idx]];
+      return next;
+    });
+  }, []);
+
+  const patchNodeBinding = useCallback(
+    (nodeId: number, patch: Partial<NodeBindingFormRow>) => {
+      setNodeBindings((rows) =>
+        rows.map((r) => (r.nodeId === nodeId ? { ...r, ...patch } : r)),
+      );
+    },
+    [],
+  );
 
   const applyStreamPresetForProtocol = (protocol: InboundFormProtocol) => {
     setForm((f) => {
@@ -911,10 +969,15 @@ export function InboundsPage() {
     const totalBytes =
       Number.isFinite(tg) && tg > 0 ? Math.round(tg * 1024 * 1024 * 1024) : 0;
 
-    const selectedNodeIds = Object.entries(nodeIds)
-      .filter(([, v]) => v)
-      .map(([k]) => Number(k))
-      .filter((n) => n > 0);
+    const bindingsPayload = nodeBindings
+      .filter((b) => b.nodeId > 0)
+      .map((b) => ({
+        nodeId: b.nodeId,
+        publishedAddress: b.publishedAddress.trim(),
+        publishedPort: Math.max(0, Math.floor(Number(b.publishedPort)) || 0),
+        includeInSubscription: b.includeInSubscription,
+        subscriptionRemarkSuffix: b.subscriptionRemarkSuffix.trim(),
+      }));
 
     const body: Record<string, unknown> = {
       remark: joinNameFlag(form.nameFlag, form.remark),
@@ -937,15 +1000,15 @@ export function InboundsPage() {
     if (form.protocol === "wireguard") {
       body.wireguard = buildWireguardInboundApiPayload(form.wireguardForm);
     }
-    if (selectedNodeIds.length > 0) {
-      body.nodeIds = selectedNodeIds;
+    if (bindingsPayload.length > 0) {
+      body.nodeBindings = bindingsPayload;
     }
     return { ok: true, body };
   }, [
     baselineSettings,
     editId,
     form,
-    nodeIds,
+    nodeBindings,
     preserveTraffic,
     t,
   ]);
@@ -1079,8 +1142,19 @@ export function InboundsPage() {
           down: ib.down ?? 0,
           allTime: ib.allTime ?? 0,
         };
-        const nids = ib.nodeIds?.filter((n) => n > 0) ?? [];
-        if (nids.length > 0) body.nodeIds = nids;
+        const nb = (ib.nodeBindings ?? []).filter((b) => (b.nodeId ?? 0) > 0);
+        if (nb.length > 0) {
+          body.nodeBindings = nb.map((b) => ({
+            nodeId: b.nodeId,
+            publishedAddress: (b.publishedAddress ?? "").trim(),
+            publishedPort: b.publishedPort ?? 0,
+            includeInSubscription: b.includeInSubscription !== false,
+            subscriptionRemarkSuffix: (b.subscriptionRemarkSuffix ?? "").trim(),
+          }));
+        } else {
+          const nids = ib.nodeIds?.filter((n) => n > 0) ?? [];
+          if (nids.length > 0) body.nodeIds = nids;
+        }
         const up = await postJson<unknown>(panel(`api/inbounds/update/${id}`), body, true);
         if (up.success) {
           toast.success(
@@ -1379,6 +1453,15 @@ export function InboundsPage() {
               <Plus size={16} />
               {t("pages.inbounds.addInbound")}
             </Button>
+            <SectionHelpModal
+              titleKey="pages.inbounds.helpModalTitle"
+              paragraphKeys={[
+                "pages.inbounds.helpModalP1",
+                "pages.inbounds.helpModalP2",
+                "pages.inbounds.helpModalP3",
+                "pages.inbounds.helpModalP4",
+              ]}
+            />
           </>
         }
       />
@@ -4345,17 +4428,154 @@ export function InboundsPage() {
                 <p className="mb-2 text-xs text-[var(--fg-muted)]">
                   {t("pages.inbounds.addInboundNodesHint")}
                 </p>
+                {nodeBindings.length > 0 ? (
+                  <div className="mb-3 space-y-2">
+                    <p className="text-[11px] font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
+                      {t("pages.inbounds.subscriptionNodeOrder", {
+                        defaultValue: "Subscription order & overrides",
+                      })}
+                    </p>
+                    {nodeBindings.map((row, idx) => {
+                      const meta = nodes.find((x) => x.id === row.nodeId);
+                      const title = meta?.name ?? `Node ${row.nodeId}`;
+                      return (
+                        <div
+                          key={row.nodeId}
+                          className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3"
+                        >
+                          <div className="mb-2 flex flex-wrap items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-sm font-medium text-[var(--fg)]">
+                              {title}{" "}
+                              <span className="font-normal text-[var(--fg-muted)]">
+                                (id: {row.nodeId})
+                              </span>
+                            </span>
+                            <div className="flex items-center gap-0.5">
+                              <IconButton
+                                type="button"
+                                label={t("pages.inbounds.moveBindingUp", {
+                                  defaultValue: "Move up",
+                                })}
+                                disabled={idx === 0}
+                                onClick={() => moveNodeBinding(idx, -1)}
+                              >
+                                <ArrowUp size={16} />
+                              </IconButton>
+                              <IconButton
+                                type="button"
+                                label={t("pages.inbounds.moveBindingDown", {
+                                  defaultValue: "Move down",
+                                })}
+                                disabled={idx >= nodeBindings.length - 1}
+                                onClick={() => moveNodeBinding(idx, 1)}
+                              >
+                                <ArrowDown size={16} />
+                              </IconButton>
+                            </div>
+                          </div>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            <label className="grid gap-1">
+                              <span className="text-[11px] text-[var(--fg-muted)]">
+                                {t("pages.inbounds.nodePublishedAddress", {
+                                  defaultValue: "Published address (optional)",
+                                })}
+                              </span>
+                              <Input
+                                value={row.publishedAddress}
+                                onChange={(e) =>
+                                  patchNodeBinding(row.nodeId, {
+                                    publishedAddress: e.target.value,
+                                  })
+                                }
+                                placeholder={t("pages.inbounds.nodePublishedAddressPh", {
+                                  defaultValue: "Empty = node address",
+                                })}
+                              />
+                            </label>
+                            <label className="grid gap-1">
+                              <span className="text-[11px] text-[var(--fg-muted)]">
+                                {t("pages.inbounds.nodePublishedPort", {
+                                  defaultValue: "Published port (0 = inbound)",
+                                })}
+                              </span>
+                              <Input
+                                type="number"
+                                min={0}
+                                value={row.publishedPort}
+                                onChange={(e) =>
+                                  patchNodeBinding(row.nodeId, {
+                                    publishedPort: e.target.value,
+                                  })
+                                }
+                              />
+                            </label>
+                          </div>
+                          <div className="mt-2">
+                            <CheckboxField
+                              label={t("pages.inbounds.includeInSubscription", {
+                                defaultValue: "Include in subscription",
+                              })}
+                              checked={row.includeInSubscription}
+                              onChange={(e) =>
+                                patchNodeBinding(row.nodeId, {
+                                  includeInSubscription: e.target.checked,
+                                })
+                              }
+                            />
+                          </div>
+                          <label className="mt-2 grid gap-1">
+                            <span className="text-[11px] text-[var(--fg-muted)]">
+                              {t("pages.inbounds.subscriptionRemarkSuffix", {
+                                defaultValue: "Remark suffix (optional)",
+                              })}
+                            </span>
+                            <Input
+                              value={row.subscriptionRemarkSuffix}
+                              onChange={(e) =>
+                                patchNodeBinding(row.nodeId, {
+                                  subscriptionRemarkSuffix: e.target.value,
+                                })
+                              }
+                            />
+                          </label>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.assignNodes", { defaultValue: "Assign nodes" })}
+                </p>
                 <div className="max-h-36 space-y-2 overflow-y-auto rounded-xl border border-[var(--border)] p-2">
-                  {nodes.map((n) => (
-                    <CheckboxField
-                      key={n.id}
-                      checked={!!nodeIds[n.id]}
-                      onChange={(e) =>
-                        setNodeIds((m) => ({ ...m, [n.id]: e.target.checked }))
-                      }
-                      label={`${n.name} (id: ${n.id})`}
-                    />
-                  ))}
+                  {nodes.map((n) => {
+                    const checked = nodeBindings.some((b) => b.nodeId === n.id);
+                    return (
+                      <CheckboxField
+                        key={n.id}
+                        checked={checked}
+                        onChange={(e) => {
+                          const on = e.target.checked;
+                          setNodeBindings((rows) => {
+                            if (on) {
+                              if (rows.some((r) => r.nodeId === n.id)) return rows;
+                              return [
+                                ...rows,
+                                {
+                                  nodeId: n.id,
+                                  publishedAddress: "",
+                                  publishedPort: "0",
+                                  includeInSubscription: true,
+                                  subscriptionRemarkSuffix: "",
+                                },
+                              ];
+                            }
+                            return rows.filter((r) => r.nodeId !== n.id);
+                          });
+                        }}
+                        label={`${n.name} (id: ${n.id})`}
+                      />
+                    );
+                  })}
                 </div>
               </InboundFormSection>
             ) : null}

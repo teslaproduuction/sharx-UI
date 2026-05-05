@@ -117,6 +117,25 @@ func (s *InboundService) updateInboundWithRetry(inbound *model.Inbound) (*model.
 	return result, needRestart, err
 }
 
+func enrichInboundNodeBindings(inbound *model.Inbound) {
+	if inbound == nil {
+		return
+	}
+	nodeService := NodeService{}
+	bindings, _ := nodeService.GetInboundNodeBindingViews(inbound.Id)
+	if len(bindings) > 0 {
+		inbound.NodeBindings = bindings
+		nodeIds := make([]int, len(bindings))
+		for i, b := range bindings {
+			nodeIds[i] = b.NodeId
+		}
+		inbound.NodeIds = nodeIds
+		return
+	}
+	inbound.NodeBindings = nil
+	inbound.NodeIds = []int{}
+}
+
 // GetInbounds retrieves all inbounds for a specific user.
 // Returns a slice of inbound models with their associated client statistics.
 // No caching - data is real-time via WebSocket.
@@ -128,23 +147,8 @@ func (s *InboundService) GetInbounds(userId int) ([]*model.Inbound, error) {
 		return nil, err
 	}
 
-	// Enrich with node assignments
-	nodeService := NodeService{}
 	for _, inbound := range result {
-		// Load all nodes for this inbound
-		nodes, err := nodeService.GetNodesForInbound(inbound.Id)
-		if err == nil && len(nodes) > 0 {
-			nodeIds := make([]int, len(nodes))
-			for i, node := range nodes {
-				nodeIds[i] = node.Id
-			}
-			inbound.NodeIds = nodeIds
-			// Don't set nodeId - it's deprecated and causes confusion
-			// nodeId is only for backward compatibility when receiving data from old clients
-		} else {
-			// Ensure empty array if no nodes assigned
-			inbound.NodeIds = []int{}
-		}
+		enrichInboundNodeBindings(inbound)
 
 		// Enrich client stats with UUID/SubId from inbound settings
 		clients, _ := s.GetClients(inbound)
@@ -178,23 +182,8 @@ func (s *InboundService) GetAllInbounds() ([]*model.Inbound, error) {
 		return nil, err
 	}
 
-	// Enrich with node assignments
-	nodeService := NodeService{}
 	for _, inbound := range inbounds {
-		// Load all nodes for this inbound
-		nodes, err := nodeService.GetNodesForInbound(inbound.Id)
-		if err == nil && len(nodes) > 0 {
-			nodeIds := make([]int, len(nodes))
-			for i, node := range nodes {
-				nodeIds[i] = node.Id
-			}
-			inbound.NodeIds = nodeIds
-			// Don't set nodeId - it's deprecated and causes confusion
-			// nodeId is only for backward compatibility when receiving data from old clients
-		} else {
-			// Ensure empty array if no nodes assigned
-			inbound.NodeIds = []int{}
-		}
+		enrichInboundNodeBindings(inbound)
 
 		// Enrich client stats with UUID/SubId from inbound settings
 		clients, _ := s.GetClients(inbound)
@@ -876,21 +865,7 @@ func (s *InboundService) GetInbound(id int) (*model.Inbound, error) {
 	logger.Debugf("[DEBUG-AGENT] GetInbound: SUCCESS, inboundId=%d, userId=%d", id, inbound.UserId)
 	// #endregion
 
-	// Enrich with node assignments
-	nodeService := NodeService{}
-	nodes, err := nodeService.GetNodesForInbound(inbound.Id)
-	if err == nil && len(nodes) > 0 {
-		nodeIds := make([]int, len(nodes))
-		for i, node := range nodes {
-			nodeIds[i] = node.Id
-		}
-		inbound.NodeIds = nodeIds
-		// Don't set nodeId - it's deprecated and causes confusion
-		// nodeId is only for backward compatibility when receiving data from old clients
-	} else {
-		// Ensure empty array if no nodes assigned
-		inbound.NodeIds = []int{}
-	}
+	enrichInboundNodeBindings(inbound)
 
 	return inbound, nil
 }

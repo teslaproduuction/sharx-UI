@@ -11,6 +11,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
+	"github.com/konstpic/sharx-code/v2/web/websocket"
 
 	"github.com/gin-gonic/gin"
 )
@@ -35,6 +36,7 @@ func (a *HostController) initRouter(g *gin.RouterGroup) {
 	g.GET("/get/:id", a.getHost)
 	g.POST("/add", a.addHost)
 	g.POST("/update/:id", a.updateHost)
+	g.POST("/subscription-bindings/:id", a.saveHostSubscriptionBindings)
 	g.POST("/del/:id", a.deleteHost)
 }
 
@@ -231,6 +233,37 @@ func (a *HostController) updateHost(c *gin.Context) {
 	}
 
 	jsonMsgObj(c, I18nWeb(c, "pages.hosts.toasts.hostUpdateSuccess"), host, nil)
+}
+
+// saveHostSubscriptionBindings updates subscription node bindings for inbounds assigned to this host.
+func (a *HostController) saveHostSubscriptionBindings(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid host ID", err)
+		return
+	}
+	user := session.GetLoginUser(c)
+
+	var body struct {
+		Inbounds []service.HostInboundSubscriptionSaveItem `json:"inbounds"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		jsonMsg(c, "Invalid JSON", err)
+		return
+	}
+
+	err = a.hostService.SaveHostInboundSubscriptionBindings(user.Id, id, body.Inbounds)
+	if err != nil {
+		logger.Errorf("saveHostSubscriptionBindings host=%d: %v", id, err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+
+	jsonMsg(c, I18nWeb(c, "pages.hosts.toasts.subscriptionBindingsSaved"), nil)
+
+	inboundSvc := service.InboundService{}
+	inbounds, _ := inboundSvc.GetInbounds(user.Id)
+	websocket.BroadcastInbounds(inbounds)
 }
 
 // deleteHost deletes a host by ID.

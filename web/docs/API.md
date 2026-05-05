@@ -4207,7 +4207,7 @@ curl -X POST "http://localhost:2053/panel/client/hwid/fix-timestamps" \
 
 Base path: `/panel/host`
 
-Hosts are used to override node addresses when generating subscription links.
+Hosts are used to override node addresses when generating subscription links (multi-node / CDN scenarios). Optional **`subscription*`** fields further override TLS and transport parameters in generated client URIs **only for rows whose address comes from this host** (the CDN/host line). Rows built from node addresses (when using `prepend` / `append`) keep the inbound’s TLS and transport parameters unless you change the inbound itself. When external proxies are configured, those rows use the same host overrides if this host is mapped to the inbound.
 
 ### GET `/panel/host/list`
 
@@ -4279,7 +4279,16 @@ Create a new host.
 | `protocol` | string | No | Protocol override |
 | `remark` | string | No | Description |
 | `enable` | boolean | No | Enable host (default: true) |
+| `subscriptionApplyMode` | string | No | How addresses combine with nodes: `replace`, `prepend`, `append` (default `replace`) |
+| `subscriptionSni` | string | No | Override `sni` on host/external-proxy subscription rows (not on prepend/append node rows) |
+| `subscriptionHttpHost` | string | No | Override HTTP `host` / gRPC `authority` on host/external-proxy rows where applicable |
+| `subscriptionPath` | string | No | Override `path` / gRPC `serviceName` on host/external-proxy rows |
+| `subscriptionAlpn` | string | No | Comma-separated ALPN on host/external-proxy rows |
+| `subscriptionFingerprint` | string | No | Override TLS fingerprint (`fp`) on host/external-proxy rows |
+| `subscriptionAllowInsecure` | boolean \| null | No | On host/external-proxy rows: `null` = use inbound; `true`/`false` to force |
 | `inboundIds` | array | No | Array of inbound IDs |
+
+For **subscription bindings** (per-node rows in the subscription), see the endpoint below.
 
 **Example Request:**
 
@@ -4319,6 +4328,35 @@ curl -X POST "http://localhost:2053/panel/host/update/1" \
   -b cookies.txt \
   -d '{"address": "new-cdn.example.com"}'
 ```
+
+---
+
+### POST `/panel/host/subscription-bindings/{id}`
+
+Updates subscription-facing fields (`published_address`, `published_port`, `include_in_subscription`, `subscription_remark_suffix`, ordering) on **inbound↔node** mappings for inbounds currently assigned to this host.
+
+**Request Body** (JSON):
+
+```json
+{
+  "inbounds": [
+    {
+      "inboundId": 1,
+      "nodeBindings": [
+        {
+          "nodeId": 2,
+          "publishedAddress": "",
+          "publishedPort": 0,
+          "includeInSubscription": true,
+          "subscriptionRemarkSuffix": ""
+        }
+      ]
+    }
+  ]
+}
+```
+
+Items with empty `nodeBindings` are ignored.
 
 ---
 

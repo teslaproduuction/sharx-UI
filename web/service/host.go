@@ -2,6 +2,8 @@
 package service
 
 import (
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/database"
@@ -14,6 +16,15 @@ import (
 
 // HostService provides business logic for managing hosts.
 type HostService struct{}
+
+func normalizeHostSubscriptionOverrides(h *model.Host) {
+	h.SubscriptionSNI = strings.TrimSpace(h.SubscriptionSNI)
+	h.SubscriptionHttpHost = strings.TrimSpace(h.SubscriptionHttpHost)
+	h.SubscriptionPath = strings.TrimSpace(h.SubscriptionPath)
+	h.SubscriptionAlpn = strings.TrimSpace(h.SubscriptionAlpn)
+	h.SubscriptionFingerprint = strings.TrimSpace(h.SubscriptionFingerprint)
+	h.SubscriptionApplyMode = model.NormalizeHostSubscriptionApplyMode(h.SubscriptionApplyMode)
+}
 
 // GetHosts retrieves all hosts for a specific user.
 func (s *HostService) GetHosts(userId int) ([]*model.Host, error) {
@@ -106,6 +117,8 @@ func (s *HostService) AddHost(userId int, host *model.Host) error {
 	}
 	host.UpdatedAt = now
 
+	normalizeHostSubscriptionOverrides(host)
+
 	db := database.GetDB()
 	tx := db.Begin()
 	var err error
@@ -167,6 +180,18 @@ func (s *HostService) UpdateHost(userId int, host *model.Host) error {
 	// Port 0 is valid (use inbound port). When name+address are set (full form edit), always persist port.
 	if host.Name != "" && host.Address != "" {
 		updates["port"] = host.Port
+		updates["subscription_apply_mode"] = model.NormalizeHostSubscriptionApplyMode(host.SubscriptionApplyMode)
+		normalizeHostSubscriptionOverrides(host)
+		updates["subscription_sni"] = host.SubscriptionSNI
+		updates["subscription_http_host"] = host.SubscriptionHttpHost
+		updates["subscription_path"] = host.SubscriptionPath
+		updates["subscription_alpn"] = host.SubscriptionAlpn
+		updates["subscription_fp"] = host.SubscriptionFingerprint
+		if host.SubscriptionAllowInsecure != nil {
+			updates["subscription_allow_insecure"] = *host.SubscriptionAllowInsecure
+		} else {
+			updates["subscription_allow_insecure"] = gorm.Expr("NULL")
+		}
 	} else if host.Port > 0 {
 		updates["port"] = host.Port
 	}
@@ -237,6 +262,57 @@ func (s *HostService) DeleteHost(userId int, id int) error {
 		return err
 	}
 
+	return nil
+}
+
+// HostInboundSubscriptionSaveItem updates subscription-facing node rows for one inbound from the Hosts UI.
+type HostInboundSubscriptionSaveItem struct {
+	InboundId    int                       `json:"inboundId"`
+	NodeBindings []InboundNodeBindingInput `json:"nodeBindings"`
+}
+
+// SaveHostInboundSubscriptionBindings applies node subscription overrides for inbounds linked to hostId.
+// Each item must reference an inbound currently mapped to this host and owned by userId.
+// Items with empty NodeBindings are skipped (caller should omit or avoid clearing mappings from this API).
+func (s *HostService) SaveHostInboundSubscriptionBindings(userId int, hostId int, items []HostInboundSubscriptionSaveItem) error {
+	host, err := s.GetHost(hostId)
+	if err != nil {
+		return err
+	}
+	if host.UserId != userId {
+		return common.NewError("Host not found or access denied")
+	}
+	allowed := make(map[int]struct{}, len(host.InboundIds))
+	for _, id := range host.InboundIds {
+		if id > 0 {
+			allowed[id] = struct{}{}
+		}
+	}
+
+	inboundSvc := InboundService{}
+	nodeSvc := NodeService{}
+
+	for _, item := range items {
+		if item.InboundId <= 0 {
+			continue
+		}
+		if len(item.NodeBindings) == 0 {
+			continue
+		}
+		if _, ok := allowed[item.InboundId]; !ok {
+			return common.NewError(fmt.Sprintf("Inbound %d is not assigned to this host", item.InboundId))
+		}
+		ib, err := inboundSvc.GetInbound(item.InboundId)
+		if err != nil {
+			return fmt.Errorf("inbound %d: %w", item.InboundId, err)
+		}
+		if ib.UserId != userId {
+			return common.NewError("Inbound access denied")
+		}
+		if err := nodeSvc.AssignInboundToNodesWithBindings(item.InboundId, item.NodeBindings); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

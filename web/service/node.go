@@ -566,7 +566,7 @@ func (s *NodeService) GetNodeForInbound(inboundId int) (*model.Node, error) {
 func (s *NodeService) GetNodesForInbound(inboundId int) ([]*model.Node, error) {
 	db := database.GetDB()
 	var mappings []model.InboundNodeMapping
-	err := db.Where("inbound_id = ?", inboundId).Find(&mappings).Error
+	err := db.Where("inbound_id = ?", inboundId).Order("sort_order ASC, id ASC").Find(&mappings).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1756,75 +1756,181 @@ func (s *NodeService) CollectNodeStats() error {
 	return nil
 }
 
-// AssignInboundToNode assigns an inbound to a node.
-func (s *NodeService) AssignInboundToNode(inboundId, nodeId int) error {
-	db := database.GetDB()
-	mapping := &model.InboundNodeMapping{
-		InboundId: inboundId,
-		NodeId:    nodeId,
-	}
-	return db.Save(mapping).Error
+// InboundNodeBindingInput configures subscription-facing fields when assigning nodes to an inbound (panel/API).
+type InboundNodeBindingInput struct {
+	NodeId                   int    `json:"nodeId"`
+	PublishedAddress         string `json:"publishedAddress"`
+	PublishedPort            int    `json:"publishedPort"`
+	IncludeInSubscription    *bool  `json:"includeInSubscription,omitempty"`
+	SubscriptionRemarkSuffix string `json:"subscriptionRemarkSuffix"`
 }
 
-// AssignInboundToNodes assigns an inbound to multiple nodes.
+func (in InboundNodeBindingInput) effectiveIncludeInSubscription() bool {
+	if in.IncludeInSubscription == nil {
+		return true
+	}
+	return *in.IncludeInSubscription
+}
+
+// InboundNodeSubRow pairs a mapping row with its node for subscription link generation.
+type InboundNodeSubRow struct {
+	Mapping model.InboundNodeMapping
+	Node    *model.Node
+}
+
+func dedupeInboundBindingNodes(bindings []InboundNodeBindingInput) []InboundNodeBindingInput {
+	seen := make(map[int]struct{}, len(bindings))
+	out := make([]InboundNodeBindingInput, 0, len(bindings))
+	for _, b := range bindings {
+		if b.NodeId <= 0 {
+			continue
+		}
+		if _, ok := seen[b.NodeId]; ok {
+			continue
+		}
+		seen[b.NodeId] = struct{}{}
+		out = append(out, b)
+	}
+	return out
+}
+
+// GetInboundNodeBindingViews returns ordered subscription-binding rows for the panel.
+func (s *NodeService) GetInboundNodeBindingViews(inboundId int) ([]model.InboundNodeBindingView, error) {
+	db := database.GetDB()
+	var mappings []model.InboundNodeMapping
+	if err := db.Where("inbound_id = ?", inboundId).Order("sort_order ASC, id ASC").Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+	out := make([]model.InboundNodeBindingView, 0, len(mappings))
+	for _, m := range mappings {
+		v := model.InboundNodeBindingView{
+			NodeId:                   m.NodeId,
+			SortOrder:                m.SortOrder,
+			PublishedAddress:         m.PublishedAddress,
+			PublishedPort:            m.PublishedPort,
+			IncludeInSubscription:    m.IncludeInSubscription,
+			SubscriptionRemarkSuffix: m.SubscriptionRemarkSuffix,
+		}
+		if node, err := s.GetNode(m.NodeId); err == nil && node != nil {
+			v.NodeName = node.Name
+		}
+		out = append(out, v)
+	}
+	return out, nil
+}
+
+// GetInboundNodeSubscriptionRows returns mappings with nodes in subscription order.
+func (s *NodeService) GetInboundNodeSubscriptionRows(inboundId int) ([]InboundNodeSubRow, error) {
+	db := database.GetDB()
+	var mappings []model.InboundNodeMapping
+	if err := db.Where("inbound_id = ?", inboundId).Order("sort_order ASC, id ASC").Find(&mappings).Error; err != nil {
+		return nil, err
+	}
+	out := make([]InboundNodeSubRow, 0, len(mappings))
+	for _, m := range mappings {
+		node, err := s.GetNode(m.NodeId)
+		if err != nil || node == nil {
+			continue
+		}
+		out = append(out, InboundNodeSubRow{Mapping: m, Node: node})
+	}
+	return out, nil
+}
+
+// AssignInboundToNode assigns an inbound to a node.
+func (s *NodeService) AssignInboundToNode(inboundId, nodeId int) error {
+	return s.AssignInboundToNodesWithBindings(inboundId, []InboundNodeBindingInput{{NodeId: nodeId}})
+}
+
+// AssignInboundToNodes assigns an inbound to multiple nodes (subscription defaults; preserves prior overrides when fields are omitted).
 func (s *NodeService) AssignInboundToNodes(inboundId int, nodeIds []int) error {
+	bindings := make([]InboundNodeBindingInput, 0, len(nodeIds))
+	for _, id := range nodeIds {
+		if id <= 0 {
+			continue
+		}
+		bindings = append(bindings, InboundNodeBindingInput{NodeId: id})
+	}
+	return s.AssignInboundToNodesWithBindings(inboundId, bindings)
+}
+
+// AssignInboundToNodesWithBindings replaces inbound↔node mappings including subscription overrides.
+func (s *NodeService) AssignInboundToNodesWithBindings(inboundId int, bindings []InboundNodeBindingInput) error {
+	bindings = dedupeInboundBindingNodes(bindings)
 	db := database.GetDB()
 
-	// Get the inbound to check its port
 	var inbound model.Inbound
 	if err := db.Where("id = ?", inboundId).First(&inbound).Error; err != nil {
 		return fmt.Errorf("failed to get inbound %d: %w", inboundId, err)
 	}
 
-	// Check for port conflicts: one node cannot be assigned to two inbounds with the same port
-	for _, nodeId := range nodeIds {
-		if nodeId > 0 {
-			// Get all inbounds currently assigned to this node
-			existingInbounds, err := s.GetInboundsForNode(nodeId)
-			if err != nil {
-				return fmt.Errorf("failed to get inbounds for node %d: %w", nodeId, err)
-			}
+	nodeIds := make([]int, 0, len(bindings))
+	for _, b := range bindings {
+		nodeIds = append(nodeIds, b.NodeId)
+	}
 
-			// Check if any existing inbound has the same port (excluding the current inbound)
-			for _, existingInbound := range existingInbounds {
-				if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port {
-					return fmt.Errorf("node %d is already assigned to inbound %d with port %d. One node cannot be assigned to two inbounds with the same port", nodeId, existingInbound.Id, inbound.Port)
-				}
+	for _, nodeId := range nodeIds {
+		if nodeId <= 0 {
+			continue
+		}
+		existingInbounds, err := s.GetInboundsForNode(nodeId)
+		if err != nil {
+			return fmt.Errorf("failed to get inbounds for node %d: %w", nodeId, err)
+		}
+		for _, existingInbound := range existingInbounds {
+			if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port {
+				return fmt.Errorf("node %d is already assigned to inbound %d with port %d. One node cannot be assigned to two inbounds with the same port", nodeId, existingInbound.Id, inbound.Port)
 			}
 		}
 	}
 
-	// Capture previous assignments to apply hot updates on nodes after DB mapping changes.
 	var oldMappings []model.InboundNodeMapping
 	if err := db.Where("inbound_id = ?", inboundId).Find(&oldMappings).Error; err != nil {
 		return err
 	}
+	oldByNode := make(map[int]model.InboundNodeMapping, len(oldMappings))
 	oldNodeIds := make([]int, 0, len(oldMappings))
 	for _, m := range oldMappings {
+		oldByNode[m.NodeId] = m
 		oldNodeIds = append(oldNodeIds, m.NodeId)
 	}
 
-	// First, remove all existing assignments
 	if err := db.Where("inbound_id = ?", inboundId).Delete(&model.InboundNodeMapping{}).Error; err != nil {
 		return err
 	}
 
-	// Then, create new assignments
-	for _, nodeId := range nodeIds {
-		if nodeId > 0 {
-			mapping := &model.InboundNodeMapping{
-				InboundId: inboundId,
-				NodeId:    nodeId,
-			}
-			if err := db.Create(mapping).Error; err != nil {
-				return err
-			}
+	for i, b := range bindings {
+		if b.NodeId <= 0 {
+			continue
+		}
+		hasExplicitInclude := b.IncludeInSubscription != nil
+		hasExplicitPubAddr := strings.TrimSpace(b.PublishedAddress) != ""
+		hasExplicitPubPort := b.PublishedPort != 0
+		hasExplicitSuffix := strings.TrimSpace(b.SubscriptionRemarkSuffix) != ""
+		legacyRow := !hasExplicitInclude && !hasExplicitPubAddr && !hasExplicitPubPort && !hasExplicitSuffix
+
+		m := model.InboundNodeMapping{
+			InboundId:                inboundId,
+			NodeId:                   b.NodeId,
+			SortOrder:                i * 10,
+			PublishedAddress:         strings.TrimSpace(b.PublishedAddress),
+			PublishedPort:            b.PublishedPort,
+			IncludeInSubscription:    b.effectiveIncludeInSubscription(),
+			SubscriptionRemarkSuffix: strings.TrimSpace(b.SubscriptionRemarkSuffix),
+		}
+		if prev, ok := oldByNode[b.NodeId]; ok && legacyRow {
+			m.PublishedAddress = prev.PublishedAddress
+			m.PublishedPort = prev.PublishedPort
+			m.SubscriptionRemarkSuffix = prev.SubscriptionRemarkSuffix
+			m.IncludeInSubscription = prev.IncludeInSubscription
+		}
+		if err := db.Create(&m).Error; err != nil {
+			return err
 		}
 	}
 
-	// Hot-sync assignment changes to workers: apply/remove inbound via node API without restart.
 	if err := s.syncInboundAssignmentToNodes(inboundId, oldNodeIds, nodeIds); err != nil {
-		logger.Warningf("AssignInboundToNodes: hot-sync failed for inbound %d: %v", inboundId, err)
+		logger.Warningf("AssignInboundToNodesWithBindings: hot-sync failed for inbound %d: %v", inboundId, err)
 	}
 	return nil
 }
