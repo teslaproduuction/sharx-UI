@@ -1001,7 +1001,7 @@ curl -X GET "http://localhost:2053/panel/api/server/status" \
 
 ### GET `/panel/api/server/cpuHistory/{bucket}`
 
-Get aggregated CPU usage history.
+Get aggregated CPU usage history for the panel host plus each worker node (when **multi-node mode** is enabled and the panel has collected samples). Each series is bucket-averaged; point timestamps are UNIX seconds (`t`).
 
 **Path Parameters:**
 
@@ -1016,19 +1016,33 @@ curl -X GET "http://localhost:2053/panel/api/server/cpuHistory/60" \
   -b cookies.txt
 ```
 
-**Response:**
+**Response (`obj`):**
 
 ```json
 {
-  "success": true,
-  "msg": "",
-  "obj": [
-    {"time": 1704067200, "cpu": 12.5},
-    {"time": 1704067260, "cpu": 15.2},
-    {"time": 1704067320, "cpu": 10.8}
+  "series": [
+    {
+      "key": "panel",
+      "name": "Panel",
+      "points": [{ "t": 1704067200, "cpu": 12.5 }]
+    },
+    {
+      "key": "node-3",
+      "nodeId": 3,
+      "name": "edge-ams-1",
+      "points": [{ "t": 1704067200, "cpu": 22.1 }]
+    }
   ]
 }
 ```
+
+---
+
+### GET `/panel/api/server/memHistory/{bucket}`
+
+Same as CPU history but **host memory usage percent** (0–100) per bucket. Point field is `mem`.
+
+**Allowed `bucket` values:** `2`, `30`, `60`, `120`, `180`, `300`.
 
 ---
 

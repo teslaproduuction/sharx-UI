@@ -142,6 +142,7 @@ type CellDisplayProps = {
 };
 
 export function CellDisplay({ value, fieldType, onEdit }: CellDisplayProps) {
+  const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
 
   const copyValue = (e: React.MouseEvent) => {
@@ -189,7 +190,7 @@ export function CellDisplay({ value, fieldType, onEdit }: CellDisplayProps) {
         <span
           className="cursor-pointer font-mono text-[11px] text-[var(--fg-muted)] hover:text-[var(--fg)]"
           onClick={onEdit}
-          title="Click to edit JSON"
+          title={t("pages.dbInspector.clickEditJson")}
         >
           {preview}
           {preview.length >= 60 ? "…" : ""}
@@ -198,7 +199,7 @@ export function CellDisplay({ value, fieldType, onEdit }: CellDisplayProps) {
           type="button"
           onClick={copyValue}
           className="ml-1 hidden rounded p-0.5 text-[var(--fg-subtle)] transition-colors hover:text-[var(--fg)] group-hover:flex"
-          aria-label="Copy value"
+          aria-label={t("pages.dbInspector.copyCellValue")}
         >
           {copied ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
         </button>
@@ -223,7 +224,7 @@ export function CellDisplay({ value, fieldType, onEdit }: CellDisplayProps) {
         type="button"
         onClick={copyValue}
         className="ml-1 hidden shrink-0 rounded p-0.5 text-[var(--fg-subtle)] transition-colors hover:text-[var(--fg)] group-hover:flex"
-        aria-label="Copy value"
+        aria-label={t("pages.dbInspector.copyCellValue")}
       >
         {copied ? <Check className="size-3 text-emerald-400" /> : <Copy className="size-3" />}
       </button>

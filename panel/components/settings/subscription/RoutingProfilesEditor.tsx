@@ -194,7 +194,7 @@ function ProfileCard({
           </span>
           <span className="truncate font-mono text-[10px] text-[var(--fg-subtle)]">{profile.id}</span>
         </button>
-        <Button type="button" variant="ghost" className="!px-2" onClick={onRemove} aria-label="Remove">
+        <Button type="button" variant="ghost" className="!px-2" onClick={onRemove} aria-label={t("subBuilder.clientRouting.removeProfileAria")}>
           <Trash2 className="size-4 text-[var(--danger,#f87171)]" />
         </Button>
       </div>
@@ -289,7 +289,7 @@ function ProfileCard({
                     <Input
                       value={profile.deepLinkCustomPrefix ?? ""}
                       onChange={(e) => onPatch({ ...profile, deepLinkCustomPrefix: e.target.value })}
-                      placeholder="myapp://routing/add/"
+                      placeholder={t("subBuilder.clientRouting.customPrefixPlaceholder")}
                     />
                     <p className="mt-1 text-[10px] text-[var(--fg-subtle)]">
                       {t("subBuilder.clientRouting.customPrefixHint", {
@@ -338,7 +338,7 @@ function ProfileCard({
                   className={textareaClass + " min-h-[72px]"}
                   value={importText}
                   onChange={(e) => setImportText(e.target.value)}
-                  placeholder="incy://routing/add/…"
+                  placeholder={t("subBuilder.clientRouting.importPastePlaceholder")}
                 />
                 <div className="mt-2 flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" className="!gap-2" onClick={applyImport}>
@@ -390,7 +390,7 @@ function ProfileCard({
                       </div>
                     ) : subTab === "basic" ? (
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                        <Field label="Name">
+                        <Field label={t("subBuilder.clientRouting.routingProfileName")}>
                           <Input value={inlineCfg.Name} onChange={(e) => setInline({ Name: e.target.value })} />
                         </Field>
                         <Field
@@ -399,7 +399,7 @@ function ProfileCard({
                           <Switch
                             checked={inlineCfg.GlobalProxy === "true"}
                             onChange={(v) => setInline({ GlobalProxy: v ? "true" : "false" })}
-                            ariaLabel="Global proxy"
+                            ariaLabel={t("subBuilder.clientRouting.globalProxy", { defaultValue: "Global proxy" })}
                           />
                         </Field>
                         <Field label={t("subBuilder.clientRouting.routeOrder", { defaultValue: "Route order" })}>

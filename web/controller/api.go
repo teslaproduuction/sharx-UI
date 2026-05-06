@@ -186,7 +186,7 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 	node := findNodeByAddressForLogPush(nodes, req.NodeAddress)
 	if node == nil {
 		logger.Debugf("HMAC log push: no node for address %s", req.NodeAddress)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
 		return
 	}
 
@@ -313,7 +313,7 @@ func (a *APIController) pushNodeGeo(c *gin.Context) {
 	}
 	if node == nil {
 		logger.Debugf("HMAC geo push: no node for address %s", req.NodeAddress)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
 		return
 	}
 
@@ -386,11 +386,11 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	}
 	if node == nil {
 		logger.Debugf("HMAC pull-xray-config: no node for address %s", req.NodeAddress)
-		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unknown node for address"})
+		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
 		return
 	}
 	if !node.Enable {
-		c.JSON(http.StatusForbidden, gin.H{"error": "Node is disabled"})
+		c.JSON(http.StatusForbidden, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.nodeDisabled")})
 		return
 	}
 
@@ -398,19 +398,19 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	configJSON, err := xraySvc.BuildWorkerXrayConfigForNode(node)
 	if err != nil {
 		logger.Errorf("pull-xray-config build for node %d: %v", node.Id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.buildFailed")})
 		return
 	}
 	ibs, err := xraySvc.InboundsForWorkerNode(node)
 	if err != nil {
 		logger.Errorf("pull-xray-config inbounds for node %d: %v", node.Id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.buildFailed")})
 		return
 	}
 	telemtPayloads, err := service.BuildTelemtPayloadsForNode(node, ibs)
 	if err != nil {
 		logger.Errorf("pull-xray-config telemt for node %d: %v", node.Id, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		c.JSON(http.StatusInternalServerError, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.buildFailed")})
 		return
 	}
 

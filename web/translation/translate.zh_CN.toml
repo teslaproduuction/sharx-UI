@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "未添加Fake DNS服务器。"
 emptyBalancersDesc = "未添加负载均衡器。"
 emptyReverseDesc = "未添加反向代理。"
 somethingWentWrong = "出了点问题"
+"api.pullXrayConfig.buildFailed" = "构建配置失败"
+"api.pullXrayConfig.unknownNode" = "该地址对应的节点未知"
+"api.pullXrayConfig.nodeDisabled" = "节点已禁用"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "CPU 历史"
+resourceSeriesPanel = "面板主机"
 nodesAvailability = "节点可用性"
 database = "数据库"
 dbSize = "大小"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "关闭侧边栏"
+clickEditJson = "点击编辑 JSON"
+copyCellValue = "复制值"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "获取链接"
+scanQrCode = "在应用中扫描二维码"
+scanQrCodeDescription = "或复制下方链接并粘贴到 VPN 客户端。"
+copyLink = "复制链接"
+connectionKeys = "连接密钥"
+copyProxyLink = "复制代理链接"
+
+[pages.publicSub.step.install]
+title = "安装应用"
+textDownload = "使用下方按钮下载 {{app}}。"
+textStore = "从您平台的官方应用商店安装 {{app}}。"
+
+[pages.publicSub.step.addSub]
+title = "添加订阅"
+text = "使用下方的「添加订阅」按钮自动导入，或复制订阅地址并粘贴到应用中。"
+
+[pages.publicSub.step.connect]
+title = "连接"
+text = "选择服务器并开启隧道即可。"
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "添加 MTProto 代理"
+text = "点击「添加代理」（含义类似 VPN 应用的「添加订阅」）。复制链接请打开二维码，复制操作在其中。"
+
+[pages.publicSub.stepTelegram.done]
+title = "在 Telegram 中启用"
+text = "Telegram：设置 → 高级 → 连接类型 → 使用代理（不同版本用词可能略有不同）。"
+
+[pages.publicSub.mtproto]
+addProxy = "添加代理"
+
 
 [tgbot]
 keyboardClosed = "❌ 自定义键盘已关闭！"
@@ -2578,6 +2617,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "删除路由配置文件"
+  routingProfileName = "名称"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2649,6 +2692,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "我的 VPN"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "维护窗口：周五 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

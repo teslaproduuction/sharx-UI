@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "Nenhum servidor Fake DNS adicionado."
 emptyBalancersDesc = "Nenhum balanceador adicionado."
 emptyReverseDesc = "Nenhum proxy reverso adicionado."
 somethingWentWrong = "Algo deu errado"
+"api.pullXrayConfig.buildFailed" = "Falha ao gerar a configuração"
+"api.pullXrayConfig.unknownNode" = "Nó desconhecido para o endereço"
+"api.pullXrayConfig.nodeDisabled" = "Nó desabilitado"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "Histórico de CPU"
+resourceSeriesPanel = "Host do painel"
 nodesAvailability = "Disponibilidade dos nós"
 database = "Banco de dados"
 dbSize = "Tamanho"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "Fechar barra lateral"
+clickEditJson = "Clique para editar JSON"
+copyCellValue = "Copiar valor"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "Obter link"
+scanQrCode = "Escaneie o QR code no aplicativo"
+scanQrCodeDescription = "Ou copie o link abaixo e cole no cliente VPN."
+copyLink = "Copiar link"
+connectionKeys = "Chaves de conexão"
+copyProxyLink = "Copiar link do proxy"
+
+[pages.publicSub.step.install]
+title = "Instale o app"
+textDownload = "Baixe {{app}} com o botão abaixo."
+textStore = "Instale {{app}} pela loja oficial da sua plataforma."
+
+[pages.publicSub.step.addSub]
+title = "Adicionar assinatura"
+text = "Use «Adicionar assinatura» abaixo para importar automaticamente ou copie a URL da assinatura e cole no app."
+
+[pages.publicSub.step.connect]
+title = "Conectar"
+text = "Escolha um servidor e ative o túnel. Pronto."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "Adicionar proxy MTProto"
+text = "Toque em «Adicionar proxy» (mesma ideia de «Adicionar assinatura» no VPN). Para copiar o link abra o QR — a cópia fica lá."
+
+[pages.publicSub.stepTelegram.done]
+title = "Ativar no Telegram"
+text = "No Telegram: Ajustes → Avançado → Tipo de conexão → Usar proxy (o texto pode variar)."
+
+[pages.publicSub.mtproto]
+addProxy = "Adicionar proxy"
+
 
 [tgbot]
 keyboardClosed = "❌ Teclado fechado!"
@@ -2579,6 +2618,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "Remover perfil de roteamento"
+  routingProfileName = "Nome"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2650,6 +2693,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "Minha VPN"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "Janela de manutenção na sexta-feira às 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

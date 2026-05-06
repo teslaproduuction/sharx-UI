@@ -430,6 +430,9 @@ func (s *Server) forceReload(c *gin.Context) {
 // status returns the current status of XRAY.
 func (s *Server) status(c *gin.Context) {
 	status := s.xrayManager.GetStatus()
+	for k, v := range hostMetricsForStatusJSON() {
+		status[k] = v
+	}
 	c.JSON(http.StatusOK, status)
 }
 

@@ -1878,7 +1878,7 @@ func (s *NodeService) AssignInboundToNodesWithBindings(inboundId int, bindings [
 			return fmt.Errorf("failed to get inbounds for node %d: %w", nodeId, err)
 		}
 		for _, existingInbound := range existingInbounds {
-			if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port {
+			if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port && existingInbound.Listen == inbound.Listen {
 				return fmt.Errorf("node %d is already assigned to inbound %d with port %d. One node cannot be assigned to two inbounds with the same port", nodeId, existingInbound.Id, inbound.Port)
 			}
 		}

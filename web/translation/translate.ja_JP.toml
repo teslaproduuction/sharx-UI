@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "追加されたFake DNSサーバーはありません。"
 emptyBalancersDesc = "追加されたバランサーはありません。"
 emptyReverseDesc = "追加されたリバースプロキシはありません。"
 somethingWentWrong = "エラーが発生しました"
+"api.pullXrayConfig.buildFailed" = "設定の生成に失敗しました"
+"api.pullXrayConfig.unknownNode" = "このアドレスのノードが不明です"
+"api.pullXrayConfig.nodeDisabled" = "ノードが無効です"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "CPU 履歴"
+resourceSeriesPanel = "パネルホスト"
 nodesAvailability = "ノードの可用性"
 database = "データベース"
 dbSize = "サイズ"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "サイドバーを閉じる"
+clickEditJson = "クリックして JSON を編集"
+copyCellValue = "値をコピー"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "リンクを取得"
+scanQrCode = "アプリで QR コードをスキャン"
+scanQrCodeDescription = "または下のリンクをコピーして VPN クライアントに貼り付けます。"
+copyLink = "リンクをコピー"
+connectionKeys = "接続キー"
+copyProxyLink = "プロキシリンクをコピー"
+
+[pages.publicSub.step.install]
+title = "アプリをインストール"
+textDownload = "下のボタンから {{app}} をダウンロードしてください。"
+textStore = "お使いのプラットフォームの公式ストアから {{app}} をインストールしてください。"
+
+[pages.publicSub.step.addSub]
+title = "サブスクリプションを追加"
+text = "下の「サブスクリプションを追加」で自動インポートするか、サブスクリプション URL をコピーしてアプリに貼り付けます。"
+
+[pages.publicSub.step.connect]
+title = "接続"
+text = "サーバーを選びトンネルをオンにしてください。これだけです。"
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "MTProto プロキシを追加"
+text = "「プロキシを追加」を押します（VPN の「サブスク追加」と同様）。リンクをコピーするには QR を開いてください。"
+
+[pages.publicSub.stepTelegram.done]
+title = "Telegram で有効化"
+text = "Telegram: 設定 → 詳細 → 接続タイプ → プロキシを使用（表記はバージョンにより異なる場合があります）。"
+
+[pages.publicSub.mtproto]
+addProxy = "プロキシを追加"
+
 
 [tgbot]
 keyboardClosed = "❌ キーボードを閉じました！"
@@ -2578,6 +2617,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "ルーティングプロファイルを削除"
+  routingProfileName = "名前"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2649,6 +2692,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "マイVPN"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "メンテナンス告知：金曜 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

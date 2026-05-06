@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -148,6 +149,9 @@ type ServerService struct {
 	cpuHistory         []CPUSample
 	cachedCpuSpeedMhz  float64
 	lastCpuInfoAttempt time.Time
+	memHistory         []MemSample
+	workerHistory      map[int][]workerResourceSample
+	workerNames        map[int]string
 	geofileTaskMu      sync.Mutex
 	geofileTasks       map[string]*GeofileDownloadTask
 }
@@ -240,6 +244,199 @@ func (s *ServerService) AggregateCpuHistory(bucketSeconds int, maxPoints int) []
 type CPUSample struct {
 	T   int64   `json:"t"`   // unix seconds
 	Cpu float64 `json:"cpu"` // percent 0..100
+}
+
+// MemSample is host memory usage percent (0..100) at a point in time.
+type MemSample struct {
+	T   int64   `json:"t"`
+	Mem float64 `json:"mem"`
+}
+
+type workerResourceSample struct {
+	T   int64
+	Cpu float64
+	Mem float64
+}
+
+// AggregateMemHistory returns bucketed host memory usage percent (0..100).
+func (s *ServerService) AggregateMemHistory(bucketSeconds int, maxPoints int) []map[string]any {
+	if bucketSeconds <= 0 || maxPoints <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-time.Duration(bucketSeconds*maxPoints) * time.Second).Unix()
+	s.mu.Lock()
+	hist := s.memHistory
+	startIdx := 0
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].T < cutoff {
+			startIdx = i + 1
+			break
+		}
+	}
+	if startIdx >= len(hist) {
+		s.mu.Unlock()
+		return []map[string]any{}
+	}
+	slice := hist[startIdx:]
+	tmp := make([]MemSample, len(slice))
+	copy(tmp, slice)
+	s.mu.Unlock()
+	if len(tmp) == 0 {
+		return []map[string]any{}
+	}
+	var out []map[string]any
+	var acc []float64
+	bSize := int64(bucketSeconds)
+	curBucket := (tmp[0].T / bSize) * bSize
+	flush := func(ts int64) {
+		if len(acc) == 0 {
+			return
+		}
+		sum := 0.0
+		for _, v := range acc {
+			sum += v
+		}
+		avg := sum / float64(len(acc))
+		out = append(out, map[string]any{"t": ts, "mem": avg})
+		acc = acc[:0]
+	}
+	for _, p := range tmp {
+		b := (p.T / bSize) * bSize
+		if b != curBucket {
+			flush(curBucket)
+			curBucket = b
+		}
+		acc = append(acc, p.Mem)
+	}
+	flush(curBucket)
+	if len(out) > maxPoints {
+		out = out[len(out)-maxPoints:]
+	}
+	return out
+}
+
+func aggregateWorkerResourceField(hist []workerResourceSample, bucketSeconds, maxPoints int, useCpu bool) []map[string]any {
+	if bucketSeconds <= 0 || maxPoints <= 0 || len(hist) == 0 {
+		return []map[string]any{}
+	}
+	cutoff := time.Now().Add(-time.Duration(bucketSeconds*maxPoints) * time.Second).Unix()
+	startIdx := 0
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].T < cutoff {
+			startIdx = i + 1
+			break
+		}
+	}
+	if startIdx >= len(hist) {
+		return []map[string]any{}
+	}
+	tmp := hist[startIdx:]
+	var out []map[string]any
+	var acc []float64
+	bSize := int64(bucketSeconds)
+	curBucket := (tmp[0].T / bSize) * bSize
+	valKey := "mem"
+	if useCpu {
+		valKey = "cpu"
+	}
+	flush := func(ts int64) {
+		if len(acc) == 0 {
+			return
+		}
+		sum := 0.0
+		for _, v := range acc {
+			sum += v
+		}
+		avg := sum / float64(len(acc))
+		out = append(out, map[string]any{"t": ts, valKey: avg})
+		acc = acc[:0]
+	}
+	for _, p := range tmp {
+		b := (p.T / bSize) * bSize
+		if b != curBucket {
+			flush(curBucket)
+			curBucket = b
+		}
+		if useCpu {
+			acc = append(acc, p.Cpu)
+		} else {
+			acc = append(acc, p.Mem)
+		}
+	}
+	flush(curBucket)
+	if len(out) > maxPoints {
+		out = out[len(out)-maxPoints:]
+	}
+	return out
+}
+
+// AggregateWorkerCpuHistory returns bucketed CPU percent for a worker node (multi-node mode).
+func (s *ServerService) AggregateWorkerCpuHistory(nodeID int, bucketSeconds int, maxPoints int) []map[string]any {
+	s.mu.Lock()
+	hist := s.workerHistory[nodeID]
+	tmp := make([]workerResourceSample, len(hist))
+	copy(tmp, hist)
+	s.mu.Unlock()
+	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, true)
+}
+
+// AggregateWorkerMemHistory returns bucketed memory percent for a worker node (multi-node mode).
+func (s *ServerService) AggregateWorkerMemHistory(nodeID int, bucketSeconds int, maxPoints int) []map[string]any {
+	s.mu.Lock()
+	hist := s.workerHistory[nodeID]
+	tmp := make([]workerResourceSample, len(hist))
+	copy(tmp, hist)
+	s.mu.Unlock()
+	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, false)
+}
+
+// AppendWorkerResourceSample records one host resource sample from a worker (panel-polled).
+func (s *ServerService) AppendWorkerResourceSample(nodeID int, name string, t time.Time, cpu, memPct float64) {
+	const capacity = 9000
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workerHistory == nil {
+		s.workerHistory = make(map[int][]workerResourceSample)
+	}
+	if s.workerNames == nil {
+		s.workerNames = make(map[int]string)
+	}
+	if name != "" {
+		s.workerNames[nodeID] = name
+	}
+	p := workerResourceSample{T: t.Unix(), Cpu: cpu, Mem: memPct}
+	h := s.workerHistory[nodeID]
+	if n := len(h); n > 0 && h[n-1].T == p.T {
+		h[n-1] = p
+	} else {
+		h = append(h, p)
+	}
+	if len(h) > capacity {
+		h = h[len(h)-capacity:]
+	}
+	s.workerHistory[nodeID] = h
+}
+
+// WorkerResourceNodeIDs returns sorted node ids that have any worker resource history.
+func (s *ServerService) WorkerResourceNodeIDs() []int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]int, 0, len(s.workerHistory))
+	for id := range s.workerHistory {
+		ids = append(ids, id)
+	}
+	sort.Ints(ids)
+	return ids
+}
+
+// WorkerDisplayName returns the last known display name for a worker (from polling).
+func (s *ServerService) WorkerDisplayName(nodeID int) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.workerNames == nil {
+		return ""
+	}
+	return s.workerNames[nodeID]
 }
 
 type LogEntry struct {
@@ -580,6 +777,21 @@ func (s *ServerService) AppendCpuSample(t time.Time, v float64) {
 	}
 	if len(s.cpuHistory) > capacity {
 		s.cpuHistory = s.cpuHistory[len(s.cpuHistory)-capacity:]
+	}
+}
+
+func (s *ServerService) AppendMemSample(t time.Time, memPct float64) {
+	const capacity = 9000
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := MemSample{T: t.Unix(), Mem: memPct}
+	if n := len(s.memHistory); n > 0 && s.memHistory[n-1].T == p.T {
+		s.memHistory[n-1] = p
+	} else {
+		s.memHistory = append(s.memHistory, p)
+	}
+	if len(s.memHistory) > capacity {
+		s.memHistory = s.memHistory[len(s.memHistory)-capacity:]
 	}
 }
 

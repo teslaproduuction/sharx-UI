@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "مفيش سيرفر Fake DNS مضاف."
 emptyBalancersDesc = "مفيش موازن تحميل مضاف."
 emptyReverseDesc = "مفيش بروكسي عكسي مضاف."
 somethingWentWrong = "حدث خطأ ما"
+"api.pullXrayConfig.buildFailed" = "فشل في إنشاء الإعداد"
+"api.pullXrayConfig.unknownNode" = "عقدة غير معروفة لهذا العنوان"
+"api.pullXrayConfig.nodeDisabled" = "العقدة معطّلة"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "سجلُّ CPU"
+resourceSeriesPanel = "مضيف اللوحة"
 nodesAvailability = "توافر العقد"
 database = "قاعدة البيانات"
 dbSize = "الحجم"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "إغلاق الشريط الجانبي"
+clickEditJson = "انقر لتحرير JSON"
+copyCellValue = "نسخ القيمة"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "احصل على الرابط"
+scanQrCode = "امسح رمز QR ضمن التطبيق"
+scanQrCodeDescription = "أو انسخ الرابط أدناه والصقه في عميل الـVPN."
+copyLink = "نسخ الرابط"
+connectionKeys = "مفاتيح الاتصال"
+copyProxyLink = "نسخ رابط البروكسي"
+
+[pages.publicSub.step.install]
+title = "ثبِّت التطبيق"
+textDownload = "حمِّل {{app}} باستخدام الزر أدناه."
+textStore = "ثبِّت {{app}} من المتجر الرسمي لمنصّتك."
+
+[pages.publicSub.step.addSub]
+title = "إضافة اشتراك"
+text = "استخدم زر «إضافة اشتراك» أدناه للاستيراد تلقائياً، أو انسخ رابط الاشتراك والصقه في التطبيق."
+
+[pages.publicSub.step.connect]
+title = "اتصل"
+text = "اختر الخادماً وفعل النفق. هذا كل شيء."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "إضافة بروكسي MTProto"
+text = "اضغط «إضافة بروكسي» (نفس فكرة «إضافة اشتراك» في VPN). لنسخ الرابط افتح رمز QR — النسخ هناك."
+
+[pages.publicSub.stepTelegram.done]
+title = "فعّله في Telegram"
+text = "في Telegram: الإعدادات → متقدّم → نوع الاتصال → استخدام بروكسي (قد تختلف الصياغة)."
+
+[pages.publicSub.mtproto]
+addProxy = "إضافة بروكسي"
+
 
 [tgbot]
 keyboardClosed = "❌ لوحة المفاتيح مغلقة!"
@@ -2576,6 +2615,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "إزالة ملف التوجيه"
+  routingProfileName = "الاسم"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2647,6 +2690,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "شبكة VPN الخاصة بي"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "نافذة صيانة يوم الجمعة 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

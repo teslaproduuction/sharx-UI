@@ -2,7 +2,7 @@
 
 import { Plus, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
-import { IconButton, Input } from "@/components/ui";
+import { IconButton, Input, Switch } from "@/components/ui";
 import {
   defaultResponseRules,
   type ResponseRules,
@@ -34,6 +34,31 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
 
   return (
     <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold text-[var(--fg)]">
+            {t("subBuilder.responseRules.mtProtoToggle", {
+              defaultValue: "MTProto on subscription page",
+            })}
+          </div>
+          <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+            {t("subBuilder.responseRules.mtProtoToggleHint", {
+              defaultValue:
+                "When the subscription includes Telegram MTProto (Telemt) links, show a helper next to the installation guide with tg:// open, QR, and copy — same idea as connection keys.",
+            })}
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="text-xs font-medium text-[var(--fg-muted)]">
+            {t("subBuilder.responseRules.mtProtoToggleLabel", { defaultValue: "Show MTProto block" })}
+          </span>
+          <Switch
+            checked={rules.mtProtoEnabled !== false}
+            onChange={(on) => set({ mtProtoEnabled: on })}
+          />
+        </div>
+      </div>
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Field
           label={t("subBuilder.responseRules.profileTitle", {
@@ -47,7 +72,7 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
           <Input
             value={rules.profileTitle}
             onChange={(e) => set({ profileTitle: e.target.value })}
-            placeholder="My VPN"
+            placeholder={t("subBuilder.responseRules.profileTitlePlaceholder")}
             maxLength={200}
           />
         </Field>
@@ -70,7 +95,7 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
                 ),
               })
             }
-            placeholder="12"
+            placeholder={t("subBuilder.responseRules.updateIntervalPlaceholder")}
           />
         </Field>
       </div>
@@ -86,7 +111,7 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
         <Input
           value={rules.announce}
           onChange={(e) => set({ announce: e.target.value })}
-          placeholder="Maintenance window on Friday 22:00 UTC"
+          placeholder={t("subBuilder.responseRules.announcePlaceholder")}
           maxLength={200}
         />
       </Field>
@@ -103,7 +128,7 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
           <Input
             value={rules.supportUrl}
             onChange={(e) => set({ supportUrl: e.target.value })}
-            placeholder="https://t.me/your_support"
+            placeholder={t("subBuilder.responseRules.supportUrlPlaceholder")}
             type="url"
           />
         </Field>
@@ -119,7 +144,7 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
           <Input
             value={rules.profileWebPageUrl}
             onChange={(e) => set({ profileWebPageUrl: e.target.value })}
-            placeholder="https://example.com/account"
+            placeholder={t("subBuilder.responseRules.profileWebPageUrlPlaceholder")}
             type="url"
           />
         </Field>
@@ -166,12 +191,12 @@ export function ResponseRulesEditor({ config, onChange }: Props) {
                 <Input
                   value={h.key}
                   onChange={(e) => setHeader(i, { key: e.target.value })}
-                  placeholder="Sub-Info-Color"
+                  placeholder={t("subBuilder.responseRules.extraHeaderKeyPlaceholder")}
                 />
                 <Input
                   value={h.value}
                   onChange={(e) => setHeader(i, { value: e.target.value })}
-                  placeholder="blue"
+                  placeholder={t("subBuilder.responseRules.extraHeaderValuePlaceholder")}
                 />
                 <IconButton
                   label={t("delete", { defaultValue: "Delete" })}

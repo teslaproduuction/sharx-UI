@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "Tidak ada server Fake DNS yang ditambahkan."
 emptyBalancersDesc = "Tidak ada penyeimbang yang ditambahkan."
 emptyReverseDesc = "Tidak ada proxy terbalik yang ditambahkan."
 somethingWentWrong = "Terjadi kesalahan"
+"api.pullXrayConfig.buildFailed" = "Gagal menyusun konfigurasi"
+"api.pullXrayConfig.unknownNode" = "Node tidak dikenal untuk alamat ini"
+"api.pullXrayConfig.nodeDisabled" = "Node dinonaktifkan"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "Riwayat CPU"
+resourceSeriesPanel = "Host panel"
 nodesAvailability = "Ketersediaan node"
 database = "Basis data"
 dbSize = "Ukuran"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "Tutup bilah samping"
+clickEditJson = "Klik untuk mengedit JSON"
+copyCellValue = "Salin nilai"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "Ambil tautan"
+scanQrCode = "Pindai kode QR di aplikasi"
+scanQrCodeDescription = "Atau salin tautan di bawah ini dan tempel ke klien VPN."
+copyLink = "Salin tautan"
+connectionKeys = "Kunci koneksi"
+copyProxyLink = "Salin tautan proxy"
+
+[pages.publicSub.step.install]
+title = "Instal aplikasi"
+textDownload = "Unduh {{app}} menggunakan tombol di bawah."
+textStore = "Instal {{app}} dari toko resmi untuk platform Anda."
+
+[pages.publicSub.step.addSub]
+title = "Tambahkan langganan"
+text = "Gunakan tombol «Tambahkan langganan» di bawah untuk impor otomatis, atau salin URL langganan dan tempel ke aplikasi."
+
+[pages.publicSub.step.connect]
+title = "Hubungkan"
+text = "Pilih server dan aktifkan terowongan. Selesai."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "Tambahkan proxy MTProto"
+text = "Tekan «Tambahkan proxy» (konsep sama seperti «Tambahkan langganan» di VPN). Untuk menyalin tautan buka QR — salinan ada di sana."
+
+[pages.publicSub.stepTelegram.done]
+title = "Aktifkan di Telegram"
+text = "Telegram: Pengaturan → Lanjutan → Jenis koneksi → Gunakan proxy (teks bisa berbeda tiap versi)."
+
+[pages.publicSub.mtproto]
+addProxy = "Tambahkan proxy"
+
 
 [tgbot]
 keyboardClosed = "❌ Keyboard ditutup!"
@@ -2578,6 +2617,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "Hapus profil routing"
+  routingProfileName = "Nama"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2649,6 +2692,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "VPN saya"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "Jendela pemeliharaan Jumat pukul 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

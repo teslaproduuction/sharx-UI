@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "هیچ سرور Fake DNS اضافه نشده است."
 emptyBalancersDesc = "هیچ بالانسر اضافه نشده است."
 emptyReverseDesc = "هیچ پروکسی معکوس اضافه نشده است."
 somethingWentWrong = "مشکلی پیش آمد"
+"api.pullXrayConfig.buildFailed" = "ساخت پیکربندی ناموفق بود"
+"api.pullXrayConfig.unknownNode" = "گره ناشناخته برای این آدرس"
+"api.pullXrayConfig.nodeDisabled" = "گره غیرفعال است"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "تاریخچهٔ CPU"
+resourceSeriesPanel = "میزبان پنل"
 nodesAvailability = "دسترسی نودها"
 database = "پایگاه داده"
 dbSize = "اندازه"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "بستن نوار کناری"
+clickEditJson = "برای ویرایش JSON کلیک کنید"
+copyCellValue = "کپی مقدار"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "دریافت لینک"
+scanQrCode = "کد QR را در اپ اسکن کنید"
+scanQrCodeDescription = "یا لینک زیر را کپی کرده در VPN پیست کنید."
+copyLink = "کپی لینک"
+connectionKeys = "کلیدهای اتصال"
+copyProxyLink = "کپی لینک پروکسی"
+
+[pages.publicSub.step.install]
+title = "اپ را نصب کنید"
+textDownload = "{{app}} را با دکمه زیر دانلود کنید."
+textStore = "{{app}} را از فروشگاه رسمی برای پلتفرم خود نصب کنید."
+
+[pages.publicSub.step.addSub]
+title = "افزودن اشتراک"
+text = "برای ورود خودکار از دکمه «افزودن اشتراک» زیر استفاده کنید، یا آدرس اشتراک را کپی کرده در اپ پیست کنید."
+
+[pages.publicSub.step.connect]
+title = "اتصال"
+text = "سرور را انتخاب کنید و تونل را روشن کنید. تمام."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "افزودن پراکسی MTProto"
+text = "«افزودن پراکسی» را بزنید (معادل «افزودن اشتراک» در VPN). برای کپی، QR را باز کنید — عمل کپی همان‌جاست."
+
+[pages.publicSub.stepTelegram.done]
+title = "فعال‌سازی در تلگرام"
+text = "در تلگرام: تنظیمات → پیشرفته → نوع اتصال → استفاده از پراکسی (واژ‌ها ممکن است متفاوت باشند)."
+
+[pages.publicSub.mtproto]
+addProxy = "افزودن پروکسی"
+
 
 [tgbot]
 keyboardClosed = "❌ صفحه کلید بسته شد!"
@@ -2580,6 +2619,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "حذف نمایه مسیریابی"
+  routingProfileName = "نام"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2651,6 +2694,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "VPN من"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "پنجره نگهداری جمعه ۲۲:۰۰ UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

@@ -70,7 +70,7 @@ export function TableSidebar({
               type="button"
               onClick={onMobileClose}
               className="rounded-lg p-1 text-[var(--fg-muted)] transition-colors hover:bg-[var(--surface)] hover:text-[var(--fg)] md:hidden"
-              aria-label="Close"
+              aria-label={t("close")}
             >
               <X className="size-4" />
             </button>
@@ -144,7 +144,7 @@ export function TableSidebar({
       {mobileOpen && (
         <button
           type="button"
-          aria-label="Close sidebar"
+          aria-label={t("pages.dbInspector.closeSidebar")}
           className="fixed inset-0 z-40 bg-black/50 backdrop-blur-[2px] md:hidden"
           onClick={onMobileClose}
         />

@@ -1,6 +1,7 @@
 export { Spinner } from "./spinner";
 export { Button } from "./button";
 export { Input } from "./input";
+export { Textarea } from "./textarea";
 export { SelectNative } from "./select-native";
 export { Modal } from "./modal";
 export { Drawer } from "./drawer";

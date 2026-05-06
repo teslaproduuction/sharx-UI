@@ -623,6 +623,50 @@ func (s *SubService) genTelemtLinkWithClient(inbound *model.Inbound, client *mod
 	return b.String()
 }
 
+// TelemtTgProxyLinesForSubscription returns tg://proxy lines for the first-party subscription HTML page.
+// Telemt inbounds are excluded from GetSubs (see getInboundsBySubId allowed protocols), so VPN clients never
+// receive tg:// lines in the raw subscription body.
+func (s *SubService) TelemtTgProxyLinesForSubscription(subId string, host string) []string {
+	s.address = host
+	db := database.GetDB()
+	var client model.ClientEntity
+	if err := db.Where("sub_id = ? AND enable = ?", subId, true).First(&client).Error; err != nil {
+		return nil
+	}
+	var mappings []model.ClientInboundMapping
+	if err := db.Where("client_id = ?", client.Id).Order("sort_order ASC, id ASC").Find(&mappings).Error; err != nil || len(mappings) == 0 {
+		return nil
+	}
+	ids := make([]int, 0, len(mappings))
+	for _, m := range mappings {
+		ids = append(ids, m.InboundId)
+	}
+	var inbounds []*model.Inbound
+	if err := db.Model(&model.Inbound{}).Preload("ClientStats").Where("id IN ? AND enable = ?", ids, true).Find(&inbounds).Error; err != nil {
+		return nil
+	}
+	byID := make(map[int]*model.Inbound, len(inbounds))
+	for _, inb := range inbounds {
+		byID[inb.Id] = inb
+	}
+	var out []string
+	for _, m := range mappings {
+		inb, ok := byID[m.InboundId]
+		if !ok || model.NormalizeProtocol(inb.Protocol) != model.Telemt {
+			continue
+		}
+		prepared := s.prepareInboundForSubscription(inb)
+		link := s.getLinkWithClient(prepared, &client)
+		for _, line := range strings.Split(link, "\n") {
+			line = strings.TrimSpace(line)
+			if line != "" && strings.HasPrefix(strings.ToLower(line), "tg://proxy") {
+				out = append(out, line)
+			}
+		}
+	}
+	return out
+}
+
 // passwordForSubLink returns the secret for SS/Mixed links: ClientEntity first, then inbound settings (legacy/stale rows).
 func (s *SubService) passwordForSubLink(inbound *model.Inbound, client *model.ClientEntity) string {
 	if client == nil {

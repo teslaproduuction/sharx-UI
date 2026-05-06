@@ -47,6 +47,8 @@ export const subscriptionApps = [
   "foxray",
   "flclash",
   "amneziavpn",
+  /** Telegram: MTProto proxy (`tg://proxy…`) from the subscription; not the VPN subscription URL. */
+  "telegram",
   "custom",
 ] as const;
 export type SubscriptionApp = (typeof subscriptionApps)[number];
@@ -199,6 +201,13 @@ export const APP_CATALOG: Record<SubscriptionApp, AppCatalogEntry> = {
     deepLinkTemplate: "amnezia://add?config={urlEncoded}",
     supportsEncrypted: false,
     iconUrl: appFaviconUrl("amnezia.org"),
+  },
+  telegram: {
+    label: "Telegram",
+    platforms: ["ios", "android", "windows", "macos", "linux"],
+    deepLinkTemplate: "{url}",
+    supportsEncrypted: false,
+    iconUrl: appFaviconUrl("telegram.org"),
   },
   custom: {
     label: "Custom",
@@ -556,6 +565,8 @@ export const responseRulesSchema = z.object({
   announce: z.string().default(""),
   supportUrl: z.string().default(""),
   profileWebPageUrl: z.string().default(""),
+  /** When true, show Telegram MTProto (tg://) helper next to the installation guide when links include tg://proxy. */
+  mtProtoEnabled: z.boolean().default(true),
   extraHeaders: z.array(responseRuleHeaderSchema).default([]),
 });
 export type ResponseRules = z.infer<typeof responseRulesSchema>;
@@ -749,6 +760,7 @@ export function defaultResponseRules(): ResponseRules {
     announce: "",
     supportUrl: "",
     profileWebPageUrl: "",
+    mtProtoEnabled: true,
     extraHeaders: [],
   };
 }

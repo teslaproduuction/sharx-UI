@@ -27,6 +27,11 @@ export type PublicSubPayload = {
   happEncryptedUrl?: string;
   /** Optional deep-link URL for v2rayTun (v2raytun://crypt/...). */
   v2raytunEncryptedUrl?: string;
+  /**
+   * Telemt MTProto share links (tg://proxy?...) for the HTML page only.
+   * Not included in the raw VPN subscription feed (`links`).
+   */
+  mtProtoLinks?: string[];
 };
 
 export type SupportKind = "telegram" | "discord" | "vk" | "generic";
@@ -37,6 +42,25 @@ export function supportKindFromUrl(url: string): SupportKind {
   if (u.includes("discord")) return "discord";
   if (u.includes("vk.com") || u.includes("vkontakte")) return "vk";
   return "generic";
+}
+
+/** Subscription lines for Telemt MTProto (`tg://proxy?…`). Splits each entry on newlines (API may bundle several lines). */
+export function extractTgProxyLinks(links: string[]): string[] {
+  const out: string[] = [];
+  for (const raw of links) {
+    for (const part of raw.split("\n")) {
+      const s = part.trim();
+      if (s.toLowerCase().startsWith("tg://proxy")) out.push(s);
+    }
+  }
+  return out;
+}
+
+/** Prefer server-provided `mtProtoLinks`; fallback parse from `links` (legacy). */
+export function resolveMtProtoLinks(data: Pick<PublicSubPayload, "mtProtoLinks" | "links">): string[] {
+  const fromApi = data.mtProtoLinks;
+  if (fromApi && fromApi.length > 0) return fromApi;
+  return extractTgProxyLinks(data.links ?? []);
 }
 
 export function parseLinkTitle(url: string): string {
