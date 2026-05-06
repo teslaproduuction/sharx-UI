@@ -7,6 +7,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/telemt"
+	"github.com/konstpic/sharx-code/v2/xray"
 )
 
 var (
@@ -22,6 +23,11 @@ func getPanelTelemt() *telemt.Manager {
 		panelTelemt.SetWorkRoot(filepath.Join(config.GetDataFolderPath(), "telemt"))
 	}
 	return panelTelemt
+}
+
+// MergeLocalTelemtTrafficIntoXrayStats merges Telemt localhost API deltas into Xray-shaped stats (single-node panel).
+func MergeLocalTelemtTrafficIntoXrayStats(traffic *[]*xray.Traffic, clientTraffic *[]*xray.ClientTraffic) {
+	getPanelTelemt().MergeTelemtIntoNodeStats(traffic, clientTraffic, nil)
 }
 
 // StopLocalTelemtStandalone stops all Telemt sidecars managed by the panel process (standalone).
