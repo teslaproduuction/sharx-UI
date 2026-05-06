@@ -50,6 +50,8 @@ COPY conndrop/ ./conndrop/
 COPY xray/ ./xray/
 COPY sub/ ./sub/
 COPY node/ ./node/
+# Go API and services (.dockerignore omits web/panel/; static UI comes from panelui below).
+COPY web/ ./web/
 # Optional Telemt SharX fork binary (see scripts/build-telemt-sharx.sh); small layer, avoids Rust in image build.
 COPY third_party/telemt-sharx/prebuilt/ ./third_party/telemt-sharx/prebuilt/
 COPY main.go ./
