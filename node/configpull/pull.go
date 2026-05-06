@@ -11,13 +11,14 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 )
 
-// TryPullAndApply requests the latest Xray JSON from the panel and applies it if Xray is not running.
+// TryPullAndApply requests the latest Xray JSON (and optional Telemt payloads) from the panel and applies if Xray is not running.
 // Requires PANEL_URL, matching nodeAddress (as registered on the panel), and the outbound HMAC key.
-func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.Manager) {
+func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.Manager, telemtMgr *telemt.Manager) {
 	panelURL = strings.TrimSpace(panelURL)
 	nodeAddress = strings.TrimSpace(nodeAddress)
 	if panelURL == "" || nodeAddress == "" {
@@ -64,6 +65,7 @@ func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.M
 
 	var envelope struct {
 		Config json.RawMessage `json:"config"`
+		Telemt json.RawMessage `json:"telemt"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		logger.Warningf("Config pull: invalid JSON: %v", err)
@@ -79,4 +81,15 @@ func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.M
 		return
 	}
 	logger.Infof("Config pull: applied Xray configuration from panel (%d bytes)", len(envelope.Config))
+
+	if telemtMgr != nil && len(envelope.Telemt) > 0 && string(envelope.Telemt) != "null" {
+		var payloads []telemt.Payload
+		if err := json.Unmarshal(envelope.Telemt, &payloads); err != nil {
+			logger.Warningf("Config pull: telemt parse: %v", err)
+		} else if err := telemtMgr.Apply(payloads); err != nil {
+			logger.Warningf("Config pull: telemt apply: %v", err)
+		} else {
+			logger.Infof("Config pull: applied Telemt payloads (%d)", len(payloads))
+		}
+	}
 }

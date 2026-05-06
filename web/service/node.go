@@ -2038,7 +2038,9 @@ func (s *NodeService) syncInboundAssignmentToNodes(inboundId int, oldNodeIds, ne
 							recordErr(fmt.Errorf("build full worker config for node %s fallback: %w", node.Name, cfgErr))
 							return
 						}
-						if apErr := s.ApplyConfigToNode(node, cfgJSON); apErr != nil {
+						ibs, _ := xs.InboundsForWorkerNode(node)
+						telm, _ := BuildTelemtPayloadsForNode(node, ibs)
+						if apErr := s.ApplyConfigToNode(node, cfgJSON, &telm); apErr != nil {
 							recordErr(fmt.Errorf("fallback apply-config to node %s: %w", node.Name, apErr))
 							return
 						}
@@ -2148,8 +2150,9 @@ func (s *NodeService) UnassignOutboundFromNode(outboundId int) error {
 	return db.Where("outbound_id = ?", outboundId).Delete(&model.OutboundNodeMapping{}).Error
 }
 
-// ApplyConfigToNode sends XRAY configuration to a node.
-func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte) error {
+// ApplyConfigToNode sends XRAY JSON and optional Telemt TOML payloads to a node.
+// When telemt is non-nil, the array is always sent (empty slice stops all Telemt sidecars on the worker).
+func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, telemt *[]TelemtNodePayload) error {
 	// Use reasonable timeout for apply-config (30 seconds should be enough for most cases)
 	// If config is very large or node is slow, this can be increased
 	client, err := s.createHTTPClient(node, 30*time.Second)
@@ -2164,6 +2167,9 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte) err
 	}
 	if panelURL != "" {
 		requestBody["panelUrl"] = panelURL
+	}
+	if telemt != nil {
+		requestBody["telemt"] = *telemt
 	}
 
 	requestJSON, err := json.Marshal(requestBody)
@@ -2261,6 +2267,9 @@ func (s *NodeService) ApplySessionIPBlockRoutingToNode(node *model.Node, blocked
 
 // AddUserToNode adds a user to an inbound on a node via Xray API (instant, no restart).
 func (s *NodeService) AddUserToNode(node *model.Node, protocol, inboundTag string, user map[string]interface{}) error {
+	if model.NormalizeProtocol(model.Protocol(strings.ToLower(strings.TrimSpace(protocol)))) == model.Telemt {
+		return nil
+	}
 	client, err := s.createHTTPClient(node, 10*time.Second)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP client: %w", err)

@@ -314,6 +314,9 @@ func (s *XrayService) PreviewInboundCoreConfig(inbound *model.Inbound) (*xray.In
 	if inbound == nil {
 		return nil, errors.New("inbound is nil")
 	}
+	if !model.IsXrayInboundProtocol(inbound.Protocol) {
+		return nil, errors.New("preview is only available for Xray inbounds")
+	}
 	hyCert, _ := s.settingService.GetCertFile()
 	hyKey, _ := s.settingService.GetKeyFile()
 	if err := ApplyPanelInboundTransformsForXray(inbound); err != nil {
@@ -362,6 +365,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	hyKey, _ := s.settingService.GetKeyFile()
 	for _, inbound := range inbounds {
 		if !inbound.Enable {
+			continue
+		}
+		if !model.IsXrayInboundProtocol(inbound.Protocol) {
 			continue
 		}
 		if err := ApplyPanelInboundTransformsForXray(inbound); err != nil {
@@ -529,7 +535,9 @@ func (s *XrayService) ApplySessionIPBlockHotAfterDB(clientId int, email, normali
 					logger.Warningf("session IP block: build config for node %q: %v", n.Name, err)
 					continue
 				}
-				if err := ns.ApplyConfigToNode(n, cfgJSON); err != nil {
+				ibs, _ := s.InboundsForWorkerNode(n)
+				telm, _ := BuildTelemtPayloadsForNode(n, ibs)
+				if err := ns.ApplyConfigToNode(n, cfgJSON, &telm); err != nil {
 					logger.Warningf("session IP block: apply-config fallback node %q: %v", n.Name, err)
 				}
 			}
@@ -636,6 +644,9 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 	}
 
 	for _, inbound := range inbounds {
+		if !model.IsXrayInboundProtocol(inbound.Protocol) {
+			continue
+		}
 		settings := map[string]any{}
 		json.Unmarshal([]byte(inbound.Settings), &settings)
 		clients, ok := settings["clients"].([]any)
@@ -722,8 +733,8 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 	return json.MarshalIndent(&nodeConfig, "", "  ")
 }
 
-// BuildWorkerXrayConfigForNode returns the Xray config JSON for a worker node (same as apply-config payload).
-func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, error) {
+// InboundsForWorkerNode returns enabled inbounds assigned to the node (same set as worker Xray/Telemt sync).
+func (s *XrayService) InboundsForWorkerNode(node *model.Node) ([]*model.Inbound, error) {
 	if node == nil {
 		return nil, fmt.Errorf("node is nil")
 	}
@@ -733,28 +744,11 @@ func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, er
 	if s.inboundService == (InboundService{}) {
 		s.inboundService = InboundService{}
 	}
-	if s.settingService == (SettingService{}) {
-		s.settingService = SettingService{}
-	}
 
 	nodeInbounds := make(map[int][]*model.Inbound)
 	allInbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get inbounds: %w", err)
-	}
-
-	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
-		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in BuildWorkerXrayConfigForNode: %v", err)
-	}
-
-	templateConfig, err := s.settingService.GetXrayConfigTemplate()
-	if err != nil {
-		return nil, err
-	}
-
-	baseConfig := &xray.Config{}
-	if err := json.Unmarshal([]byte(templateConfig), baseConfig); err != nil {
-		return nil, err
 	}
 
 	for _, inbound := range allInbounds {
@@ -771,13 +765,43 @@ func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, er
 		}
 	}
 
-	hyCert, _ := s.settingService.GetCertFile()
-	hyKey, _ := s.settingService.GetKeyFile()
-
 	var ibs []*model.Inbound
 	if v, ok := nodeInbounds[node.Id]; ok {
 		ibs = v
 	}
+	return ibs, nil
+}
+
+// BuildWorkerXrayConfigForNode returns the Xray config JSON for a worker node (same as apply-config payload).
+func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, error) {
+	if node == nil {
+		return nil, fmt.Errorf("node is nil")
+	}
+	if s.settingService == (SettingService{}) {
+		s.settingService = SettingService{}
+	}
+
+	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
+		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in BuildWorkerXrayConfigForNode: %v", err)
+	}
+
+	templateConfig, err := s.settingService.GetXrayConfigTemplate()
+	if err != nil {
+		return nil, err
+	}
+
+	baseConfig := &xray.Config{}
+	if err := json.Unmarshal([]byte(templateConfig), baseConfig); err != nil {
+		return nil, err
+	}
+
+	ibs, err := s.InboundsForWorkerNode(node)
+	if err != nil {
+		return nil, err
+	}
+
+	hyCert, _ := s.settingService.GetCertFile()
+	hyKey, _ := s.settingService.GetKeyFile()
 	return s.buildNodeWorkerConfigJSON(node, ibs, baseConfig, hyCert, hyKey)
 }
 
@@ -866,7 +890,11 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 				return
 			}
 
-			if err := s.nodeService.ApplyConfigToNode(n, configJSON); err != nil {
+			telm, terr := BuildTelemtPayloadsForNode(n, ibs)
+			if terr != nil {
+				logger.Warningf("[Node: %s] Telemt payload build: %v", n.Name, terr)
+			}
+			if err := s.nodeService.ApplyConfigToNode(n, configJSON, &telm); err != nil {
 				logger.Errorf("[Node: %s] Failed to apply config: %v", n.Name, err)
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("node %s: %w", n.Name, err))

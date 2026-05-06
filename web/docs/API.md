@@ -445,7 +445,7 @@ Create a new inbound.
 | `expiryTime` | integer | No | Expiration timestamp in ms (0 = never) |
 | `listen` | string | No | Listen IP (empty = all interfaces) |
 | `port` | integer | Yes | Port number |
-| `protocol` | string | Yes | Protocol: `vmess`, `vless`, `trojan`, `shadowsocks`, `http`, `mixed` |
+| `protocol` | string | Yes | Protocol: `vmess`, `vless`, `trojan`, `shadowsocks`, `http`, `mixed`, `wireguard`, `telemt`, … |
 | `settings` | string | Yes | JSON string with protocol settings |
 | `streamSettings` | string | Yes | JSON string with stream settings |
 | `sniffing` | string | No | JSON string with sniffing settings |
@@ -4420,11 +4420,21 @@ curl -X POST "http://localhost:2053/panel/api/node/push-logs" \
 }
 ```
 
+### POST `/panel/api/node/pull-xray-config`
+
+HMAC-authenticated pull for worker nodes (no session cookie). Body includes at least `nodeAddress` (see node pairing). Returns **`config`** (Xray JSON for that node) and **`telemt`**: an array of `{ "inboundId", "tag", "toml" }` for Telemt MTProto sidecars. Telemt inbounds never appear inside `config.inbounds`.
+
+### Worker: POST `/api/v1/apply-config`
+
+Request body matches the pull response: **`config`** (Xray) plus optional **`telemt`**. If **`telemt` is omitted**, Telemt state on the node is left unchanged. **`telemt": []`** clears Telemt processes for that apply.
+
 ---
 
 ## 15. Subscription Server
 
 The subscription server runs on a separate port (default: 2096) and provides subscription links for proxy clients.
+
+Subscriptions may include **`tg://proxy?...`** lines for Telemt inbounds; secrets come from **`client_inbound_mappings.telemt_secret`**. Inbound `settings` use a nested **`telemt`** object ([shape](#telemt-inbound-settings-shape-json)).
 
 ### GET `/{subPath}/{subId}`
 
@@ -4475,6 +4485,7 @@ curl -X GET "http://localhost:2096/sub/abcd1234" \
 vless://uuid@host:port?type=tcp&security=reality&...#Remark
 vmess://base64-encoded-config
 trojan://password@host:port?...#Remark
+tg://proxy?server=HOST&port=PORT&secret=eeHEX…|ddHEX…|HEX32#Remark
 ```
 
 **HTML Response (with `?html=1`):** Renders an information page with QR codes and subscription details.
@@ -4828,6 +4839,32 @@ curl -s -X POST "https://NODE:8080/api/v1/drop-ips" \
 | `http` | HTTP proxy |
 | `mixed` | Mixed HTTP/SOCKS proxy |
 | `wireguard` | WireGuard protocol |
+| `telemt` | MTProto (Telemt); separate from Xray — see [Node Pull](#post-panelapinodepull-xray-config) |
+
+### Telemt inbound `settings` shape (JSON)
+
+Panel and API store Telemt options inside `settings` as:
+
+```json
+{
+  "telemt": {
+    "useMiddleProxy": true,
+    "logLevel": "normal",
+    "modes": { "classic": false, "secure": false, "tls": true },
+    "links": { "show": "*", "publicHost": "", "publicPort": 0 },
+    "censorship": {
+      "tlsDomain": "example.com",
+      "mask": true,
+      "tlsEmulation": true,
+      "tlsFrontDir": "tlsfront"
+    },
+    "apiEnabled": false,
+    "apiListen": "127.0.0.1:9091"
+  }
+}
+```
+
+`links.publicHost` / `links.publicPort` are optional; per-node **published** address/port from inbound node bindings usually override them when building node TOML and subscription `tg://proxy` links. Client secrets are **not** in `settings`; they live on `client_inbound_mappings.telemt_secret`. Optional `censorship.sni` is accepted as an alias for `censorship.tlsDomain` (Fake-TLS / SNI host in [Telemt `config.toml`](https://github.com/telemt/telemt/blob/main/config.toml)). Subscription `tg://proxy` links use lowercase **hex** in `secret` (`ee…` / `dd…` prefixes for TLS / secure modes), not base64.
 
 ### Flow Types (VLESS)
 

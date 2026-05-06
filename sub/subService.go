@@ -2,6 +2,7 @@ package sub
 
 import (
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -503,6 +504,24 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		return s.genMixedLink(&in, email)
 	case model.WireGuard:
 		return s.buildWireguardPanelInfo(&in, email)
+	case model.Telemt:
+		if email == "" {
+			return ""
+		}
+		clients, err := s.clientService.GetClientsForInbound(inbound.Id)
+		if err != nil {
+			return ""
+		}
+		em := strings.ToLower(strings.TrimSpace(email))
+		for _, c := range clients {
+			if c == nil {
+				continue
+			}
+			if strings.ToLower(strings.TrimSpace(c.Email)) == em {
+				return s.genTelemtLinkWithClient(&in, c)
+			}
+		}
+		return ""
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLink(&in, email)
@@ -540,12 +559,67 @@ func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.Cli
 		return s.genShadowsocksLinkWithClient(&in, client)
 	case model.Mixed:
 		return s.genMixedLinkWithClient(&in, client)
+	case model.Telemt:
+		return s.genTelemtLinkWithClient(&in, client)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLinkWithClient(&in, client)
 		}
 	}
 	return ""
+}
+
+func (s *SubService) genTelemtLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || client == nil || model.NormalizeProtocol(inbound.Protocol) != model.Telemt {
+		return ""
+	}
+	var m model.ClientInboundMapping
+	if err := database.GetDB().Where("client_id = ? AND inbound_id = ?", client.Id, inbound.Id).First(&m).Error; err != nil {
+		return ""
+	}
+	sec := strings.TrimSpace(m.TelemtSecret)
+	raw, err := hex.DecodeString(strings.ToLower(sec))
+	if err != nil || len(raw) != 16 {
+		return ""
+	}
+	secure, tlsMode := false, true
+	var root map[string]any
+	_ = json.Unmarshal([]byte(inbound.Settings), &root)
+	if t, ok := root["telemt"].(map[string]any); ok {
+		if modes, ok2 := t["modes"].(map[string]any); ok2 {
+			if v, ok := modes["secure"].(bool); ok {
+				secure = v
+			}
+			if v, ok := modes["tls"].(bool); ok {
+				tlsMode = v
+			}
+		}
+	}
+	// Telegram MTProto share links use lowercase hex in `secret` (see Telemt / Telegram clients).
+	// Param order is server, port, secret — do not use url.Values.Encode() (sorts keys).
+	secretHex := telemtTgProxySecretForLink(raw, tlsMode, secure)
+
+	addrs, _ := s.getAddressesForInbound(inbound)
+	if len(addrs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, ap := range addrs {
+		host := strings.TrimSpace(ap.Address)
+		if host == "" {
+			continue
+		}
+		p := ap.Port
+		if p <= 0 {
+			p = inbound.Port
+		}
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		qHost := url.QueryEscape(host)
+		b.WriteString(fmt.Sprintf("tg://proxy?server=%s&port=%d&secret=%s", qHost, p, secretHex))
+	}
+	return b.String()
 }
 
 // passwordForSubLink returns the secret for SS/Mixed links: ClientEntity first, then inbound settings (legacy/stale rows).

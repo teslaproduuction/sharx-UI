@@ -401,12 +401,25 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
 		return
 	}
+	ibs, err := xraySvc.InboundsForWorkerNode(node)
+	if err != nil {
+		logger.Errorf("pull-xray-config inbounds for node %d: %v", node.Id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		return
+	}
+	telemtPayloads, err := service.BuildTelemtPayloadsForNode(node, ibs)
+	if err != nil {
+		logger.Errorf("pull-xray-config telemt for node %d: %v", node.Id, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to build configuration"})
+		return
+	}
 
 	type pullResp struct {
-		Config json.RawMessage `json:"config"`
+		Config json.RawMessage            `json:"config"`
+		Telemt []service.TelemtNodePayload `json:"telemt"`
 	}
-	logger.Debugf("pull-xray-config: node %s (%d), %d bytes", node.Name, node.Id, len(configJSON))
-	c.JSON(http.StatusOK, pullResp{Config: configJSON})
+	logger.Debugf("pull-xray-config: node %s (%d), %d bytes, telemt=%d", node.Name, node.Id, len(configJSON), len(telemtPayloads))
+	c.JSON(http.StatusOK, pullResp{Config: configJSON, Telemt: telemtPayloads})
 }
 
 // getAPIDocsMarkdown returns the API documentation markdown file.

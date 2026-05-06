@@ -25,7 +25,14 @@ const (
 	// Hysteria is the Xray/panel protocol name; v1 vs v2 is stored in settings.version.
 	Hysteria  Protocol = "hysteria"
 	Hysteria2 Protocol = "hysteria2"
+	// Telemt is an MTProto proxy (external binary), not an Xray inbound protocol.
+	Telemt Protocol = "telemt"
 )
+
+// IsXrayInboundProtocol reports whether the panel should emit this inbound into Xray JSON.
+func IsXrayInboundProtocol(p Protocol) bool {
+	return NormalizeProtocol(p) != Telemt
+}
 
 // IsHysteria returns true for both "hysteria" and "hysteria2" (imports may use the v2 literal).
 func IsHysteria(p Protocol) bool {
@@ -429,10 +436,11 @@ type ProfileNodeMapping struct {
 
 // ClientInboundMapping maps clients to inbounds (many-to-many relationship).
 type ClientInboundMapping struct {
-	Id        int `json:"id" gorm:"primaryKey;autoIncrement"`                               // Unique identifier
-	ClientId  int `json:"clientId" form:"clientId" gorm:"uniqueIndex:idx_client_inbound"`   // Client ID
-	InboundId int `json:"inboundId" form:"inboundId" gorm:"uniqueIndex:idx_client_inbound"` // Inbound ID
-	SortOrder int `json:"sortOrder" gorm:"column:sort_order;default:0"`                     // Order in subscription output
+	Id           int    `json:"id" gorm:"primaryKey;autoIncrement"`                               // Unique identifier
+	ClientId     int    `json:"clientId" form:"clientId" gorm:"uniqueIndex:idx_client_inbound"`   // Client ID
+	InboundId    int    `json:"inboundId" form:"inboundId" gorm:"uniqueIndex:idx_client_inbound"` // Inbound ID
+	SortOrder    int    `json:"sortOrder" gorm:"column:sort_order;default:0"`                     // Order in subscription output
+	TelemtSecret string `json:"telemtSecret,omitempty" gorm:"column:telemt_secret"`               // 32 hex; Telemt [access.users] secret for this mapping
 }
 
 // ClientNodeTraffic stores cumulative per-node client traffic (multi-node).

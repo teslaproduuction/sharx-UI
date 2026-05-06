@@ -428,7 +428,8 @@ export function HostsPage() {
       return;
     }
     void refreshHostSubscriptionDrafts(ids);
-    // Intentionally omit editInboundPick: changing checkboxes should not wipe drafts until user clicks Refresh.
+    // Intentionally omit editInboundPick: checkbox changes must not refetch drafts (user uses Refresh).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- editInboundPick excluded by design
   }, [editOpen, editId, refreshHostSubscriptionDrafts]);
 
   const openAdd = () => {
