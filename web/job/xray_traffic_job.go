@@ -57,6 +57,8 @@ func (j *XrayTrafficJob) Run() {
 		return
 	}
 
+	service.MergeLocalTelemtTrafficIntoXrayStats(&traffics, &clientTraffics)
+
 	err, needRestart0 := j.inboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
 		logger.Warning("add inbound traffic failed:", err)

@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/database"
@@ -89,6 +91,11 @@ type TelemtAccessUser struct {
 	Email  string
 	Secret string
 	Enable bool
+	// Optional [access.user_data_quota] / [access.user_expirations] / [access.user_max_unique_ips].
+	// Zero / empty values are omitted from generated TOML.
+	DataQuotaBytes    uint64
+	ExpirationRFC3339 string
+	MaxUniqueIPs      int
 }
 
 // BuildTelemtToml builds a Telemt config.toml for one inbound.
@@ -158,11 +165,19 @@ func BuildTelemtToml(inbound *model.Inbound, users []TelemtAccessUser, publicHos
 		tlsFront = strings.TrimRight(workDirAbs, `/`) + "/tlsfront"
 	}
 
-	apiEnabled := false
-	apiListen := "127.0.0.1:9091"
+	// Localhost-only control API: required for GET /v1/stats/users accounting on the node/panel.
+	apiEnabled := true
 	if cfg.APIEnabled != nil {
 		apiEnabled = *cfg.APIEnabled
 	}
+	apiPort := 9091
+	if inbound.Id > 0 {
+		apiPort = 9100 + inbound.Id
+		if apiPort > 65535 {
+			apiPort = 20000 + (inbound.Id % 45536)
+		}
+	}
+	apiListen := fmt.Sprintf("127.0.0.1:%d", apiPort)
 	if strings.TrimSpace(cfg.APIListen) != "" {
 		apiListen = strings.TrimSpace(cfg.APIListen)
 	}
@@ -198,6 +213,7 @@ func BuildTelemtToml(inbound *model.Inbound, users []TelemtAccessUser, publicHos
 		fmt.Fprintf(&b, "unknown_sni_action = %q\n", unknownSni)
 	}
 	fmt.Fprintf(&b, "\n")
+	var written []TelemtAccessUser
 	fmt.Fprintf(&b, "[access.users]\n")
 	for _, u := range users {
 		if !u.Enable || strings.TrimSpace(u.Email) == "" || len(strings.TrimSpace(u.Secret)) != 32 {
@@ -205,6 +221,39 @@ func BuildTelemtToml(inbound *model.Inbound, users []TelemtAccessUser, publicHos
 		}
 		sec := strings.ToLower(strings.TrimSpace(u.Secret))
 		fmt.Fprintf(&b, "%s = %q\n", telemtTomlUserKey(u.Email), sec)
+		written = append(written, u)
+	}
+
+	var quotaLines, expLines, ipLines []string
+	for _, u := range written {
+		key := telemtTomlUserKey(u.Email)
+		if u.DataQuotaBytes > 0 {
+			quotaLines = append(quotaLines, fmt.Sprintf("%s = %d\n", key, u.DataQuotaBytes))
+		}
+		if u.ExpirationRFC3339 != "" {
+			expLines = append(expLines, fmt.Sprintf("%s = %q\n", key, u.ExpirationRFC3339))
+		}
+		if u.MaxUniqueIPs > 0 {
+			ipLines = append(ipLines, fmt.Sprintf("%s = %d\n", key, u.MaxUniqueIPs))
+		}
+	}
+	if len(quotaLines) > 0 {
+		fmt.Fprintf(&b, "\n[access.user_data_quota]\n")
+		for _, line := range quotaLines {
+			fmt.Fprint(&b, line)
+		}
+	}
+	if len(expLines) > 0 {
+		fmt.Fprintf(&b, "\n[access.user_expirations]\n")
+		for _, line := range expLines {
+			fmt.Fprint(&b, line)
+		}
+	}
+	if len(ipLines) > 0 {
+		fmt.Fprintf(&b, "\n[access.user_max_unique_ips]\n")
+		for _, line := range ipLines {
+			fmt.Fprint(&b, line)
+		}
 	}
 	return b.String(), nil
 }
@@ -233,7 +282,17 @@ func TelemtAccessUsersForInbound(inboundId int) ([]TelemtAccessUser, error) {
 		if em == "" {
 			continue
 		}
-		out = append(out, TelemtAccessUser{Email: em, Secret: secret, Enable: true})
+		u := TelemtAccessUser{Email: em, Secret: secret, Enable: true}
+		if c.TotalGB > 0 {
+			u.DataQuotaBytes = uint64(math.Round(c.TotalGB * float64(1024*1024*1024)))
+		}
+		if c.ExpiryTime > 0 {
+			u.ExpirationRFC3339 = time.UnixMilli(c.ExpiryTime).UTC().Format(time.RFC3339)
+		}
+		if c.HWIDEnabled && c.MaxHWID > 0 {
+			u.MaxUniqueIPs = c.MaxHWID
+		}
+		out = append(out, u)
 	}
 	return out, nil
 }
