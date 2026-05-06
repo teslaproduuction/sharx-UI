@@ -129,7 +129,7 @@ type SharxSubpageJsonTemplates struct {
 
 // SharxSubpageCustomRemarks are short lines embedded into subscription output as
 // placeholder proxy remarks (e.g. vless://…#text) when the user is limited,
-// disabled, has no inbounds, or hits HWID limits — same idea as Remnawave.
+// disabled, has no inbounds, or hits HWID limits.
 type SharxSubpageCustomRemarks struct {
 	ExpiredUsers           []string `json:"expiredUsers"`
 	LimitedUsers           []string `json:"limitedUsers"`

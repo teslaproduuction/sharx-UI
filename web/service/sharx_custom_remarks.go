@@ -1,6 +1,6 @@
 package service
 
-// DefaultSharxCustomRemarks returns built-in texts (aligned with Remnawave seeds).
+// DefaultSharxCustomRemarks returns built-in default texts for placeholder subscription lines.
 func DefaultSharxCustomRemarks() SharxSubpageCustomRemarks {
 	return SharxSubpageCustomRemarks{
 		ExpiredUsers:           []string{"⌛ Subscription expired", "Contact support"},
@@ -40,7 +40,7 @@ func MergeCustomRemarksWithDefaults(cfg *SharxSubpageCustomRemarks) SharxSubpage
 }
 
 // ShowCustomRemarksEnabled reports whether status/HWID placeholder output is allowed.
-// Nil pointer means enabled (same default as Remnawave).
+// Nil pointer means enabled (backward compatible default).
 func ShowCustomRemarksEnabled(cfg *SharxSubpageConfigV2) bool {
 	if cfg == nil || cfg.ShowCustomRemarks == nil {
 		return true

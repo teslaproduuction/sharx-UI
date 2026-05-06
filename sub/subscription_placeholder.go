@@ -28,8 +28,8 @@ func trafficFromClientEntity(c *model.ClientEntity) xray.ClientTraffic {
 	}
 }
 
-// subscriptionPlaceholderLines encodes each non-empty line as a dummy vless URI
-// (same mechanism as Remnawave: clients show the URI fragment as node title).
+// subscriptionPlaceholderLines encodes each non-empty line as a dummy vless URI;
+// clients typically show the URI fragment as the node title.
 func subscriptionPlaceholderLines(remarks []string) []string {
 	out := make([]string, 0, len(remarks))
 	for _, r := range remarks {

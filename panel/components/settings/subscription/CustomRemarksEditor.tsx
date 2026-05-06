@@ -82,7 +82,7 @@ export function CustomRemarksEditor({ config, onChange }: Props) {
             <p className="mt-1 text-xs text-[var(--fg-subtle)]">
               {t("subBuilder.customRemarks.intro", {
                 defaultValue:
-                  "When a client cannot receive real nodes (expired, limited, disabled, HWID limit, or no inbounds), the server can return dummy subscription lines whose titles are these texts — same idea as Remnawave. One line per remark; empty hosts messages are always used when there are no inbounds.",
+                  "When a client cannot receive real nodes (expired, limited, disabled, HWID limit, or no inbounds), the server can return dummy subscription lines whose titles are these texts. One line per remark; empty hosts messages are always used when there are no inbounds.",
               })}
             </p>
           </div>
