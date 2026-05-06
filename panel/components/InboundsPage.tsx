@@ -565,12 +565,6 @@ export function InboundsPage() {
   const [multiNodeMode, setMultiNodeMode] = useState<boolean | null>(null);
   const [baselineSettings, setBaselineSettings] = useState("");
 
-  useEffect(() => {
-    if (form.protocol === "telemt" && inboundModalView === "json") {
-      setInboundModalView("form");
-    }
-  }, [form.protocol, inboundModalView]);
-
   const [preserveTraffic, setPreserveTraffic] = useState({
     up: 0,
     down: 0,
@@ -1082,25 +1076,40 @@ export function InboundsPage() {
     if (editId != null) {
       body.id = editId;
     }
-    void postJson<unknown>(panel("api/inbounds/previewXray"), body, true).then(
+    const isTelemt = form.protocol === "telemt";
+    const fail = (msg: string) => {
+      if (!alive) return;
+      setXrayPreviewText(null);
+      setXrayPreviewError(msg);
+      setXrayPreviewLoading(false);
+    };
+    void (
+      isTelemt
+        ? postJson<{ toml: string }>(panel("api/inbounds/previewTelemt"), body, true)
+        : postJson<unknown>(panel("api/inbounds/previewXray"), body, true)
+    ).then(
       (r) => {
         if (!alive) return;
         if (r.success && r.obj != null) {
-          setXrayPreviewText(JSON.stringify(r.obj, null, 2));
-          setXrayPreviewError(null);
+          if (isTelemt) {
+            const tom = (r.obj as { toml?: unknown }).toml;
+            if (typeof tom === "string") {
+              setXrayPreviewText(tom);
+              setXrayPreviewError(null);
+            } else {
+              fail(t("fail", { defaultValue: "Error" }));
+            }
+          } else {
+            setXrayPreviewText(JSON.stringify(r.obj, null, 2));
+            setXrayPreviewError(null);
+          }
         } else {
-          setXrayPreviewText(null);
-          setXrayPreviewError(
-            (r as { msg?: string }).msg || t("fail", { defaultValue: "Error" }),
-          );
+          fail((r as { msg?: string }).msg || t("fail", { defaultValue: "Error" }));
         }
         setXrayPreviewLoading(false);
       },
       () => {
-        if (!alive) return;
-        setXrayPreviewText(null);
-        setXrayPreviewError(t("fail", { defaultValue: "Error" }));
-        setXrayPreviewLoading(false);
+        fail(t("fail", { defaultValue: "Error" }));
       },
     );
     return () => {
@@ -1112,6 +1121,7 @@ export function InboundsPage() {
     inboundApiPayloadPreview,
     editId,
     t,
+    form.protocol,
   ]);
 
   const submitModal = async () => {
@@ -1901,39 +1911,43 @@ export function InboundsPage() {
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
-                {form.protocol !== "telemt" ? (
-                <div
-                  className="inline-flex w-fit shrink-0 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] p-0.5"
-                  role="group"
-                  aria-label={t("pages.inbounds.payloadViewToggle", {
-                    defaultValue: "Form or Xray core preview",
-                  })}
-                >
-                  <button
-                    type="button"
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                      inboundModalView === "form"
-                        ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
-                        : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                    }`}
-                    onClick={() => setInboundModalView("form")}
-                  >
-                    {t("pages.inbounds.viewForm", { defaultValue: "Form" })}
-                  </button>
-                  <button
-                    type="button"
-                    className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-                      inboundModalView === "json"
-                        ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
-                        : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
-                    }`}
-                    onClick={() => setInboundModalView("json")}
-                  >
-                    {t("pages.inbounds.viewXrayCorePreview", {
-                      defaultValue: "Xray config",
+                {form.protocol !== "wireguard" ? (
+                  <div
+                    className="inline-flex w-fit shrink-0 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] p-0.5"
+                    role="group"
+                    aria-label={t("pages.inbounds.payloadViewToggle", {
+                      defaultValue: "Form or core config preview",
                     })}
-                  </button>
-                </div>
+                  >
+                    <button
+                      type="button"
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                        inboundModalView === "form"
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
+                          : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                      }`}
+                      onClick={() => setInboundModalView("form")}
+                    >
+                      {t("pages.inbounds.viewForm", { defaultValue: "Form" })}
+                    </button>
+                    <button
+                      type="button"
+                      className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                        inboundModalView === "json"
+                          ? "bg-[var(--accent)] text-[var(--accent-fg)] shadow-sm"
+                          : "text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                      }`}
+                      onClick={() => setInboundModalView("json")}
+                    >
+                      {form.protocol === "telemt"
+                        ? t("pages.inbounds.viewTelemtTomlPreview", {
+                            defaultValue: "Telemt config",
+                          })
+                        : t("pages.inbounds.viewXrayCorePreview", {
+                            defaultValue: "Xray config",
+                          })}
+                    </button>
+                  </div>
                 ) : null}
                 <div className="text-xs text-[var(--fg-subtle)] sm:text-right">
                   {t("protocol")}:{" "}
@@ -1948,10 +1962,15 @@ export function InboundsPage() {
             {inboundModalView === "json" ? (
               <div className="space-y-2">
                 <p className="text-xs text-[var(--fg-muted)]">
-                  {t("pages.inbounds.xrayCorePreviewHint", {
-                    defaultValue:
-                      "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here.",
-                  })}
+                  {form.protocol === "telemt"
+                    ? t("pages.inbounds.telemtTomlPreviewHint", {
+                        defaultValue:
+                          "Generated Telemt config.toml (same as deployed to the node or local data/telemt on standalone). [access.users] is empty until you save the inbound and assign clients; after that it reflects the database.",
+                      })
+                    : t("pages.inbounds.xrayCorePreviewHint", {
+                        defaultValue:
+                          "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here.",
+                      })}
                 </p>
                 <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-subtle)] p-3">
                   {!inboundApiPayloadPreview.ok ? (
