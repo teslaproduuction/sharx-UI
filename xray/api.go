@@ -23,9 +23,9 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/infra/conf"
+	hysteriaAccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/shadowsocks"
 	"github.com/xtls/xray-core/proxy/shadowsocks_2022"
-	hysteriaAccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	"github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
@@ -437,9 +437,9 @@ func processTraffic(matches []string, value int64, trafficMap map[string]*Traffi
 
 	// Direct mapping: downlink → Down, uplink → Up
 	if isDown {
-		traffic.Down = value   // downlink = traffic from clients to server
+		traffic.Down = value // downlink = traffic from clients to server
 	} else {
-		traffic.Up = value      // uplink = traffic from server to clients
+		traffic.Up = value // uplink = traffic from server to clients
 	}
 }
 
@@ -460,9 +460,9 @@ func processClientTraffic(matches []string, value int64, clientTrafficMap map[st
 
 	// Direct mapping: downlink → Down, uplink → Up (consistent with processTraffic)
 	if isDown {
-		traffic.Down = value  // downlink = traffic from client to server
+		traffic.Down = value // downlink = traffic from client to server
 	} else {
-		traffic.Up = value     // uplink = traffic from server to client
+		traffic.Up = value // uplink = traffic from server to client
 	}
 }
 
@@ -544,8 +544,8 @@ func (x *XrayAPI) AddSessionIPBlockRule(ctx context.Context, ruleTag, email, cid
 		return fmt.Errorf("serial.ToTypedMessage returned nil")
 	}
 	_, err = x.RoutingServiceClient.AddRule(ctx, &routercmd.AddRuleRequest{
-		Config:        tmsg,
-		ShouldAppend:  true,
+		Config:       tmsg,
+		ShouldAppend: true,
 	})
 	return err
 }

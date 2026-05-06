@@ -45,7 +45,7 @@ func (a *MigrationController) previewMigration(c *gin.Context) {
 
 	// Validate file size (max 100MB)
 	if file.Size > 100*1024*1024 {
-		jsonMsg(c, I18nWeb(c, "pages.settings.migration.error.fileTooLarge"), 
+		jsonMsg(c, I18nWeb(c, "pages.settings.migration.error.fileTooLarge"),
 			gin.Error{Err: err, Type: gin.ErrorTypePublic})
 		return
 	}
@@ -87,7 +87,7 @@ func (a *MigrationController) executeMigration(c *gin.Context) {
 
 	// Validate file size (max 100MB)
 	if file.Size > 100*1024*1024 {
-		jsonMsg(c, I18nWeb(c, "pages.settings.migration.error.fileTooLarge"), 
+		jsonMsg(c, I18nWeb(c, "pages.settings.migration.error.fileTooLarge"),
 			gin.Error{Err: err, Type: gin.ErrorTypePublic})
 		return
 	}
@@ -130,4 +130,3 @@ func (a *MigrationController) executeMigration(c *gin.Context) {
 
 	jsonObj(c, result, nil)
 }
-

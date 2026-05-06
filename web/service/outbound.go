@@ -18,11 +18,11 @@ type OutboundService struct{}
 
 func (s *OutboundService) AddTraffic(traffics []*xray.Traffic, clientTraffics []*xray.ClientTraffic) (error, bool) {
 	db := database.GetDB()
-	
+
 	err := db.Transaction(func(tx *gorm.DB) error {
 		return s.addOutboundTraffic(tx, traffics)
 	})
-	
+
 	if err != nil {
 		return err, false
 	}
@@ -204,7 +204,7 @@ func (s *OutboundService) checkNodeAssignedToOtherOutbound(nodeIds []int, exclud
 	var mappings []model.OutboundNodeMapping
 	query := db.Model(&model.OutboundNodeMapping{}).
 		Where("node_id IN ?", nodeIds)
-	
+
 	if excludeOutboundId > 0 {
 		query = query.Where("outbound_id != ?", excludeOutboundId)
 	}

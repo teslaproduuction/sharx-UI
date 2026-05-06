@@ -241,8 +241,8 @@ func splitCsv(s string) []string {
 // buildClient creates a new client for auto-create
 func (j *LdapSyncJob) buildClient(ib *model.Inbound, email string, defGB, defExpiryDays int) model.Client {
 	c := model.Client{
-		Email:   email,
-		Enable:  true,
+		Email:  email,
+		Enable: true,
 		// LimitIP removed - using HWID only
 		TotalGB: int64(defGB),
 	}

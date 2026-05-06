@@ -24,10 +24,6 @@ type ClientHWIDService struct{}
 // ErrHWIDAdminBlocked is returned when a HWID row is blocked in the panel (subscription/HWID checks should deny).
 var ErrHWIDAdminBlocked = errors.New("HWID is blocked for this client")
 
-// ErrHWIDUsedByAnotherClient is returned when a HWID is already registered to a different client.
-// This prevents sharing HWID values across multiple subscriptions.
-var ErrHWIDUsedByAnotherClient = errors.New("HWID is already registered to another client")
-
 // getMoscowTime returns current time in Moscow timezone (UTC+3)
 func (s *ClientHWIDService) getMoscowTime() time.Time {
 	moscow, err := time.LoadLocation("Europe/Moscow")
@@ -85,18 +81,7 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 		}
 	}()
 
-	// Check if HWID is already registered to a different client (global uniqueness enforcement).
-	// If the HWID belongs to another client, reject the request to prevent cross-account sharing.
-	var conflictHWID model.ClientHWID
-	conflictErr := tx.Where("hwid = ? AND client_id != ?", hwid, clientId).First(&conflictHWID).Error
-	if conflictErr == nil {
-		// Found a record for a different client — block this HWID
-		err = ErrHWIDUsedByAnotherClient
-		return nil, err
-	} else if conflictErr != gorm.ErrRecordNotFound {
-		err = fmt.Errorf("failed to check global HWID uniqueness: %w", conflictErr)
-		return nil, err
-	}
+	// HWID uniqueness is per client only: the same device may use multiple panel clients (e.g. two subscriptions for one person).
 
 	// Check if HWID already exists for this client
 	var existingHWID model.ClientHWID
@@ -192,11 +177,11 @@ func (s *ClientHWIDService) AddHWIDForClient(clientId int, hwid string, deviceOS
 	}
 
 	logger.Debugf("Successfully created HWID record: clientId=%d, hwid=%s, hwidId=%d", clientId, hwid, newHWID.Id)
-	
+
 	// Broadcast clients update via WebSocket for real-time UI refresh
 	// Note: We broadcast nil to signal that clients should be reloaded
 	websocket.BroadcastClients(nil)
-	
+
 	return newHWID, nil
 }
 
@@ -439,7 +424,7 @@ func (s *ClientHWIDService) GenerateFingerprintHWID(email string, ipAddress stri
 	// DEPRECATED: This method should only be used in legacy_fingerprint mode
 	// Combine parameters to create a fingerprint
 	fingerprint := fmt.Sprintf("%s|%s|%s", email, ipAddress, userAgent)
-	
+
 	// Hash the fingerprint to create a stable HWID
 	// NOTE: This approach is deprecated and may cause false positives
 	// when IP addresses change or clients reconnect from different networks
@@ -450,11 +435,11 @@ func (s *ClientHWIDService) GenerateFingerprintHWID(email string, ipAddress stri
 // ClearHWIDsForClient removes all HWIDs for a specific client.
 func (s *ClientHWIDService) ClearHWIDsForClient(clientId int) error {
 	db := database.GetDB()
-	
+
 	// Get userId for cache invalidation
 	var client model.ClientEntity
 	_ = db.Select("user_id").First(&client, clientId).Error
-	
+
 	result := db.Where("client_id = ?", clientId).Delete(&model.ClientHWID{})
 	if result.Error != nil {
 		return result.Error
@@ -466,24 +451,24 @@ func (s *ClientHWIDService) ClearHWIDsForClient(clientId int) error {
 // ClearAllHWIDs removes all HWIDs for all clients of a specific user.
 func (s *ClientHWIDService) ClearAllHWIDs(userId int) (int64, error) {
 	db := database.GetDB()
-	
+
 	// Get all client IDs for this user
 	var clientIds []int
 	err := db.Model(&model.ClientEntity{}).Where("user_id = ?", userId).Pluck("id", &clientIds).Error
 	if err != nil {
 		return 0, err
 	}
-	
+
 	if len(clientIds) == 0 {
 		return 0, nil
 	}
-	
+
 	// Delete all HWIDs for these clients
 	result := db.Where("client_id IN ?", clientIds).Delete(&model.ClientHWID{})
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	
+
 	logger.Infof("Cleared %d HWIDs for user %d (%d clients)", result.RowsAffected, userId, len(clientIds))
 	return result.RowsAffected, nil
 }
@@ -491,18 +476,18 @@ func (s *ClientHWIDService) ClearAllHWIDs(userId int) (int64, error) {
 // SetHWIDLimitForAllClients sets the HWID limit for all clients of a specific user.
 func (s *ClientHWIDService) SetHWIDLimitForAllClients(userId int, maxHwid int, enabled bool) (int64, error) {
 	db := database.GetDB()
-	
+
 	result := db.Model(&model.ClientEntity{}).
 		Where("user_id = ?", userId).
 		Updates(map[string]interface{}{
 			"hwid_enabled": enabled,
 			"max_hwid":     maxHwid,
 		})
-	
+
 	if result.Error != nil {
 		return 0, result.Error
 	}
-	
+
 	logger.Infof("Set HWID limit (enabled=%v, max=%d) for %d clients of user %d", enabled, maxHwid, result.RowsAffected, userId)
 	return result.RowsAffected, nil
 }

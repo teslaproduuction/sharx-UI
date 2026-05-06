@@ -650,6 +650,18 @@ export const jsonTemplatesSchema = z.object({
 });
 export type JsonTemplates = z.infer<typeof jsonTemplatesSchema>;
 
+export const customRemarksSchema = z.object({
+  expiredUsers: z.array(z.string()).default(["⌛ Subscription expired", "Contact support"]),
+  limitedUsers: z.array(z.string()).default(["🚧 Subscription limited", "Contact support"]),
+  disabledUsers: z.array(z.string()).default(["🚫 Subscription disabled", "Contact support"]),
+  emptyHosts: z
+    .array(z.string())
+    .default(["→ SharX", "→ No hosts found", "→ Check inbounds & clients"]),
+  HWIDMaxDevicesExceeded: z.array(z.string()).default(["Limit of devices reached"]),
+  HWIDNotSupported: z.array(z.string()).default(["App not supported"]),
+});
+export type CustomRemarks = z.infer<typeof customRemarksSchema>;
+
 export const sharxSubpageConfigV2Schema = z.object({
   schemaVersion: z.literal("sharx-v2"),
   branding: brandingSchema,
@@ -665,6 +677,8 @@ export const sharxSubpageConfigV2Schema = z.object({
   routing: routingSchema.optional(),
   autorouting: autoroutingSchema.optional(),
   deepLinks: deepLinksSchema.optional(),
+  showCustomRemarks: z.boolean().default(true),
+  customRemarks: customRemarksSchema.optional(),
 });
 export type SharxSubpageConfigV2 = z.infer<typeof sharxSubpageConfigV2Schema>;
 
@@ -787,6 +801,42 @@ export function defaultJsonTemplates(): JsonTemplates {
   };
 }
 
+export function defaultCustomRemarks(): CustomRemarks {
+  return customRemarksSchema.parse({});
+}
+
+/** Merge saved partial remarks with defaults (same rules as backend). */
+export function mergeCustomRemarks(partial?: Partial<CustomRemarks> | null): CustomRemarks {
+  const d = defaultCustomRemarks();
+  if (!partial) return d;
+  return {
+    expiredUsers:
+      partial.expiredUsers !== undefined && partial.expiredUsers.length > 0
+        ? partial.expiredUsers
+        : d.expiredUsers,
+    limitedUsers:
+      partial.limitedUsers !== undefined && partial.limitedUsers.length > 0
+        ? partial.limitedUsers
+        : d.limitedUsers,
+    disabledUsers:
+      partial.disabledUsers !== undefined && partial.disabledUsers.length > 0
+        ? partial.disabledUsers
+        : d.disabledUsers,
+    emptyHosts:
+      partial.emptyHosts !== undefined && partial.emptyHosts.length > 0
+        ? partial.emptyHosts
+        : d.emptyHosts,
+    HWIDMaxDevicesExceeded:
+      partial.HWIDMaxDevicesExceeded !== undefined && partial.HWIDMaxDevicesExceeded.length > 0
+        ? partial.HWIDMaxDevicesExceeded
+        : d.HWIDMaxDevicesExceeded,
+    HWIDNotSupported:
+      partial.HWIDNotSupported !== undefined && partial.HWIDNotSupported.length > 0
+        ? partial.HWIDNotSupported
+        : d.HWIDNotSupported,
+  };
+}
+
 export function defaultV2(): SharxSubpageConfigV2 {
   return {
     schemaVersion: "sharx-v2",
@@ -807,6 +857,8 @@ export function defaultV2(): SharxSubpageConfigV2 {
     routing: defaultRouting(),
     autorouting: defaultAutorouting(),
     deepLinks: defaultDeepLinks(),
+    showCustomRemarks: true,
+    customRemarks: defaultCustomRemarks(),
   };
 }
 
@@ -821,6 +873,8 @@ export function normalizeV2(cfg: SharxSubpageConfigV2): SharxSubpageConfigV2 {
     routing: cfg.routing ?? defaultRouting(),
     autorouting: cfg.autorouting ?? defaultAutorouting(),
     deepLinks: cfg.deepLinks ?? defaultDeepLinks(),
+    showCustomRemarks: cfg.showCustomRemarks ?? true,
+    customRemarks: mergeCustomRemarks(cfg.customRemarks ?? undefined),
   };
 }
 
@@ -844,6 +898,8 @@ export function migrateV1ToV2(v1: SharxSubpageConfigV1): SharxSubpageConfigV2 {
     routing: defaultRouting(),
     autorouting: defaultAutorouting(),
     deepLinks: defaultDeepLinks(),
+    showCustomRemarks: true,
+    customRemarks: defaultCustomRemarks(),
   };
 }
 

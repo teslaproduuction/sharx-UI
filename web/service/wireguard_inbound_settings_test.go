@@ -82,7 +82,7 @@ func TestBuildWireGuardInboundSettingsJSON_normalizesServerAddressMask(t *testin
 func TestBuildWireGuardInboundSettingsJSON_peer(t *testing.T) {
 	w := 4
 	s, err := BuildWireGuardInboundSettingsJSON(&WireGuardInboundRequest{
-		Mtu: 1500,
+		Mtu:     1500,
 		Address: []string{"10.0.0.1/32"},
 		Peers: []WireGuardPeerRequest{{
 			PublicKey:  "cHVibGljS2V5X3Rlc3Q=",

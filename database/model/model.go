@@ -74,15 +74,15 @@ type Inbound struct {
 	ClientStats          []xray.ClientTraffic `gorm:"foreignKey:InboundId;references:Id" json:"clientStats" form:"clientStats"`                        // Client traffic statistics
 
 	// Xray configuration fields
-	Listen         string   `json:"listen" form:"listen"`
-	Port           int      `json:"port" form:"port"`
-	Protocol       Protocol `json:"protocol" form:"protocol"`
-	Settings       string   `json:"settings" form:"settings"`
-	StreamSettings string   `json:"streamSettings" form:"streamSettings"`
-	Tag            string   `json:"tag" form:"tag" gorm:"unique"`
-	Sniffing       string   `json:"sniffing" form:"sniffing"`
-	NodeId         *int     `json:"nodeId,omitempty" form:"-" gorm:"-"`  // Node ID (not stored in Inbound table, from mapping) - DEPRECATED: kept only for backward compatibility with old clients, use NodeIds instead
-	NodeIds        []int    `json:"nodeIds,omitempty" form:"-" gorm:"-"` // Node IDs array (not stored in Inbound table, from mapping) - use this for multi-node support
+	Listen         string                   `json:"listen" form:"listen"`
+	Port           int                      `json:"port" form:"port"`
+	Protocol       Protocol                 `json:"protocol" form:"protocol"`
+	Settings       string                   `json:"settings" form:"settings"`
+	StreamSettings string                   `json:"streamSettings" form:"streamSettings"`
+	Tag            string                   `json:"tag" form:"tag" gorm:"unique"`
+	Sniffing       string                   `json:"sniffing" form:"sniffing"`
+	NodeId         *int                     `json:"nodeId,omitempty" form:"-" gorm:"-"`       // Node ID (not stored in Inbound table, from mapping) - DEPRECATED: kept only for backward compatibility with old clients, use NodeIds instead
+	NodeIds        []int                    `json:"nodeIds,omitempty" form:"-" gorm:"-"`      // Node IDs array (not stored in Inbound table, from mapping) - use this for multi-node support
 	NodeBindings   []InboundNodeBindingView `json:"nodeBindings,omitempty" form:"-" gorm:"-"` // Subscription-facing node rows (panel only)
 }
 
@@ -268,8 +268,8 @@ type Node struct {
 	CreatedAt    int64  `json:"createdAt" gorm:"autoCreateTime"`                                         // Creation timestamp
 	UpdatedAt    int64  `json:"updatedAt" gorm:"autoUpdateTime"`                                         // Last update timestamp
 	Enable       bool   `json:"enable" form:"enable" gorm:"column:enable;default:true"`                  // When false, panel skips health checks, stats collection, and config push
-	XrayState    string `json:"xrayState" gorm:"column:xray_state;default:unknown"`   // running | stopped | error | unknown (worker Xray)
-	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`    // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
+	XrayState    string `json:"xrayState" gorm:"column:xray_state;default:unknown"`                      // running | stopped | error | unknown (worker Xray)
+	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`                       // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
 
 	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy values accepted; see IsPairingMode.
 	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing
@@ -352,7 +352,7 @@ type InboundNodeMapping struct {
 	Id        int `json:"id" gorm:"primaryKey;autoIncrement"`                             // Unique identifier
 	InboundId int `json:"inboundId" form:"inboundId" gorm:"uniqueIndex:idx_inbound_node"` // Inbound ID
 	NodeId    int `json:"nodeId" form:"nodeId" gorm:"uniqueIndex:idx_inbound_node"`       // Node ID
-	SortOrder int `json:"sortOrder" gorm:"column:sort_order;default:0"`                  // Order in subscription / UI
+	SortOrder int `json:"sortOrder" gorm:"column:sort_order;default:0"`                   // Order in subscription / UI
 
 	// Subscription link overrides (worker connection still uses node.Address).
 	PublishedAddress         string `json:"publishedAddress" gorm:"column:published_address"`
@@ -451,14 +451,14 @@ func (ClientNodeTraffic) TableName() string { return "client_node_traffics" }
 // Host represents a proxy/balancer host configuration for multi-node mode.
 // Hosts can override the node address when generating subscription links.
 type Host struct {
-	Id        int    `json:"id" gorm:"primaryKey;autoIncrement"` // Unique identifier
-	UserId    int    `json:"userId" gorm:"index"`                // Associated user ID
-	Name      string `json:"name" form:"name"`                   // Host name/identifier
-	Address   string `json:"address" form:"address"`             // Host address (IP or domain)
-	Port      int    `json:"port" form:"port"`                   // Host port (0 means use inbound port)
-	Protocol  string `json:"protocol" form:"protocol"`           // Protocol override (optional)
-	Remark    string `json:"remark" form:"remark"`               // Host remark/description
-	Enable    bool   `json:"enable" form:"enable"`               // Whether the host is enabled
+	Id       int    `json:"id" gorm:"primaryKey;autoIncrement"` // Unique identifier
+	UserId   int    `json:"userId" gorm:"index"`                // Associated user ID
+	Name     string `json:"name" form:"name"`                   // Host name/identifier
+	Address  string `json:"address" form:"address"`             // Host address (IP or domain)
+	Port     int    `json:"port" form:"port"`                   // Host port (0 means use inbound port)
+	Protocol string `json:"protocol" form:"protocol"`           // Protocol override (optional)
+	Remark   string `json:"remark" form:"remark"`               // Host remark/description
+	Enable   bool   `json:"enable" form:"enable"`               // Whether the host is enabled
 	// SubscriptionApplyMode: replace (default) | prepend | append — how Host combines with multi-node addresses in subscription links.
 	SubscriptionApplyMode string `json:"subscriptionApplyMode" gorm:"column:subscription_apply_mode;default:replace"`
 	// Subscription link overrides (optional); empty string = inherit from inbound stream settings.
@@ -468,8 +468,8 @@ type Host struct {
 	SubscriptionAlpn          string `json:"subscriptionAlpn" gorm:"column:subscription_alpn"`
 	SubscriptionFingerprint   string `json:"subscriptionFingerprint" gorm:"column:subscription_fp"`
 	SubscriptionAllowInsecure *bool  `json:"subscriptionAllowInsecure,omitempty" gorm:"column:subscription_allow_insecure"` // nil = inherit from inbound
-	CreatedAt int64  `json:"createdAt" gorm:"autoCreateTime"`    // Creation timestamp
-	UpdatedAt int64  `json:"updatedAt" gorm:"autoUpdateTime"`    // Last update timestamp
+	CreatedAt                 int64  `json:"createdAt" gorm:"autoCreateTime"`                                               // Creation timestamp
+	UpdatedAt                 int64  `json:"updatedAt" gorm:"autoUpdateTime"`                                               // Last update timestamp
 
 	// Relations (not stored in DB, loaded via joins)
 	InboundIds []int `json:"inboundIds,omitempty" form:"-" gorm:"-"` // Inbound IDs this host applies to

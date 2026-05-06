@@ -37,4 +37,3 @@ func GetErrorLogPath() (string, error) {
 	}
 	return "", nil
 }
-

@@ -127,6 +127,18 @@ type SharxSubpageJsonTemplates struct {
 	Rules    string `json:"rules"`
 }
 
+// SharxSubpageCustomRemarks are short lines embedded into subscription output as
+// placeholder proxy remarks (e.g. vless://…#text) when the user is limited,
+// disabled, has no inbounds, or hits HWID limits — same idea as Remnawave.
+type SharxSubpageCustomRemarks struct {
+	ExpiredUsers           []string `json:"expiredUsers"`
+	LimitedUsers           []string `json:"limitedUsers"`
+	DisabledUsers          []string `json:"disabledUsers"`
+	EmptyHosts             []string `json:"emptyHosts"`
+	HWIDMaxDevicesExceeded []string `json:"HWIDMaxDevicesExceeded"`
+	HWIDNotSupported       []string `json:"HWIDNotSupported"`
+}
+
 // SharxSubpageConfigV2 is the block-based schema.
 type SharxSubpageConfigV2 struct {
 	SchemaVersion string `json:"schemaVersion"`
@@ -157,6 +169,10 @@ type SharxSubpageConfigV2 struct {
 	Routing       *SharxSubpageRouting       `json:"routing,omitempty"`
 	Autorouting   *SharxSubpageAutorouting   `json:"autorouting,omitempty"`
 	DeepLinks     *SharxSubpageDeepLinks     `json:"deepLinks,omitempty"`
+	// ShowCustomRemarks: nil = enabled (backward compatible). Set to false to
+	// always emit real nodes even when the account is limited/disabled/HWID-blocked.
+	ShowCustomRemarks *bool                      `json:"showCustomRemarks,omitempty"`
+	CustomRemarks     *SharxSubpageCustomRemarks `json:"customRemarks,omitempty"`
 }
 
 var supportedBlockKinds = map[string]bool{

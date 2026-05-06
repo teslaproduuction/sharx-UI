@@ -40,14 +40,14 @@ func (a *XrayCoreConfigProfileController) initRouter(g *gin.RouterGroup) {
 // Automatically creates a default profile if none exists.
 func (a *XrayCoreConfigProfileController) getProfiles(c *gin.Context) {
 	user := session.GetLoginUser(c)
-	
+
 	// Ensure default profile exists
 	_, err := a.profileService.EnsureDefaultProfile(user.Id)
 	if err != nil {
 		logger.Warningf("Failed to ensure default profile: %v", err)
 		// Continue anyway - try to get existing profiles
 	}
-	
+
 	profiles, err := a.profileService.GetAllProfiles(user.Id)
 	if err != nil {
 		jsonMsg(c, "Failed to get profiles", err)

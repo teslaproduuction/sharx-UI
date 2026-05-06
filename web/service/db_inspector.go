@@ -362,7 +362,7 @@ func normalizeValue(v interface{}) interface{} {
 	case []byte:
 		// Could be JSONB, text, or binary. Try JSON first; fallback to string.
 		s := string(val)
-		if (strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[")) {
+		if strings.HasPrefix(s, "{") || strings.HasPrefix(s, "[") {
 			var js interface{}
 			if json.Unmarshal(val, &js) == nil {
 				return js

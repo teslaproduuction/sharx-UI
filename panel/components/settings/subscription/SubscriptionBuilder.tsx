@@ -5,6 +5,7 @@ import {
   Code2,
   Layers,
   Megaphone,
+  MessageSquareText,
   Palette,
   RotateCcw,
   Route,
@@ -25,6 +26,7 @@ import {
 } from "@/lib/sharxSubpageConfig";
 import { BlockListEditor } from "./BlockListEditor";
 import { BrandingEditor } from "./BrandingEditor";
+import { CustomRemarksEditor } from "./CustomRemarksEditor";
 import { RoutingProfilesEditor } from "./RoutingProfilesEditor";
 import { JsonTemplatesEditor } from "./JsonTemplatesEditor";
 import { ResponseRulesEditor } from "./ResponseRulesEditor";
@@ -34,6 +36,7 @@ type LeftTab =
   | "branding"
   | "blocks"
   | "response-rules"
+  | "custom-remarks"
   | "client-routing"
   | "json-templates"
   | "raw";
@@ -162,6 +165,11 @@ export function SubscriptionBuilder() {
         icon: Megaphone,
       },
       {
+        id: "custom-remarks" as LeftTab,
+        label: t("subBuilder.tabs.customRemarks", { defaultValue: "Subscription remarks" }),
+        icon: MessageSquareText,
+      },
+      {
         id: "client-routing" as LeftTab,
         label: t("subBuilder.tabs.clientRouting", { defaultValue: "Client routing" }),
         icon: Route,
@@ -226,6 +234,8 @@ export function SubscriptionBuilder() {
               <BlockListEditor blocks={config.blocks} onChange={handleSetBlocks} />
             ) : activeTab === "response-rules" ? (
               <ResponseRulesEditor config={config} onChange={setConfig} />
+            ) : activeTab === "custom-remarks" ? (
+              <CustomRemarksEditor config={config} onChange={setConfig} />
             ) : activeTab === "client-routing" ? (
               <RoutingProfilesEditor config={config} onChange={setConfig} />
             ) : activeTab === "json-templates" ? (

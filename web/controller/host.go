@@ -74,11 +74,11 @@ func (a *HostController) getHost(c *gin.Context) {
 // addHost creates a new host.
 func (a *HostController) addHost(c *gin.Context) {
 	user := session.GetLoginUser(c)
-	
+
 	// Extract inboundIds from JSON or form data
 	var inboundIdsFromJSON []int
 	var hasInboundIdsInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract inboundIds
 		bodyBytes, err := c.GetRawData()
@@ -109,7 +109,7 @@ func (a *HostController) addHost(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	host := &model.Host{}
 	err := c.ShouldBind(host)
 	if err != nil {
@@ -158,11 +158,11 @@ func (a *HostController) updateHost(c *gin.Context) {
 	}
 
 	user := session.GetLoginUser(c)
-	
+
 	// Extract inboundIds from JSON or form data
 	var inboundIdsFromJSON []int
 	var hasInboundIdsInJSON bool
-	
+
 	if c.ContentType() == "application/json" {
 		// Read raw body to extract inboundIds
 		bodyBytes, err := c.GetRawData()
@@ -193,7 +193,7 @@ func (a *HostController) updateHost(c *gin.Context) {
 			c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
 		}
 	}
-	
+
 	host := &model.Host{}
 	err = c.ShouldBind(host)
 	if err != nil {

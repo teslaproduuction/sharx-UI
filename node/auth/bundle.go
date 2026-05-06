@@ -21,18 +21,18 @@ const (
 
 // PairingPayload is the JSON inside SECRET_KEY after base64 decode.
 type PairingPayload struct {
-	CACertPem     string `json:"caCertPem"`
-	JWTPublicKey  string `json:"jwtPublicKey"`
-	NodeCertPem   string `json:"nodeCertPem"`
-	NodeKeyPem    string `json:"nodeKeyPem"`
+	CACertPem    string `json:"caCertPem"`
+	JWTPublicKey string `json:"jwtPublicKey"`
+	NodeCertPem  string `json:"nodeCertPem"`
+	NodeKeyPem   string `json:"nodeKeyPem"`
 }
 
 // Bundle holds parsed pairing data for the API server.
 type Bundle struct {
-	Payload       PairingPayload
-	TLSCert       tls.Certificate
-	ClientCAPool  *x509.CertPool
-	JWTPublicKey  *rsa.PublicKey
+	Payload      PairingPayload
+	TLSCert      tls.Certificate
+	ClientCAPool *x509.CertPool
+	JWTPublicKey *rsa.PublicKey
 }
 
 // LoadBundleFromEnv reads SECRET_KEY or SHARX_NODE_SECRET_KEY and parses it.
