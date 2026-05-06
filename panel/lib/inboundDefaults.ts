@@ -187,7 +187,7 @@ export type TelemtFormState = {
 
 export function defaultTelemtForm(): TelemtFormState {
   return {
-    useMiddleProxy: true,
+    useMiddleProxy: false,
     logLevel: "normal",
     adTag: "",
     modesClassic: false,

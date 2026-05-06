@@ -336,3 +336,28 @@ func BuildTelemtPayloadsStandalone() ([]TelemtNodePayload, error) {
 	}
 	return out, nil
 }
+
+// PreviewTelemtToml returns the Telemt config.toml that would be deployed for this inbound (wizard preview).
+// When inbound.Id > 0, [access.users] is filled from the database; for a new inbound the section is empty until clients are assigned.
+func PreviewTelemtToml(inbound *model.Inbound) (string, error) {
+	if inbound == nil {
+		return "", fmt.Errorf("inbound is nil")
+	}
+	if model.NormalizeProtocol(inbound.Protocol) != model.Telemt {
+		return "", fmt.Errorf("not a telemt inbound")
+	}
+	tag := strings.TrimSpace(inbound.Tag)
+	if tag == "" {
+		tag = "inbound-preview"
+	}
+	var users []TelemtAccessUser
+	if inbound.Id > 0 {
+		u, err := TelemtAccessUsersForInbound(inbound.Id)
+		if err != nil {
+			return "", err
+		}
+		users = u
+	}
+	workDir := filepath.Join(config.GetDataFolderPath(), "telemt", tag)
+	return BuildTelemtToml(inbound, users, "", 0, workDir)
+}
