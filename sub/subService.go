@@ -597,7 +597,8 @@ func (s *SubService) genTelemtLinkWithClient(inbound *model.Inbound, client *mod
 	}
 	// Telegram MTProto share links use lowercase hex in `secret` (see Telemt / Telegram clients).
 	// Param order is server, port, secret — do not use url.Values.Encode() (sorts keys).
-	secretHex := telemtTgProxySecretForLink(raw, tlsMode, secure)
+	tlsDom := telemtTlsDomainForSubLink(inbound.Settings)
+	secretHex := telemtTgProxySecretForLink(raw, tlsMode, secure, tlsDom)
 
 	addrs, _ := s.getAddressesForInbound(inbound)
 	if len(addrs) == 0 {
