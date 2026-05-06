@@ -1081,10 +1081,21 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 // AssignClientToInbounds assigns a client to multiple inbounds.
 func (s *ClientService) AssignClientToInbounds(tx *gorm.DB, clientId int, inboundIds []int) error {
 	for i, inboundId := range inboundIds {
+		var ib model.Inbound
+		if err := tx.Select("protocol").First(&ib, inboundId).Error; err != nil {
+			return err
+		}
 		mapping := &model.ClientInboundMapping{
 			ClientId:  clientId,
 			InboundId: inboundId,
 			SortOrder: i * 10,
+		}
+		if model.NormalizeProtocol(ib.Protocol) == model.Telemt {
+			sec, err := GenerateTelemtSecretHex()
+			if err != nil {
+				return err
+			}
+			mapping.TelemtSecret = sec
 		}
 		if err := tx.Create(mapping).Error; err != nil {
 			logger.Warningf("Failed to assign client %d to inbound %d: %v", clientId, inboundId, err)
@@ -1403,6 +1414,9 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 				if err != nil {
 					continue
 				}
+				if !model.IsXrayInboundProtocol(inbound.Protocol) {
+					continue
+				}
 
 				// Get method for shadowsocks
 				var method string
@@ -1549,6 +1563,9 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 				for _, inboundId := range inboundIds {
 					inbound, err := inboundService.GetInbound(inboundId)
 					if err != nil {
+						continue
+					}
+					if !model.IsXrayInboundProtocol(inbound.Protocol) {
 						continue
 					}
 
@@ -1915,6 +1932,9 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 				if err != nil {
 					continue
 				}
+				if !model.IsXrayInboundProtocol(inbound.Protocol) {
+					continue
+				}
 
 				for _, client := range clients {
 					// Build client data for Xray API
@@ -2189,6 +2209,9 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 				for _, inboundId := range clientInboundIds {
 					inbound, err := inboundService.GetInbound(inboundId)
 					if err != nil {
+						continue
+					}
+					if !model.IsXrayInboundProtocol(inbound.Protocol) {
 						continue
 					}
 

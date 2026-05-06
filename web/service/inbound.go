@@ -45,6 +45,9 @@ func (s *InboundService) getXrayAPI(apiPort int) (*xray.XrayAPI, error) {
 }
 
 func marshalInboundJSONForXray(inbound *model.Inbound) ([]byte, error) {
+	if inbound != nil && !model.IsXrayInboundProtocol(inbound.Protocol) {
+		return nil, fmt.Errorf("protocol %s is not an Xray inbound", inbound.Protocol)
+	}
 	ss := SettingService{}
 	cf, _ := ss.GetCertFile()
 	kf, _ := ss.GetKeyFile()
@@ -594,6 +597,10 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 				if client.Email == "" {
 					return inbound, false, common.NewError("empty client ID")
 				}
+			case "telemt":
+				if client.Email == "" {
+					return inbound, false, common.NewError("empty client email for telemt")
+				}
 			default:
 				if client.ID == "" {
 					return inbound, false, common.NewError("empty client ID")
@@ -630,28 +637,33 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 
 	needRestart := false
 	if inbound.Enable {
-		if p != nil {
-			apiPort := p.GetAPIPort()
-			api, err := s.getXrayAPI(apiPort)
-			if err == nil {
-				inboundJson, err1 := marshalInboundJSONForXray(inbound)
-				if err1 != nil {
-					logger.Debug("Unable to marshal inbound config:", err1)
-				} else {
-					err1 = api.AddInbound(inboundJson)
-					if err1 == nil {
-						logger.Debug("New inbound added by api:", inbound.Tag)
+		if model.IsXrayInboundProtocol(inbound.Protocol) {
+			if p != nil {
+				apiPort := p.GetAPIPort()
+				api, err := s.getXrayAPI(apiPort)
+				if err == nil {
+					inboundJson, err1 := marshalInboundJSONForXray(inbound)
+					if err1 != nil {
+						logger.Debug("Unable to marshal inbound config:", err1)
 					} else {
-						logger.Debug("Unable to add inbound by api:", err1)
-						needRestart = true
+						err1 = api.AddInbound(inboundJson)
+						if err1 == nil {
+							logger.Debug("New inbound added by api:", inbound.Tag)
+						} else {
+							logger.Debug("Unable to add inbound by api:", err1)
+							needRestart = true
+						}
 					}
+				} else {
+					logger.Debug("Failed to get XrayAPI connection:", err)
+					needRestart = true
 				}
 			} else {
-				logger.Debug("Failed to get XrayAPI connection:", err)
-				needRestart = true
+				logger.Debugf("[DEBUG-AGENT] AddInbound service: Xray process is nil, skipping live Xray API add; inbound will be applied on next restart")
 			}
 		} else {
-			logger.Debugf("[DEBUG-AGENT] AddInbound service: Xray process is nil, skipping live Xray API add; inbound will be applied on next restart")
+			// Telemt and other non-Xray inbounds: sync via node full push / local restart hooks.
+			needRestart = true
 		}
 	}
 
@@ -659,6 +671,12 @@ func (s *InboundService) AddInbound(inbound *model.Inbound) (*model.Inbound, boo
 	tgbotService := Tgbot{}
 	if tgbotService.IsRunning() {
 		tgbotService.NotifyInboundCreated(inbound)
+	}
+
+	if inbound.Id > 0 && model.NormalizeProtocol(inbound.Protocol) == model.Telemt {
+		if err := BackfillTelemtSecretsForInbound(inbound.Id); err != nil {
+			logger.Warningf("BackfillTelemtSecretsForInbound: %v", err)
+		}
 	}
 
 	return inbound, needRestart, err
@@ -682,53 +700,62 @@ func (s *InboundService) DelInbound(id int) (bool, error) {
 
 	var tag string
 	needRestart := false
-	result := db.Model(model.Inbound{}).Select("tag").Where("id = ? and enable = ?", id, true).First(&tag)
+	var inboundDelRow struct {
+		Tag      string
+		Protocol model.Protocol
+	}
+	result := db.Model(model.Inbound{}).Select("tag", "protocol").Where("id = ? and enable = ?", id, true).First(&inboundDelRow)
+	tag = inboundDelRow.Tag
 	if result.Error == nil {
 		// #region agent log
-		logger.Debugf("[DEBUG-AGENT] DelInbound: Xray API delete, inboundId=%d, tag=%s", id, tag)
+		logger.Debugf("[DEBUG-AGENT] DelInbound: live remove attempt, inboundId=%d, tag=%s, protocol=%s", id, tag, inboundDelRow.Protocol)
 		// #endregion
 
-		// Check multi-node mode
-		settingService := SettingService{}
-		multiMode, _ := settingService.GetMultiNodeMode()
+		if !model.IsXrayInboundProtocol(inboundDelRow.Protocol) {
+			needRestart = true
+		} else {
+			// Check multi-node mode
+			settingService := SettingService{}
+			multiMode, _ := settingService.GetMultiNodeMode()
 
-		if multiMode {
-			// Multi-node mode: remove from all nodes assigned to this inbound
-			nodeService := NodeService{}
-			nodes, err := nodeService.GetNodesForInbound(id)
-			if err == nil && len(nodes) > 0 {
-				// Remove inbound from all nodes via API (async, non-blocking)
-				for _, node := range nodes {
-					go func(n *model.Node) {
-						if err := nodeService.RemoveInboundFromNode(n, tag); err != nil {
-							logger.Warningf("DelInbound: failed to remove inbound %s from node %s via API: %v", tag, n.Name, err)
-						} else {
-							logger.Infof("DelInbound: removed inbound %s from node %s via API (instant)", tag, n.Name)
-						}
-					}(node)
-				}
-				logger.Debugf("DelInbound: using fast API delete for inbound %s on %d node(s)", tag, len(nodes))
-			} else {
-				logger.Debugf("DelInbound: no nodes found for inbound %d, skipping API delete", id)
-			}
-		} else if p != nil {
-			// Single mode: remove from local Xray via API
-			apiPort := p.GetAPIPort()
-			api, err := s.getXrayAPI(apiPort)
-			if err == nil {
-				err1 := api.DelInbound(tag)
-				if err1 == nil {
-					logger.Debug("Inbound deleted by api:", tag)
+			if multiMode {
+				// Multi-node mode: remove from all nodes assigned to this inbound
+				nodeService := NodeService{}
+				nodes, err := nodeService.GetNodesForInbound(id)
+				if err == nil && len(nodes) > 0 {
+					// Remove inbound from all nodes via API (async, non-blocking)
+					for _, node := range nodes {
+						go func(n *model.Node) {
+							if err := nodeService.RemoveInboundFromNode(n, tag); err != nil {
+								logger.Warningf("DelInbound: failed to remove inbound %s from node %s via API: %v", tag, n.Name, err)
+							} else {
+								logger.Infof("DelInbound: removed inbound %s from node %s via API (instant)", tag, n.Name)
+							}
+						}(node)
+					}
+					logger.Debugf("DelInbound: using fast API delete for inbound %s on %d node(s)", tag, len(nodes))
 				} else {
-					logger.Debug("Unable to delete inbound by api:", err1)
+					logger.Debugf("DelInbound: no nodes found for inbound %d, skipping API delete", id)
+				}
+			} else if p != nil {
+				// Single mode: remove from local Xray via API
+				apiPort := p.GetAPIPort()
+				api, err := s.getXrayAPI(apiPort)
+				if err == nil {
+					err1 := api.DelInbound(tag)
+					if err1 == nil {
+						logger.Debug("Inbound deleted by api:", tag)
+					} else {
+						logger.Debug("Unable to delete inbound by api:", err1)
+						needRestart = true
+					}
+				} else {
+					logger.Debug("Failed to get XrayAPI connection:", err)
 					needRestart = true
 				}
 			} else {
-				logger.Debug("Failed to get XrayAPI connection:", err)
-				needRestart = true
+				logger.Debugf("[DEBUG-AGENT] DelInbound: Xray process is nil, skipping live Xray API delete; inbound removal will apply on next restart, inboundId=%d", id)
 			}
-		} else {
-			logger.Debugf("[DEBUG-AGENT] DelInbound: Xray process is nil, skipping live Xray API delete; inbound removal will apply on next restart, inboundId=%d", id)
 		}
 	} else {
 		// #region agent log
@@ -1029,12 +1056,15 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 	// Check multi-node mode (reuse variables already declared above)
 	// settingService and multiMode are already declared at the beginning of the function
 
+	isTelemtInbound := model.NormalizeProtocol(inbound.Protocol) == model.Telemt
+
 	// Use fast API update if:
 	// 1. Only Settings changed (clients list) compared to DB snapshot before this call, OR
 	// 2. Structure unchanged (tag/port/protocol/stream/sniff same) — covers race where DB was
 	//    already updated by a concurrent goroutine before we read oldInbound, OR
 	// 3. In single mode and Xray is running locally
-	useFastAPI := onlySettingsChanged || (multiMode && structureUnchanged) || (p != nil && !multiMode)
+	// Telemt is never updated via Xray API — always full push / restart.
+	useFastAPI := !isTelemtInbound && (onlySettingsChanged || (multiMode && structureUnchanged) || (p != nil && !multiMode))
 
 	logger.Debugf("UpdateInbound: inboundId=%d tag=%s multiMode=%v onlySettingsChanged=%v settingsMatchDB=%v useFastAPI=%v structureUnchanged=%v",
 		inbound.Id, tag, multiMode, onlySettingsChanged, settingsMatchDB, useFastAPI, structureUnchanged)
@@ -1160,6 +1190,12 @@ func (s *InboundService) UpdateInbound(inbound *model.Inbound) (*model.Inbound, 
 		}
 	}
 
+	if err == nil && inbound.Id > 0 && model.NormalizeProtocol(inbound.Protocol) == model.Telemt {
+		if e := BackfillTelemtSecretsForInbound(inbound.Id); e != nil {
+			logger.Warningf("BackfillTelemtSecretsForInbound: %v", e)
+		}
+	}
+
 	return inbound, needRestart, err
 }
 
@@ -1193,6 +1229,10 @@ func (s *InboundService) AddInboundClient(data *model.Inbound) (bool, error) {
 		case "shadowsocks":
 			if client.Email == "" {
 				return false, common.NewError("empty client ID")
+			}
+		case "telemt":
+			if client.Email == "" {
+				return false, common.NewError("empty client email for telemt")
 			}
 		default:
 			if client.ID == "" {
@@ -1689,6 +1729,9 @@ func (s *InboundService) autoRenewClients(tx *gorm.DB) (bool, int64, error) {
 			return true, int64(len(traffics)), nil
 		}
 		for _, clientToAdd := range clientsToAdd {
+			if !model.IsXrayInboundProtocol(model.Protocol(clientToAdd.protocol)) {
+				continue
+			}
 			err1 = s.xrayApi.AddUser(clientToAdd.protocol, clientToAdd.tag, clientToAdd.client)
 			if err1 != nil {
 				needRestart = true
@@ -2199,48 +2242,52 @@ func (s *InboundService) ResetClientTraffic(id int, clientEmail string) (bool, e
 			return false, err
 		}
 		for _, client := range clients {
-			if client.Email == clientEmail && client.Enable {
-				if p != nil {
-					apiPort := p.GetAPIPort()
-					api, err := s.getXrayAPI(apiPort)
-					if err == nil {
-						cipher := ""
-						if string(inbound.Protocol) == "shadowsocks" {
-							var oldSettings map[string]any
-							err = json.Unmarshal([]byte(inbound.Settings), &oldSettings)
-							if err != nil {
-								return false, err
-							}
-							cipher = oldSettings["method"].(string)
-						}
-						flowVal := client.Flow
-						if model.NormalizeProtocol(inbound.Protocol) == model.VLESS {
-							flowVal = VLESSFlowFromInboundSettings(inbound.Settings)
-						}
-						user := map[string]any{
-							"email":    client.Email,
-							"id":       client.ID,
-							"security": client.Security,
-							"flow":     flowVal,
-							"password": client.Password,
-							"cipher":   cipher,
-						}
-						if inbound.Protocol == model.Hysteria || inbound.Protocol == model.Hysteria2 {
-							user = map[string]any{"email": client.Email, "auth": client.Password}
-						}
-						err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, user)
-						if err1 == nil {
-							logger.Debug("Client enabled due to reset traffic:", clientEmail)
-						} else {
-							logger.Debug("Error in enabling client by api:", err1)
-							needRestart = true
-						}
-					}
-				} else {
-					logger.Debugf("[DEBUG-AGENT] ResetClientTraffic: Xray process is nil, skipping live AddUser; client will be enabled on next restart, email=%s", clientEmail)
-				}
+			if client.Email != clientEmail || !client.Enable {
+				continue
+			}
+			if !model.IsXrayInboundProtocol(inbound.Protocol) {
 				break
 			}
+			if p != nil {
+				apiPort := p.GetAPIPort()
+				api, err := s.getXrayAPI(apiPort)
+				if err == nil {
+					cipher := ""
+					if string(inbound.Protocol) == "shadowsocks" {
+						var oldSettings map[string]any
+						err = json.Unmarshal([]byte(inbound.Settings), &oldSettings)
+						if err != nil {
+							return false, err
+						}
+						cipher = oldSettings["method"].(string)
+					}
+					flowVal := client.Flow
+					if model.NormalizeProtocol(inbound.Protocol) == model.VLESS {
+						flowVal = VLESSFlowFromInboundSettings(inbound.Settings)
+					}
+					user := map[string]any{
+						"email":    client.Email,
+						"id":       client.ID,
+						"security": client.Security,
+						"flow":     flowVal,
+						"password": client.Password,
+						"cipher":   cipher,
+					}
+					if inbound.Protocol == model.Hysteria || inbound.Protocol == model.Hysteria2 {
+						user = map[string]any{"email": client.Email, "auth": client.Password}
+					}
+					err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, user)
+					if err1 == nil {
+						logger.Debug("Client enabled due to reset traffic:", clientEmail)
+					} else {
+						logger.Debug("Error in enabling client by api:", err1)
+						needRestart = true
+					}
+				}
+			} else {
+				logger.Debugf("[DEBUG-AGENT] ResetClientTraffic: Xray process is nil, skipping live AddUser; client will be enabled on next restart, email=%s", clientEmail)
+			}
+			break
 		}
 	}
 

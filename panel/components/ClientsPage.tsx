@@ -4371,6 +4371,14 @@ export function ClientsPage() {
                     })}
                   </p>
                 ) : null}
+                {row.protocol === "telemt" ? (
+                  <p className="mb-2 text-xs text-[var(--fg-subtle)]">
+                    {t("pages.clients.keysTelemtHint", {
+                      defaultValue:
+                        "Telemt MTProto: open the tg://proxy link in Telegram (or copy the proxy URL from your subscription). Secrets are tied to this client on this inbound.",
+                    })}
+                  </p>
+                ) : null}
                 <pre
                   className={cx(
                     "overflow-auto whitespace-pre-wrap break-all rounded-lg bg-[var(--surface)] p-2 font-mono text-[11px] text-[var(--fg-muted)]",

@@ -11,7 +11,8 @@ export type InboundFormProtocol =
   | "mixed"
   | "hysteria"
   | "hysteria2"
-  | "wireguard";
+  | "wireguard"
+  | "telemt";
 
 function randomId(length: number): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -157,6 +158,153 @@ export function buildWireguardInboundApiPayload(
     out.workers = wu;
   }
   return out;
+}
+
+/** Telemt (MTProto) inbound: stored under `settings` as `{ "telemt": { ... } }`. */
+export type TelemtFormState = {
+  useMiddleProxy: boolean;
+  logLevel: string;
+  /** Optional [general].ad_tag from @MTProxybot */
+  adTag: string;
+  modesClassic: boolean;
+  modesSecure: boolean;
+  /** Telemt `tls` = Fake-TLS MTProto (ee links). */
+  modesTls: boolean;
+  linksShow: string;
+  linksPublicHost: string;
+  linksPublicPort: string;
+  censorshipTlsDomain: string;
+  censorshipMask: boolean;
+  censorshipTlsEmulation: boolean;
+  censorshipTlsFrontDir: string;
+  /** [censorship].unknown_sni_action — empty = omit. */
+  censorshipUnknownSniAction: string;
+  /** Optional [server].metrics_port */
+  metricsPort: string;
+  apiEnabled: boolean;
+  apiListen: string;
+};
+
+export function defaultTelemtForm(): TelemtFormState {
+  return {
+    useMiddleProxy: true,
+    logLevel: "normal",
+    adTag: "",
+    modesClassic: false,
+    modesSecure: false,
+    modesTls: true,
+    linksShow: "*",
+    linksPublicHost: "",
+    linksPublicPort: "",
+    censorshipTlsDomain: "petrovich.ru",
+    censorshipMask: true,
+    censorshipTlsEmulation: true,
+    censorshipTlsFrontDir: "tlsfront",
+    censorshipUnknownSniAction: "",
+    metricsPort: "",
+    apiEnabled: false,
+    apiListen: "127.0.0.1:9091",
+  };
+}
+
+export function parseTelemtSettingsToForm(settingsStr: string): TelemtFormState {
+  const base = defaultTelemtForm();
+  try {
+    const root = JSON.parse(settingsStr || "{}") as Record<string, unknown>;
+    const tm =
+      root.telemt != null && typeof root.telemt === "object" && !Array.isArray(root.telemt)
+        ? (root.telemt as Record<string, unknown>)
+        : root;
+    if (typeof tm.useMiddleProxy === "boolean") base.useMiddleProxy = tm.useMiddleProxy;
+    if (typeof tm.logLevel === "string" && tm.logLevel.trim()) {
+      base.logLevel = tm.logLevel.trim();
+    }
+    if (typeof tm.adTag === "string") base.adTag = tm.adTag.trim();
+    const modes = tm.modes as Record<string, unknown> | undefined;
+    if (modes && typeof modes === "object") {
+      if (typeof modes.classic === "boolean") base.modesClassic = modes.classic;
+      if (typeof modes.secure === "boolean") base.modesSecure = modes.secure;
+      if (typeof modes.tls === "boolean") base.modesTls = modes.tls;
+    }
+    const links = tm.links as Record<string, unknown> | undefined;
+    if (links && typeof links === "object") {
+      if (typeof links.show === "string") base.linksShow = links.show;
+      if (typeof links.publicHost === "string") base.linksPublicHost = links.publicHost;
+      if (typeof links.publicPort === "number" && links.publicPort > 0) {
+        base.linksPublicPort = String(links.publicPort);
+      } else if (typeof links.publicPort === "string" && links.publicPort.trim()) {
+        base.linksPublicPort = links.publicPort.trim();
+      }
+    }
+    const c = tm.censorship as Record<string, unknown> | undefined;
+    if (c && typeof c === "object") {
+      const td =
+        typeof c.tlsDomain === "string" && c.tlsDomain.trim()
+          ? c.tlsDomain.trim()
+          : typeof c.sni === "string" && c.sni.trim()
+            ? c.sni.trim()
+            : "";
+      if (td) base.censorshipTlsDomain = td;
+      if (typeof c.mask === "boolean") base.censorshipMask = c.mask;
+      if (typeof c.tlsEmulation === "boolean") base.censorshipTlsEmulation = c.tlsEmulation;
+      if (typeof c.tlsFrontDir === "string" && c.tlsFrontDir.trim()) {
+        base.censorshipTlsFrontDir = c.tlsFrontDir.trim();
+      }
+      if (typeof c.unknownSniAction === "string") {
+        base.censorshipUnknownSniAction = c.unknownSniAction.trim();
+      }
+    }
+    if (typeof tm.metricsPort === "number" && tm.metricsPort > 0) {
+      base.metricsPort = String(tm.metricsPort);
+    } else if (typeof tm.metricsPort === "string" && tm.metricsPort.trim()) {
+      base.metricsPort = tm.metricsPort.trim();
+    }
+    if (typeof tm.apiEnabled === "boolean") base.apiEnabled = tm.apiEnabled;
+    if (typeof tm.apiListen === "string" && tm.apiListen.trim()) {
+      base.apiListen = tm.apiListen.trim();
+    }
+  } catch {
+    /* keep base */
+  }
+  return base;
+}
+
+export function buildTelemtSettingsJson(form: TelemtFormState): string {
+  const links: Record<string, unknown> = {
+    show: form.linksShow.trim() || "*",
+  };
+  const ph = form.linksPublicHost.trim();
+  const pp = parseInt(form.linksPublicPort.trim(), 10);
+  if (ph.length > 0) links.publicHost = ph;
+  if (Number.isFinite(pp) && pp > 0) links.publicPort = pp;
+
+  const mp = parseInt(form.metricsPort.trim(), 10);
+  const telemt: Record<string, unknown> = {
+    useMiddleProxy: form.useMiddleProxy,
+    logLevel: form.logLevel.trim() || "normal",
+    modes: {
+      classic: form.modesClassic,
+      secure: form.modesSecure,
+      tls: form.modesTls,
+    },
+    links,
+    censorship: {
+      tlsDomain: form.censorshipTlsDomain.trim() || "petrovich.ru",
+      mask: form.censorshipMask,
+      tlsEmulation: form.censorshipTlsEmulation,
+      tlsFrontDir: form.censorshipTlsFrontDir.trim() || "tlsfront",
+    },
+    apiEnabled: form.apiEnabled,
+    apiListen: form.apiListen.trim() || "127.0.0.1:9091",
+  };
+  const tag = form.adTag.trim();
+  if (tag) telemt.adTag = tag;
+  const unk = form.censorshipUnknownSniAction.trim();
+  if (unk === "mask" || unk === "reject_handshake") {
+    (telemt.censorship as Record<string, unknown>).unknownSniAction = unk;
+  }
+  if (Number.isFinite(mp) && mp > 0) telemt.metricsPort = mp;
+  return JSON.stringify({ telemt });
 }
 
 export function newClientUUID(): string {
@@ -706,7 +854,13 @@ function parseHeaderType(tcp: Record<string, unknown> | undefined): "none" | "ht
 }
 
 /** How the inbound transport editor maps to streamSettings (UI varies by protocol). */
-export type InboundStreamTransportMode = "hysteria" | "mixed" | "shadowsocks" | "wireguard" | "full";
+export type InboundStreamTransportMode =
+  | "hysteria"
+  | "mixed"
+  | "shadowsocks"
+  | "wireguard"
+  | "telemt"
+  | "full";
 
 export function getInboundStreamTransportMode(
   protocol: InboundFormProtocol,
@@ -717,6 +871,8 @@ export function getInboundStreamTransportMode(
   /** TCP/WS, stream security none — Shadowsocks has its own crypto. */
   if (protocol === "shadowsocks") return "shadowsocks";
   if (protocol === "wireguard") return "wireguard";
+  /** Telemt runs outside Xray — no Xray streamSettings. */
+  if (protocol === "telemt") return "telemt";
   return "full";
 }
 
@@ -791,7 +947,7 @@ export function parseStreamSettingsToForm(
   protocol: InboundFormProtocol,
 ): StreamFormState {
   const base = defaultStreamForm();
-  if (protocol === "wireguard") {
+  if (protocol === "wireguard" || protocol === "telemt") {
     return base;
   }
   if (protocol === "hysteria" || protocol === "hysteria2") {
@@ -959,7 +1115,7 @@ export function buildStreamSettingsFromForm(
   state: StreamFormState,
   protocol: InboundFormProtocol,
 ): string {
-  if (protocol === "wireguard") {
+  if (protocol === "wireguard" || protocol === "telemt") {
     return "{}";
   }
   if (protocol === "hysteria") {
@@ -1211,6 +1367,8 @@ export function buildSettingsJson(
         udp: true,
       });
     }
+    case "telemt":
+      return buildTelemtSettingsJson(defaultTelemtForm());
     default:
       return "{}";
   }
@@ -1228,6 +1386,9 @@ export function parseFirstClientFromSettings(
   settingsStr: string,
   protocol: InboundFormProtocol,
 ): Partial<FirstClientPatch> {
+  if (protocol === "telemt") {
+    return {};
+  }
   try {
     const root = JSON.parse(settingsStr) as Record<string, unknown>;
     if (protocol === "mixed") {
@@ -1269,6 +1430,9 @@ export function mergeFirstClientIntoSettings(
   protocol: InboundFormProtocol,
   patch: FirstClientPatch,
 ): string {
+  if (protocol === "telemt") {
+    return settingsStr.trim() ? settingsStr : buildTelemtSettingsJson(defaultTelemtForm());
+  }
   let root: Record<string, unknown> = {};
   try {
     root = JSON.parse(settingsStr) as Record<string, unknown>;

@@ -25,7 +25,9 @@ import {
   buildSettingsJson,
   buildSniffingFromForm,
   buildStreamSettingsFromForm,
+  buildTelemtSettingsJson,
   buildWireguardInboundApiPayload,
+  defaultTelemtForm,
   defaultWireguardForm,
   defaultSniffingForm,
   defaultSniffingString,
@@ -40,6 +42,7 @@ import {
   parseWireguardSettingsToForm,
   parseSniffingToForm,
   parseStreamSettingsToForm,
+  parseTelemtSettingsToForm,
   randomPassword,
   randomQuicKey,
   randomRealityShortIds,
@@ -388,6 +391,7 @@ const PROTOCOLS: { value: InboundFormProtocol; label: string }[] = [
   { value: "mixed", label: "Mixed" },
   { value: "hysteria2", label: "Hysteria 2" },
   { value: "wireguard", label: "WireGuard" },
+  { value: "telemt", label: "Telemt (MTProto)" },
 ];
 
 const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
@@ -399,6 +403,7 @@ const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
   "hysteria",
   "hysteria2",
   "wireguard",
+  "telemt",
 ]);
 
 const TRAFFIC_RESET: { value: string; labelKey: string }[] = [
@@ -507,6 +512,7 @@ const PROTOCOL_TONE: Record<string, "accent" | "info" | "warning" | "success" | 
   hysteria2: "accent",
   hysteria: "accent",
   wireguard: "success",
+  telemt: "info",
 };
 
 const defaultForm = () => ({
@@ -524,6 +530,7 @@ const defaultForm = () => ({
   mixedUser: "proxy",
   mixedPassword: randomPassword(12),
   wireguardForm: defaultWireguardForm(),
+  telemtForm: defaultTelemtForm(),
   totalGb: "0",
   trafficReset: "never",
   streamForm: defaultStreamForm(),
@@ -557,6 +564,13 @@ export function InboundsPage() {
   /** When false/loading, the wizard omits the “Nodes” step (standalone / single node). */
   const [multiNodeMode, setMultiNodeMode] = useState<boolean | null>(null);
   const [baselineSettings, setBaselineSettings] = useState("");
+
+  useEffect(() => {
+    if (form.protocol === "telemt" && inboundModalView === "json") {
+      setInboundModalView("form");
+    }
+  }, [form.protocol, inboundModalView]);
+
   const [preserveTraffic, setPreserveTraffic] = useState({
     up: 0,
     down: 0,
@@ -706,14 +720,22 @@ export function InboundsPage() {
           proto === "wireguard"
             ? parseWireguardSettingsToForm(ib.settings || "{}")
             : defaultWireguardForm(),
+        telemtForm:
+          proto === "telemt"
+            ? parseTelemtSettingsToForm(ib.settings || "{}")
+            : defaultTelemtForm(),
         totalGb: totalBytesToGbInput(ib.total ?? 0),
         trafficReset: ib.trafficReset || "never",
         streamForm: parseStreamSettingsToForm(
-          ib.streamSettings || defaultStreamSettingsString(),
+          proto === "telemt"
+            ? "{}"
+            : (ib.streamSettings || defaultStreamSettingsString()),
           proto,
         ),
         sniffingForm: parseSniffingToForm(
-          ib.sniffing || defaultSniffingString(),
+          proto === "telemt"
+            ? '{"enabled":false,"destOverride":[],"metadataOnly":false,"routeOnly":false}'
+            : (ib.sniffing || defaultSniffingString()),
         ),
       });
       setNodeBindings(inboundBindingsToForm(ib));
@@ -748,6 +770,7 @@ export function InboundsPage() {
   const applyStreamPresetForProtocol = (protocol: InboundFormProtocol) => {
     setForm((f) => {
       const isSwitchingToWg = protocol === "wireguard" && f.protocol !== "wireguard";
+      const isSwitchingToTelemt = protocol === "telemt" && f.protocol !== "telemt";
       const streamForm =
         protocol === "hysteria" || protocol === "hysteria2"
           ? defaultStreamFormHysteria()
@@ -757,7 +780,19 @@ export function InboundsPage() {
         protocol,
         streamForm,
         wireguardForm: isSwitchingToWg ? defaultWireguardForm() : f.wireguardForm,
+        telemtForm: isSwitchingToTelemt ? defaultTelemtForm() : f.telemtForm,
       };
+      if (isSwitchingToTelemt) {
+        out.port = 443;
+        if (!f.remark.trim()) {
+          out.remark = t("pages.inbounds.telemtDefaultRemark", {
+            defaultValue: "Telemt MTProto",
+          });
+        }
+        if (!f.listen.trim()) {
+          out.listen = "0.0.0.0";
+        }
+      }
       if (isSwitchingToWg) {
         out.port = 51820;
         if (!f.remark.trim()) {
@@ -913,10 +948,10 @@ export function InboundsPage() {
     if (!form.port || form.port < 1 || form.port > 65535) {
       return { ok: false, message: t("pages.inbounds.port") + ": 1–65535" };
     }
-    const streamSettingsStr = buildStreamSettingsFromForm(
-      form.streamForm,
-      form.protocol,
-    );
+    const isTelemt = form.protocol === "telemt";
+    const streamSettingsStr = isTelemt
+      ? "{}"
+      : buildStreamSettingsFromForm(form.streamForm, form.protocol);
     let streamObj: unknown;
     let sniffObj: unknown;
     try {
@@ -924,7 +959,14 @@ export function InboundsPage() {
     } catch {
       return { ok: false, message: t("pages.inbounds.invalidStreamJson") };
     }
-    const sniffingStr = buildSniffingFromForm(form.sniffingForm);
+    const sniffingStr = isTelemt
+      ? JSON.stringify({
+          enabled: false,
+          destOverride: [],
+          metadataOnly: false,
+          routeOnly: false,
+        })
+      : buildSniffingFromForm(form.sniffingForm);
     try {
       sniffObj = JSON.parse(sniffingStr);
     } catch {
@@ -951,6 +993,8 @@ export function InboundsPage() {
     let settings: string;
     if (form.protocol === "wireguard") {
       settings = "{}";
+    } else if (form.protocol === "telemt") {
+      settings = buildTelemtSettingsJson(form.telemtForm);
     } else if (form.protocol === "mixed") {
       // For mixed, accounts are managed entirely via client assignments.
       // Preserve existing settings from DB on edit; use noauth skeleton on create.
@@ -1190,13 +1234,31 @@ export function InboundsPage() {
   const isEdit = editId != null;
 
   const inboundStepOrder = useMemo<InboundStepId[]>(() => {
+    // mixed: inbounds use client assignments only — no per-protocol auth step.
+    // telemt: settings UI lives on the auth step (same slot as other protocols).
     const hasAuth = form.protocol !== "mixed";
     return INBOUND_STEP_ORDER.filter((id) => {
       if (id === "nodes" && multiNodeMode !== true) return false;
       if (id === "auth" && !hasAuth) return false;
+      if (id === "sniffing" && form.protocol === "telemt") return false;
       return true;
     });
   }, [multiNodeMode, form.protocol]);
+
+  useEffect(() => {
+    if (inboundStepOrder.length > 0 && !inboundStepOrder.includes(step)) {
+      let next: InboundStepId | undefined;
+      const idx = INBOUND_STEP_ORDER.indexOf(step);
+      for (let i = idx; i >= 0; i--) {
+        const id = INBOUND_STEP_ORDER[i];
+        if (id && inboundStepOrder.includes(id)) {
+          next = id;
+          break;
+        }
+      }
+      setStep(next ?? inboundStepOrder[0] ?? "basics");
+    }
+  }, [inboundStepOrder, step]);
 
   useEffect(() => {
     if (step === "nodes" && multiNodeMode !== true) {
@@ -1241,14 +1303,21 @@ export function InboundsPage() {
             icon: SlidersHorizontal,
           };
         }
+        const isTelemtAuth = id === "auth" && form.protocol === "telemt";
         return {
           id: s.id,
-          label: t(s.labelKey, { defaultValue: s.labelDefault }),
-          description: t(s.descriptionKey, { defaultValue: s.descriptionDefault }),
+          label: isTelemtAuth
+            ? t("pages.inbounds.stepTelemtAuth", { defaultValue: "Telemt (MTProto)" })
+            : t(s.labelKey, { defaultValue: s.labelDefault }),
+          description: isTelemtAuth
+            ? t("pages.inbounds.stepTelemtAuthDesc", {
+                defaultValue: "Fake-TLS modes, SNI domain, links, API",
+              })
+            : t(s.descriptionKey, { defaultValue: s.descriptionDefault }),
           icon: s.icon,
         };
       }),
-    [t, inboundStepOrder],
+    [t, inboundStepOrder, form.protocol],
   );
 
   const tabItems = useMemo(
@@ -1258,8 +1327,15 @@ export function InboundsPage() {
         if (!s) {
           return { id, label: id, title: id, icon: SlidersHorizontal };
         }
-        const label = t(s.labelKey, { defaultValue: s.labelDefault });
-        const desc = t(s.descriptionKey, { defaultValue: s.descriptionDefault });
+        const isTelemtAuth = id === "auth" && form.protocol === "telemt";
+        const label = isTelemtAuth
+          ? t("pages.inbounds.stepTelemtAuth", { defaultValue: "Telemt (MTProto)" })
+          : t(s.labelKey, { defaultValue: s.labelDefault });
+        const desc = isTelemtAuth
+          ? t("pages.inbounds.stepTelemtAuthDesc", {
+              defaultValue: "Fake-TLS modes, SNI domain, links, API",
+            })
+          : t(s.descriptionKey, { defaultValue: s.descriptionDefault });
         return {
           id: s.id,
           label,
@@ -1267,7 +1343,7 @@ export function InboundsPage() {
           icon: s.icon,
         };
       }),
-    [t, inboundStepOrder],
+    [t, inboundStepOrder, form.protocol],
   );
 
   const modalHeaderIconTone = PROTOCOL_TONE[form.protocol] ?? "accent";
@@ -1825,6 +1901,7 @@ export function InboundsPage() {
                 </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end sm:gap-3">
+                {form.protocol !== "telemt" ? (
                 <div
                   className="inline-flex w-fit shrink-0 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_4%,transparent)] p-0.5"
                   role="group"
@@ -1857,6 +1934,7 @@ export function InboundsPage() {
                     })}
                   </button>
                 </div>
+                ) : null}
                 <div className="text-xs text-[var(--fg-subtle)] sm:text-right">
                   {t("protocol")}:{" "}
                   <span className="font-mono text-[var(--fg)]">{form.protocol}</span>
@@ -2480,6 +2558,13 @@ export function InboundsPage() {
                   {t("pages.inbounds.wireguardTransportHint", {
                     defaultValue:
                       "WireGuard uses UDP on the inbound port. There is no TCP/WebSocket `streamSettings` — leave the generated empty `{}` and configure `secretKey`, `address`, and `peers` on the next step (same shape as the Xray WireGuard example).",
+                  })}
+                </p>
+              ) : streamTransportMode === "telemt" ? (
+                <p className="text-xs leading-relaxed text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtTransportHint", {
+                    defaultValue:
+                      "Telemt does not use Xray `streamSettings`. The process listens on this inbound port with Telemt-specific options on the next step; users and MTProto secrets are created when clients are assigned.",
                   })}
                 </p>
               ) : streamTransportMode === "mixed" ? (
@@ -3954,9 +4039,15 @@ export function InboundsPage() {
 
             {step === "auth" ? (
             <InboundFormSection
-              title={t("pages.inbounds.sectionAuth", {
-                defaultValue: "Protocol authentication",
-              })}
+              title={
+                form.protocol === "telemt"
+                  ? t("pages.inbounds.sectionTelemt", {
+                      defaultValue: "Telemt (MTProto) & Fake-TLS",
+                    })
+                  : t("pages.inbounds.sectionAuth", {
+                      defaultValue: "Protocol authentication",
+                    })
+              }
             >
             {form.protocol === "vless" ? (
               <div>
@@ -4141,6 +4232,365 @@ export function InboundsPage() {
                   </div>
                 </div>
               </>
+            ) : null}
+            {form.protocol === "telemt" ? (
+              <div className="space-y-3">
+                <p className="text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtSettingsHint", {
+                    defaultValue:
+                      "Open this wizard step from the left: «Telemt (MTProto)». Here you configure Telemt [general], [general.modes] (Fake-TLS = tls), [censorship] SNI/masking, links and API. Client MTProto secrets are created when users are assigned to this inbound.",
+                  })}
+                </p>
+                <CheckboxField
+                  checked={form.telemtForm.useMiddleProxy}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      telemtForm: { ...f.telemtForm, useMiddleProxy: e.target.checked },
+                    }))
+                  }
+                  label={t("pages.inbounds.telemtUseMiddleProxy", {
+                    defaultValue: "use_middle_proxy",
+                  })}
+                />
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-log"
+                  >
+                    {t("pages.inbounds.telemtLogLevel", { defaultValue: "log_level" })}
+                  </label>
+                  <Input
+                    id="in-tm-log"
+                    className="font-mono text-xs"
+                    value={form.telemtForm.logLevel}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, logLevel: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-adtag"
+                  >
+                    {t("pages.inbounds.telemtAdTag", {
+                      defaultValue: "ad_tag (optional, @MTProxybot)",
+                    })}
+                  </label>
+                  <Input
+                    id="in-tm-adtag"
+                    className="font-mono text-xs"
+                    placeholder="32 hex from MTProxybot"
+                    value={form.telemtForm.adTag}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, adTag: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtModes", { defaultValue: "Modes" })}
+                </p>
+                <p className="text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtModesExplain", {
+                    defaultValue:
+                      "tls = Fake-TLS (Telegram `ee…` links). secure = `dd…` prefix. classic = plain MTProto secret. Official reference: github.com/telemt/telemt — config.toml & docs.",
+                  })}
+                </p>
+                <div className="flex flex-wrap gap-4">
+                  <CheckboxField
+                    checked={form.telemtForm.modesClassic}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, modesClassic: e.target.checked },
+                      }))
+                    }
+                    label={t("pages.inbounds.telemtModeClassic", { defaultValue: "classic" })}
+                  />
+                  <CheckboxField
+                    checked={form.telemtForm.modesSecure}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, modesSecure: e.target.checked },
+                      }))
+                    }
+                    label={t("pages.inbounds.telemtModeSecure", { defaultValue: "secure" })}
+                  />
+                  <CheckboxField
+                    checked={form.telemtForm.modesTls}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, modesTls: e.target.checked },
+                      }))
+                    }
+                    label={t("pages.inbounds.telemtModeTls", {
+                      defaultValue: "tls (Fake-TLS, ee links)",
+                    })}
+                  />
+                </div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtLinks", { defaultValue: "Links (optional)" })}
+                </p>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-show"
+                  >
+                    {t("pages.inbounds.telemtLinksShow", { defaultValue: "show" })}
+                  </label>
+                  <Input
+                    id="in-tm-show"
+                    className="font-mono text-xs"
+                    value={form.telemtForm.linksShow}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, linksShow: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-tm-ph"
+                    >
+                      {t("pages.inbounds.telemtPublicHost", {
+                        defaultValue: "public_host (optional)",
+                      })}
+                    </label>
+                    <Input
+                      id="in-tm-ph"
+                      className="font-mono text-xs"
+                      value={form.telemtForm.linksPublicHost}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          telemtForm: { ...f.telemtForm, linksPublicHost: e.target.value },
+                        }))
+                      }
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                      htmlFor="in-tm-pp"
+                    >
+                      {t("pages.inbounds.telemtPublicPort", {
+                        defaultValue: "public_port (optional)",
+                      })}
+                    </label>
+                    <Input
+                      id="in-tm-pp"
+                      className="font-mono text-xs"
+                      value={form.telemtForm.linksPublicPort}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          telemtForm: { ...f.telemtForm, linksPublicPort: e.target.value },
+                        }))
+                      }
+                      spellCheck={false}
+                    />
+                  </div>
+                </div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtCensorship", { defaultValue: "Censorship" })}
+                </p>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-domain"
+                  >
+                    {t("pages.inbounds.telemtTlsDomain", {
+                    defaultValue: "SNI domain (tls_domain)",
+                  })}
+                  </label>
+                  <p className="mb-1.5 text-[11px] text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.telemtTlsDomainHint", {
+                      defaultValue:
+                        "Fake-TLS fronting hostname written to Telemt [censorship] tls_domain. Optional JSON key censorship.sni is accepted as an alias when importing configs.",
+                    })}
+                  </p>
+                  <Input
+                    id="in-tm-domain"
+                    className="font-mono text-xs"
+                    value={form.telemtForm.censorshipTlsDomain}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, censorshipTlsDomain: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <CheckboxField
+                    checked={form.telemtForm.censorshipMask}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, censorshipMask: e.target.checked },
+                      }))
+                    }
+                    label={t("pages.inbounds.telemtMask", { defaultValue: "mask" })}
+                  />
+                  <CheckboxField
+                    checked={form.telemtForm.censorshipTlsEmulation}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: {
+                          ...f.telemtForm,
+                          censorshipTlsEmulation: e.target.checked,
+                        },
+                      }))
+                    }
+                    label={t("pages.inbounds.telemtTlsEmulation", {
+                      defaultValue: "tls_emulation",
+                    })}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-front"
+                  >
+                    {t("pages.inbounds.telemtTlsFrontDir", {
+                      defaultValue: "tls_front_dir",
+                    })}
+                  </label>
+                  <Input
+                    id="in-tm-front"
+                    className="font-mono text-xs"
+                    value={form.telemtForm.censorshipTlsFrontDir}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, censorshipTlsFrontDir: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-unknown-sni"
+                  >
+                    {t("pages.inbounds.telemtUnknownSniAction", {
+                      defaultValue: "unknown_sni_action",
+                    })}
+                  </label>
+                  <p className="mb-1.5 text-[11px] text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.telemtUnknownSniActionHint", {
+                      defaultValue:
+                        "Telemt [censorship]: how to treat an SNI mismatch. Default (empty) follows Telemt defaults. mask / reject_handshake when you need explicit policy.",
+                    })}
+                  </p>
+                  <SelectNative
+                    id="in-tm-unknown-sni"
+                    className="!h-9 w-full min-w-0 !px-2 !text-xs font-mono"
+                    value={form.telemtForm.censorshipUnknownSniAction}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: {
+                          ...f.telemtForm,
+                          censorshipUnknownSniAction: e.target.value,
+                        },
+                      }))
+                    }
+                  >
+                    <option value="">
+                      {t("pages.inbounds.telemtUnknownSniDefault", {
+                        defaultValue: "(default / omit)",
+                      })}
+                    </option>
+                    <option value="mask">mask</option>
+                    <option value="reject_handshake">reject_handshake</option>
+                  </SelectNative>
+                </div>
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-metrics"
+                  >
+                    {t("pages.inbounds.telemtMetricsPort", {
+                      defaultValue: "metrics_port (optional)",
+                    })}
+                  </label>
+                  <p className="mb-1.5 text-[11px] text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.telemtMetricsPortHint", {
+                      defaultValue: "[server] Prometheus/HTTP metrics listener port; leave empty to omit.",
+                    })}
+                  </p>
+                  <Input
+                    id="in-tm-metrics"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    className="font-mono text-xs"
+                    placeholder="e.g. 9182"
+                    value={form.telemtForm.metricsPort}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, metricsPort: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+                <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.telemtApi", { defaultValue: "Server API" })}
+                </p>
+                <CheckboxField
+                  checked={form.telemtForm.apiEnabled}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      telemtForm: { ...f.telemtForm, apiEnabled: e.target.checked },
+                    }))
+                  }
+                  label={t("pages.inbounds.telemtApiEnabled", { defaultValue: "api enabled" })}
+                />
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor="in-tm-apil"
+                  >
+                    {t("pages.inbounds.telemtApiListen", { defaultValue: "api listen" })}
+                  </label>
+                  <Input
+                    id="in-tm-apil"
+                    className="font-mono text-xs"
+                    value={form.telemtForm.apiListen}
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        telemtForm: { ...f.telemtForm, apiListen: e.target.value },
+                      }))
+                    }
+                    spellCheck={false}
+                  />
+                </div>
+              </div>
             ) : null}
             {form.protocol === "wireguard" ? (
               <div className="space-y-3">
@@ -4343,7 +4793,8 @@ export function InboundsPage() {
             !isHysteriaFamily &&
             form.protocol !== "shadowsocks" &&
             form.protocol !== "mixed" &&
-            form.protocol !== "wireguard" ? (
+            form.protocol !== "wireguard" &&
+            form.protocol !== "telemt" ? (
               <p className="text-xs text-[var(--fg-subtle)]">
                 {t("pages.inbounds.sectionAuthNone", {
                   defaultValue:

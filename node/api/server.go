@@ -28,6 +28,7 @@ import (
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
 	"github.com/konstpic/sharx-code/v2/node/geopush"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
+	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 )
@@ -44,9 +45,10 @@ func try(fn func()) {
 
 // Server provides REST API for managing the node.
 type Server struct {
-	port        int
-	xrayManager *xray.Manager
-	httpServer  *http.Server
+	port         int
+	xrayManager  *xray.Manager
+	telemtManager *telemt.Manager
+	httpServer   *http.Server
 	certFile    string
 	keyFile     string
 	// clientCAFile, if set with cert/key, enables mTLS (panel must present a cert signed by this CA).
@@ -86,10 +88,11 @@ func logXrayNotReadyThrottled(endpoint string) {
 }
 
 // NewServer creates a new API server instance. Call SetPairing before Start (pairing-only).
-func NewServer(port int, xrayManager *xray.Manager) *Server {
+func NewServer(port int, xrayManager *xray.Manager, telemtManager *telemt.Manager) *Server {
 	return &Server{
-		port:        port,
-		xrayManager: xrayManager,
+		port:         port,
+		xrayManager:  xrayManager,
+		telemtManager: telemtManager,
 	}
 }
 
@@ -307,15 +310,19 @@ func (s *Server) applyConfig(c *gin.Context) {
 
 	logger.Infof("Request body read, size: %d bytes", len(body))
 
+	var telemtRaw json.RawMessage
+
 	var requestData struct {
 		Config   json.RawMessage `json:"config"`
 		PanelURL string          `json:"panelUrl,omitempty"`
+		Telemt   json.RawMessage `json:"telemt"`
 	}
 
 	configBytes := body
-	// Envelope: { "config": {...}, "panelUrl" }
+	// Envelope: { "config": {...}, "panelUrl", "telemt": [...] }
 	if err := json.Unmarshal(body, &requestData); err == nil && len(requestData.Config) > 0 {
 		configBytes = requestData.Config
+		telemtRaw = requestData.Telemt
 		if requestData.PanelURL != "" {
 			panelURL := requestData.PanelURL
 			logger.Infof("Parsed request with panelUrl: %s", panelURL)
@@ -360,6 +367,15 @@ func (s *Server) applyConfig(c *gin.Context) {
 		return
 	}
 
+	if s.telemtManager != nil && len(telemtRaw) > 0 && string(telemtRaw) != "null" {
+		var telemtPayloads []telemt.Payload
+		if err := json.Unmarshal(telemtRaw, &telemtPayloads); err != nil {
+			logger.Warningf("telemt: invalid JSON: %v", err)
+		} else if err := s.telemtManager.Apply(telemtPayloads); err != nil {
+			logger.Warningf("telemt: apply: %v", err)
+		}
+	}
+
 	st := s.xrayManager.GetStatus()
 	appliedAt := time.Now().Unix()
 	resp := gin.H{
@@ -382,6 +398,9 @@ func (s *Server) stopXray(c *gin.Context) {
 		logger.Errorf("stop-xray: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
+	}
+	if s.telemtManager != nil {
+		s.telemtManager.Stop()
 	}
 	c.JSON(http.StatusOK, gin.H{"message": "XRAY stopped", "xrayRunning": false})
 }

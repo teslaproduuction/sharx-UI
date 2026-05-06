@@ -30,9 +30,16 @@ COPY DockerInit.sh /docker-init.sh
 WORKDIR /
 # Re-state ARG for this RUN (BuildKit: TARGETARCH matches target platform of this stage)
 ARG TARGETARCH
+ARG TELEMT_VERSION=3.4.10
 RUN sh /docker-init.sh "${TARGETARCH}" && \
     f=$(ls /build/bin/xray-linux-* 2>/dev/null | head -1) && [ -f "$f" ] && \
     echo "Xray+geo in /build/bin:" && ls -la /build/bin/
+RUN ARCH_DL="x86_64-linux-musl" && \
+    if [ "${TARGETARCH}" = "arm64" ]; then ARCH_DL="aarch64-linux-musl"; fi && \
+    curl -fsSL -o /tmp/telemt.tgz "https://github.com/telemt/telemt/releases/download/${TELEMT_VERSION}/telemt-${ARCH_DL}.tar.gz" && \
+    tar -xzf /tmp/telemt.tgz -C /build/bin && \
+    chmod +x /build/bin/telemt && \
+    rm -f /tmp/telemt.tgz
 WORKDIR /build
 
 # Runtime stage
