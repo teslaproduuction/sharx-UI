@@ -6,13 +6,59 @@ import (
 	"strings"
 	"time"
 
+	"github.com/konstpic/sharx-code/v2/conndrop"
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
+	"github.com/konstpic/sharx-code/v2/logger"
 	"gorm.io/gorm/clause"
 )
 
 // ClientSessionBlockService manages per-client blocked source IPs (subscription session blocklist).
 type ClientSessionBlockService struct{}
+
+// kickConntrackAfterSessionBlock drops active kernel connections for the IP on the panel host (single-node)
+// and on each worker that carries this client's inbounds (multi-node). Helps tear down MTProto/Telemt TCP
+// since Xray session-IP routing rules do not apply to Telemt traffic.
+func kickConntrackAfterSessionBlock(clientId int, ips []string) {
+	if len(ips) == 0 {
+		return
+	}
+	ss := SettingService{}
+	multi, _ := ss.GetMultiNodeMode()
+	if !multi {
+		if conndrop.Available() {
+			if err := conndrop.DropIPs(ips); err != nil {
+				logger.Debugf("session block: local conntrack drop: %v", err)
+			}
+		}
+		return
+	}
+	nodeSvc := NodeService{}
+	cs := ClientService{}
+	inboundIds, err := cs.GetInboundIdsForClient(clientId)
+	if err != nil {
+		return
+	}
+	seen := make(map[int]struct{})
+	for _, iid := range inboundIds {
+		nodes, err := nodeSvc.GetNodesForInbound(iid)
+		if err != nil {
+			continue
+		}
+		for _, n := range nodes {
+			if n == nil || !n.Enable {
+				continue
+			}
+			if _, ok := seen[n.Id]; ok {
+				continue
+			}
+			seen[n.Id] = struct{}{}
+			if err := nodeSvc.PostDropIPsToNode(n, ips); err != nil {
+				logger.Debugf("session block: node %s drop ips: %v", n.Name, err)
+			}
+		}
+	}
+}
 
 // NormalizeClientIP trims host/port and returns canonical form for comparison.
 func NormalizeClientIP(s string) string {
@@ -94,6 +140,7 @@ func (s *ClientSessionBlockService) SetSessionIPBlocked(userId, clientId int, ip
 			return err
 		}
 		(&XrayService{}).ApplySessionIPBlockHotAfterDB(clientId, email, ip, false)
+		SyncTelemtAfterClientSessionBlocksChanged(clientId)
 		return nil
 	}
 	row := model.ClientBlockedSessionIP{
@@ -108,6 +155,8 @@ func (s *ClientSessionBlockService) SetSessionIPBlocked(userId, clientId int, ip
 		return err
 	}
 	(&XrayService{}).ApplySessionIPBlockHotAfterDB(clientId, email, ip, true)
+	kickConntrackAfterSessionBlock(clientId, []string{ip})
+	SyncTelemtAfterClientSessionBlocksChanged(clientId)
 	return nil
 }
 

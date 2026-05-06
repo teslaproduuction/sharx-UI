@@ -96,14 +96,39 @@ jobs:
           # Go back to tag for build
           git checkout ${{ github.ref }}
 
-
-  build-sharx:
+  telemt-prebuilt:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - name: Build Telemt SharX fork (linux/amd64)
+        run: |
+          chmod +x scripts/build-telemt-sharx.sh
+          ./scripts/build-telemt-sharx.sh amd64
+
+      - name: Upload telemt binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: telemt-sharx-linux-amd64
+          path: third_party/telemt-sharx/prebuilt/linux-amd64/telemt
+
+
+  build-sharx:
+    needs: [prepare, telemt-prebuilt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Download Telemt SharX prebuilt
+        uses: actions/download-artifact@v4
+        with:
+          name: telemt-sharx-linux-amd64
+          path: third_party/telemt-sharx/prebuilt/linux-amd64/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -161,12 +186,18 @@ jobs:
             BUILDKIT_INLINE_CACHE=1
 
   build-sharxnode:
-    needs: prepare
+    needs: [prepare, telemt-prebuilt]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
+
+      - name: Download Telemt SharX prebuilt
+        uses: actions/download-artifact@v4
+        with:
+          name: telemt-sharx-linux-amd64
+          path: third_party/telemt-sharx/prebuilt/linux-amd64/
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

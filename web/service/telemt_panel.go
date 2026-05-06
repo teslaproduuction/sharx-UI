@@ -2,6 +2,7 @@ package service
 
 import (
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/konstpic/sharx-code/v2/config"
@@ -72,6 +73,11 @@ func ApplyLocalTelemtStandalone(xs *XrayService) error {
 		return err
 	}
 	return nil
+}
+
+// CollectLocalTelemtOnlineSessions returns MTProto client IPs from Telemt Control API (standalone panel).
+func CollectLocalTelemtOnlineSessions(email string) []xray.OnlineIPSession {
+	return getPanelTelemt().CollectOnlineSessionsForUser(strings.TrimSpace(email))
 }
 
 // TryApplyLocalTelemtStandalone logs failures instead of returning (for defensive call sites).

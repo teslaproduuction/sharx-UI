@@ -13,6 +13,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY panel/ ./
 RUN npm run build && cp -R out /webpanel
 
+# SharX Telemt fork: ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
 # ========================================================
 # Stage: Builder
 # ========================================================
@@ -49,7 +50,8 @@ COPY conndrop/ ./conndrop/
 COPY xray/ ./xray/
 COPY sub/ ./sub/
 COPY node/ ./node/
-COPY web/ ./web/
+# Optional Telemt SharX fork binary (see scripts/build-telemt-sharx.sh); small layer, avoids Rust in image build.
+COPY third_party/telemt-sharx/prebuilt/ ./third_party/telemt-sharx/prebuilt/
 COPY main.go ./
 COPY DockerInit.sh DockerEntrypoint.sh ./
 COPY --from=panelui /webpanel/ ./web/panel
@@ -68,6 +70,14 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     go build -ldflags "-w -s" -o build/x-ui main.go
 
 RUN bash DockerInit.sh "$TARGETARCH"
+RUN ARCH="" && case "${TARGETARCH}" in amd64) ARCH=linux-amd64 ;; arm64) ARCH=linux-arm64 ;; esac && \
+    PRE="/app/third_party/telemt-sharx/prebuilt/${ARCH}/telemt" && \
+    if [ -n "$ARCH" ] && [ -f "$PRE" ]; then \
+      cp "$PRE" /app/build/bin/telemt && chmod +x /app/build/bin/telemt && \
+      echo "telemt: SharX fork prebuilt (${ARCH})"; \
+    else \
+      echo "telemt: no SharX prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
+    fi
 
 # ========================================================
 # Stage: Final Image of SharX

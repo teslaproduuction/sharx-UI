@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"net"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -96,6 +97,8 @@ type TelemtAccessUser struct {
 	DataQuotaBytes    uint64
 	ExpirationRFC3339 string
 	MaxUniqueIPs      int
+	// SourceDenyCIDRs become [access.user_source_deny] (per-username CIDRs, Telemt SharX fork).
+	SourceDenyCIDRs []string
 }
 
 // BuildTelemtToml builds a Telemt config.toml for one inbound.
@@ -255,6 +258,30 @@ func BuildTelemtToml(inbound *model.Inbound, users []TelemtAccessUser, publicHos
 			fmt.Fprint(&b, line)
 		}
 	}
+	var denyLines []string
+	for _, u := range written {
+		if len(u.SourceDenyCIDRs) == 0 {
+			continue
+		}
+		key := telemtTomlUserKey(u.Email)
+		parts := make([]string, 0, len(u.SourceDenyCIDRs))
+		for _, c := range u.SourceDenyCIDRs {
+			c = strings.TrimSpace(c)
+			if c != "" {
+				parts = append(parts, fmt.Sprintf("%q", c))
+			}
+		}
+		if len(parts) == 0 {
+			continue
+		}
+		denyLines = append(denyLines, fmt.Sprintf("%s = [%s]\n", key, strings.Join(parts, ", ")))
+	}
+	if len(denyLines) > 0 {
+		fmt.Fprintf(&b, "\n[access.user_source_deny]\n")
+		for _, line := range denyLines {
+			fmt.Fprint(&b, line)
+		}
+	}
 	return b.String(), nil
 }
 
@@ -265,6 +292,17 @@ func TelemtAccessUsersForInbound(inboundId int) ([]TelemtAccessUser, error) {
 	if err := db.Where("inbound_id = ?", inboundId).Find(&maps).Error; err != nil {
 		return nil, err
 	}
+	seenID := make(map[int]struct{})
+	clientIds := make([]int, 0, len(maps))
+	for _, m := range maps {
+		if _, ok := seenID[m.ClientId]; ok {
+			continue
+		}
+		seenID[m.ClientId] = struct{}{}
+		clientIds = append(clientIds, m.ClientId)
+	}
+	denyByClient := blockedTelemtDenyCIDRsByClientID(clientIds)
+
 	out := make([]TelemtAccessUser, 0, len(maps))
 	for _, m := range maps {
 		secret := strings.TrimSpace(m.TelemtSecret)
@@ -292,9 +330,57 @@ func TelemtAccessUsersForInbound(inboundId int) ([]TelemtAccessUser, error) {
 		if c.HWIDEnabled && c.MaxHWID > 0 {
 			u.MaxUniqueIPs = c.MaxHWID
 		}
+		if d := denyByClient[c.Id]; len(d) > 0 {
+			u.SourceDenyCIDRs = append([]string(nil), d...)
+		}
 		out = append(out, u)
 	}
 	return out, nil
+}
+
+// telemtDenyCIDRFromStoredIP normalizes a panel session IP to a CIDR for Telemt [access.user_source_deny].
+func telemtDenyCIDRFromStoredIP(stored string) string {
+	n := NormalizeClientIP(stored)
+	if n == "" {
+		return ""
+	}
+	ip := net.ParseIP(n)
+	if ip == nil {
+		return ""
+	}
+	if ip4 := ip.To4(); ip4 != nil {
+		return ip4.String() + "/32"
+	}
+	return ip.String() + "/128"
+}
+
+func blockedTelemtDenyCIDRsByClientID(clientIds []int) map[int][]string {
+	if len(clientIds) == 0 {
+		return nil
+	}
+	db := database.GetDB()
+	var rows []model.ClientBlockedSessionIP
+	if err := db.Where("client_id IN ?", clientIds).Find(&rows).Error; err != nil {
+		return nil
+	}
+	uniq := make(map[int]map[string]struct{})
+	for _, r := range rows {
+		cidr := telemtDenyCIDRFromStoredIP(r.IP)
+		if cidr == "" {
+			continue
+		}
+		if uniq[r.ClientId] == nil {
+			uniq[r.ClientId] = make(map[string]struct{})
+		}
+		uniq[r.ClientId][cidr] = struct{}{}
+	}
+	out := make(map[int][]string, len(uniq))
+	for cid, set := range uniq {
+		for c := range set {
+			out[cid] = append(out[cid], c)
+		}
+	}
+	return out
 }
 
 // BackfillTelemtSecretsForInbound sets telemt_secret on mappings that are missing it for a Telemt inbound.

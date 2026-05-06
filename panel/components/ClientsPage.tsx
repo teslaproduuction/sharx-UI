@@ -1290,7 +1290,12 @@ type ClientSessionsResponse = {
     nodeName: string;
     /** IPs on blocklist but missing from live Xray stats — unblock toggle still works */
     isOfflineBlockedGroup?: boolean;
-    sessions: { ip: string; lastSeen: number }[];
+    sessions: {
+      ip: string;
+      lastSeen: number;
+      protocol?: string;
+      remark?: string;
+    }[];
     dropAvailable: boolean;
     error?: string;
   }[];
@@ -4486,6 +4491,16 @@ export function ClientsPage() {
           </div>
         ) : sessionsData ? (
           <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
+            {sessionsData.results.some((b) =>
+              (b.sessions ?? []).some((s) => s.protocol === "mtproto"),
+            ) ? (
+              <p className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[11px] text-[var(--fg-muted)]">
+                {t("pages.clients.sessions.mtprotoBlockHint", {
+                  defaultValue:
+                    "MTProto (Telemt): Block uses the same switch as for Xray — the IP is added to the session blocklist (subscription requests from that IP are denied). Xray routing rules also apply where this client uses Xray. For MTProto traffic, the panel additionally tries to drop active TCP for that IP (conntrack on the panel host or worker nodes), same idea as Disconnect.",
+                })}
+              </p>
+            ) : null}
             {sessionsData.results.map((block) => (
               <div
                 key={
@@ -4540,17 +4555,34 @@ export function ClientsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {block.sessions.map((s) => (
+                      {block.sessions.map((s, si) => (
                         <tr
-                          key={`${block.nodeName}-${s.ip}`}
+                          key={`${block.nodeName}-${s.ip}-${s.protocol ?? "xray"}-${s.remark ?? ""}-${si}`}
                           className="border-b border-[var(--border)] text-[var(--fg-muted)]"
                         >
-                          <td className="p-2 font-mono text-[11px]">{s.ip}</td>
+                          <td className="p-2 align-top">
+                            <div className="flex flex-col gap-1">
+                              <span className="font-mono text-[11px]">
+                                {s.ip?.trim() ? s.ip : "—"}
+                              </span>
+                              {s.protocol === "mtproto" ? (
+                                <span className="inline-flex w-fit rounded bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-700 dark:text-violet-300">
+                                  {t("pages.clients.sessions.mtproto", {
+                                    defaultValue: "MTProto (Telemt)",
+                                  })}
+                                </span>
+                              ) : null}
+                              {s.remark ? (
+                                <span className="text-[10px] text-[var(--fg-subtle)]">{s.remark}</span>
+                              ) : null}
+                            </div>
+                          </td>
                           <td className="p-2 text-center align-middle">
                             <Switch
                               size="sm"
                               checked={isSessionIpBlocked(s.ip, sessionsData.blockedSessionIps)}
                               disabled={
+                                !s.ip?.trim() ||
                                 sessionIpBlockBusy === s.ip ||
                                 sessionsDropBusy ||
                                 sessionsLoading
@@ -4571,7 +4603,7 @@ export function ClientsPage() {
                               type="button"
                               variant="secondary"
                               className="!h-7 !px-2 !text-[10px]"
-                              disabled={sessionsDropBusy || !block.dropAvailable}
+                              disabled={sessionsDropBusy || !block.dropAvailable || !s.ip?.trim()}
                               onClick={() => void dropSessionIp(s.ip)}
                             >
                               {t("pages.clients.sessions.dropOne", {
