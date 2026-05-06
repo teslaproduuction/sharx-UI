@@ -40,6 +40,16 @@ func registerClientShareLinksBuilder() {
 		s := sub.NewCompatSubService(showInfo, remark)
 		return s.GetSubs(subID, host, nil)
 	})
+	controller.RegisterPublicSubMtProtoHook(func(subID, host string) []string {
+		ss := service.SettingService{}
+		showInfo, _ := ss.GetSubShowInfo()
+		remark, _ := ss.GetRemarkModel()
+		if remark == "" {
+			remark = "-ieo"
+		}
+		s := sub.NewCompatSubService(showInfo, remark)
+		return s.TelemtTgProxyLinesForSubscription(subID, host)
+	})
 }
 
 // runWebServer initializes and starts the web server for the SharX panel.

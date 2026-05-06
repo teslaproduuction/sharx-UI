@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "Немає доданих Fake DNS-серверів."
 emptyBalancersDesc = "Немає доданих балансувальників."
 emptyReverseDesc = "Немає доданих зворотних проксі."
 somethingWentWrong = "Щось пішло не так"
+"api.pullXrayConfig.buildFailed" = "Не вдалося зібрати конфігурацію"
+"api.pullXrayConfig.unknownNode" = "Невідомий вузол для адреси"
+"api.pullXrayConfig.nodeDisabled" = "Вузол вимкнено"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Версія {{version}}"
 panelUptimeLabel = "Панель"
 nodesCoresRunningPill = "Ядра нод: {{running}} / {{total}}"
 cpuHistory = "Історія CPU"
+resourceSeriesPanel = "Хост панелі"
 nodesAvailability = "Доступність вузлів"
 database = "База даних"
 dbSize = "Розмір"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "Закрити бічну панель"
+clickEditJson = "Натисніть, щоб редагувати JSON"
+copyCellValue = "Копіювати значення"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "Отримати посилання"
+scanQrCode = "Відскануйте QR-код у застосунку"
+scanQrCodeDescription = "Або скопіюйте посилання нижче й вставте у VPN-клієнт."
+copyLink = "Копіювати посилання"
+connectionKeys = "Ключі підключення"
+copyProxyLink = "Копіювати посилання проксі"
+
+[pages.publicSub.step.install]
+title = "Встановіть застосунок"
+textDownload = "Завантажте {{app}} кнопкою нижче."
+textStore = "Встановіть {{app}} з офіційного магазину для вашої платформи."
+
+[pages.publicSub.step.addSub]
+title = "Додати підписку"
+text = "Натисніть «Додати підписку» нижче для автоматичного імпорту або скопіюйте URL підписки й вставте в застосунок."
+
+[pages.publicSub.step.connect]
+title = "Підключіться"
+text = "Оберіть сервер і ввімкніть туннель. Усе."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "Додати MTProto-проксі"
+text = "Натисніть «Додати проксі» (як «Додати підписку» у VPN). Щоб скопіювати посилання, відкрийте QR-код."
+
+[pages.publicSub.stepTelegram.done]
+title = "Увімкніть у Telegram"
+text = "У Telegram: Налаштування → Додатково → Тип з'єднання → використовувати проксі (формулювання можуть відрізнятися)."
+
+[pages.publicSub.mtproto]
+addProxy = "Додати проксі"
+
 
 [tgbot]
 keyboardClosed = "❌ Клавіатуру закрито!"
@@ -2578,6 +2617,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "Видалити профіль маршрутизації"
+  routingProfileName = "Назва"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2649,6 +2692,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "Мій VPN"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "Вікно обслуговування: п'ятниця 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

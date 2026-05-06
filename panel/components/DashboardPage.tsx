@@ -184,17 +184,103 @@ function toUnixMs(ts: number) {
   return ts > 0 && ts < 1_000_000_000_000 ? ts * 1000 : ts;
 }
 
-function ResourceSparkline({ data, stroke }: { data: number[]; stroke: string }) {
-  if (data.length < 2) {
+const RESOURCE_CHART_COLORS = [
+  "#34d399",
+  "#fbbf24",
+  "#f472b6",
+  "#818cf8",
+  "#fb923c",
+  "#2dd4bf",
+  "#c084fc",
+  "#f87171",
+];
+
+type DashboardMetricSeries = {
+  key: string;
+  name: string;
+  nodeId?: number;
+  points: ResourceHistoryPoint[];
+};
+
+/** Parse `{ series: [...] }` CPU/mem history API; supports legacy bare point array from older panels. */
+function parseResourceHistoryEnvelope(obj: unknown, metric: "cpu" | "mem"): DashboardMetricSeries[] {
+  if (Array.isArray(obj)) {
+    const points: ResourceHistoryPoint[] = (obj as { t?: number; time?: number; cpu?: number; mem?: number }[]).map(
+      (raw) => {
+        const ts = Number(raw?.t ?? raw?.time ?? 0);
+        const vRaw =
+          metric === "cpu" ? Number(raw?.cpu ?? (raw as { v?: number }).v) : Number(raw?.mem ?? (raw as { v?: number }).v);
+        const v = Number.isFinite(vRaw) ? Math.max(0, Math.min(100, vRaw)) : 0;
+        return { value: v, ts: toUnixMs(ts) };
+      }
+    );
+    return [{ key: "panel", name: "Panel", points }];
+  }
+  if (!obj || typeof obj !== "object") return [];
+  const ser = (obj as { series?: unknown }).series;
+  if (!Array.isArray(ser)) return [];
+  return ser
+    .map((row): DashboardMetricSeries | null => {
+      if (!row || typeof row !== "object") return null;
+      const r = row as {
+        key?: string;
+        name?: string;
+        nodeId?: number;
+        points?: unknown;
+      };
+      const key = String(r.key ?? "unknown");
+      const name = String(r.name ?? key);
+      const ptsRaw = Array.isArray(r.points) ? r.points : [];
+      const points: ResourceHistoryPoint[] = ptsRaw.map((p) => {
+        const raw = p as { t?: number; time?: number; cpu?: number; mem?: number; v?: number };
+        const ts = Number(raw?.t ?? raw?.time ?? 0);
+        const vRaw =
+          metric === "cpu" ? Number(raw?.cpu ?? raw?.v) : Number(raw?.mem ?? raw?.v);
+        const v = Number.isFinite(vRaw) ? Math.max(0, Math.min(100, vRaw)) : 0;
+        return { value: v, ts: toUnixMs(ts) };
+      });
+      return { key, name, nodeId: r.nodeId, points };
+    })
+    .filter((x): x is DashboardMetricSeries => x != null);
+}
+
+function paletteStrokeForSeries(s: DashboardMetricSeries, accent: string, index: number) {
+  if (s.key === "panel") return accent;
+  return RESOURCE_CHART_COLORS[index % RESOURCE_CHART_COLORS.length];
+}
+
+/** Sparkline overlay: multiple metrics on one time scale (milliseconds). */
+function MultiResourceSparkline({
+  accent,
+  series,
+}: {
+  accent: string;
+  series: DashboardMetricSeries[];
+}) {
+  const trimmed = useMemo(() => series.map((s) => ({ ...s, points: s.points.slice(-48) })), [series]);
+  const bounds = useMemo(() => {
+    let tMin = Number.POSITIVE_INFINITY;
+    let tMax = Number.NEGATIVE_INFINITY;
+    for (const s of trimmed) {
+      for (const p of s.points) {
+        if (p.ts < tMin) tMin = p.ts;
+        if (p.ts > tMax) tMax = p.ts;
+      }
+    }
+    if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || tMin === tMax) {
+      return { tMin: 0, tMax: 1 };
+    }
+    return { tMin, tMax };
+  }, [trimmed]);
+
+  const empty = trimmed.every((s) => s.points.length < 2);
+  if (empty) {
     return <div className="h-9 w-full rounded-md bg-[var(--border)]/20" aria-hidden />;
   }
-  const pts = data
-    .map((v, i) => {
-      const x = (i / (data.length - 1)) * SPARK_W;
-      const y = SPARK_H - 1 - (Math.max(0, Math.min(100, v)) / 100) * (SPARK_H - 2);
-      return `${x},${y}`;
-    })
-    .join(" ");
+
+  const { tMin, tMax } = bounds;
+  const span = Math.max(1, tMax - tMin);
+
   return (
     <svg
       viewBox={`0 0 ${SPARK_W} ${SPARK_H}`}
@@ -202,76 +288,116 @@ function ResourceSparkline({ data, stroke }: { data: number[]; stroke: string })
       preserveAspectRatio="none"
       aria-hidden
     >
-      <polyline
-        fill="none"
-        stroke={stroke}
-        strokeWidth="1.5"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        points={pts}
-        vectorEffect="non-scaling-stroke"
-        opacity="0.92"
-      />
+      {trimmed.map((s, i) => {
+        const stroke = paletteStrokeForSeries(s, accent, i);
+        if (s.points.length < 2) return null;
+        const pts = s.points
+          .map((p0) => {
+            const nx = ((p0.ts - tMin) / span) * (SPARK_W - 2) + 1;
+            const ny = SPARK_H - 1 - (Math.max(0, Math.min(100, p0.value)) / 100) * (SPARK_H - 2);
+            return `${nx},${ny}`;
+          })
+          .join(" ");
+        return (
+          <polyline
+            key={s.key}
+            fill="none"
+            stroke={stroke}
+            strokeWidth="1.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            points={pts}
+            vectorEffect="non-scaling-stroke"
+            opacity="0.92"
+          />
+        );
+      })}
     </svg>
   );
 }
 
-function ResourceHistoryChart({
-  points,
-  stroke,
-  gradientId,
-  hoverIndex,
-  onHoverIndex,
+type MultiStrokeSeries = DashboardMetricSeries & { stroke: string };
+
+function MultiSeriesResourceChart({
+  series,
+  hoverT,
+  onHoverT,
   onLeave,
 }: {
-  points: ResourceHistoryPoint[];
-  stroke: string;
-  gradientId: string;
-  hoverIndex: number | null;
-  onHoverIndex: (idx: number | null) => void;
+  series: MultiStrokeSeries[];
+  hoverT: number | null;
+  onHoverT: (t: number | null) => void;
   onLeave: () => void;
 }) {
-  if (points.length < 2) {
+  const bounds = useMemo(() => {
+    let tMin = Number.POSITIVE_INFINITY;
+    let tMax = Number.NEGATIVE_INFINITY;
+    for (const s of series) {
+      for (const p of s.points) {
+        if (p.ts < tMin) tMin = p.ts;
+        if (p.ts > tMax) tMax = p.ts;
+      }
+    }
+    if (!Number.isFinite(tMin) || !Number.isFinite(tMax) || series.every((x) => x.points.length === 0)) {
+      return null;
+    }
+    if (tMin === tMax) {
+      tMax = tMin + 1;
+    }
+    return { tMin, tMax };
+  }, [series]);
+
+  const nonempty = series.filter((s) => s.points.length >= 2);
+  if (!bounds || nonempty.length === 0) {
     return <div className="h-[220px] w-full rounded-lg bg-[var(--border)]/20" aria-hidden />;
   }
+
+  const { tMin, tMax } = bounds;
+  const span = tMax - tMin;
   const innerW = HISTORY_W - HISTORY_PAD_L - HISTORY_PAD_R;
   const innerH = HISTORY_H - HISTORY_PAD_T - HISTORY_PAD_B;
-  const stepX = innerW / Math.max(1, points.length - 1);
-  const chartPoints = points.map((p0, i) => {
-    const value = Math.max(0, Math.min(100, p0.value));
-    const x = HISTORY_PAD_L + i * stepX;
-    const y = HISTORY_H - HISTORY_PAD_B - (value / 100) * innerH;
-    return { ...p0, value, x, y };
-  });
-  const linePoints = chartPoints.map((p0) => `${p0.x},${p0.y}`).join(" ");
-  const areaPath = [
-    `M ${chartPoints[0].x} ${HISTORY_H - HISTORY_PAD_B}`,
-    ...chartPoints.map((p0) => `L ${p0.x} ${p0.y}`),
-    `L ${chartPoints[chartPoints.length - 1].x} ${HISTORY_H - HISTORY_PAD_B}`,
-    "Z",
-  ].join(" ");
-  const activePoint = hoverIndex != null ? chartPoints[hoverIndex] : null;
+
+  const xForTs = (ts: number) => HISTORY_PAD_L + ((ts - tMin) / span) * innerW;
+  const yForVal = (v: number) =>
+    HISTORY_H - HISTORY_PAD_B - (Math.max(0, Math.min(100, v)) / 100) * innerH;
+
+  const nearestPoint = (pts: ResourceHistoryPoint[], center: number): ResourceHistoryPoint | null => {
+    if (!pts.length) return null;
+    let best = pts[0];
+    let bestD = Math.abs(pts[0].ts - center);
+    for (const p of pts) {
+      const d = Math.abs(p.ts - center);
+      if (d < bestD) {
+        bestD = d;
+        best = p;
+      }
+    }
+    return best;
+  };
+
+  const tooltipRows = hoverT != null ? nonempty.map((s) => ({ s, pt: nearestPoint(s.points, hoverT) })) : [];
+  const hoverX =
+    hoverT != null ? Math.min(HISTORY_W - HISTORY_PAD_R, Math.max(HISTORY_PAD_L, xForTs(hoverT))) : null;
 
   return (
-    <div className="relative h-[220px] w-full" onMouseLeave={onLeave}>
+    <div className="relative min-h-[220px] w-full" onMouseLeave={onLeave}>
       <svg
         viewBox={`0 0 ${HISTORY_W} ${HISTORY_H}`}
         width="100%"
-        height="100%"
-        preserveAspectRatio="none"
+        height="220"
+        preserveAspectRatio="xMidYMid meet"
+        className="block max-h-[220px]"
         onMouseMove={(e) => {
           const rect = e.currentTarget.getBoundingClientRect();
-          const relX = ((e.clientX - rect.left) / Math.max(1, rect.width)) * HISTORY_W;
-          const idx = Math.round((relX - HISTORY_PAD_L) / stepX);
-          onHoverIndex(Math.max(0, Math.min(chartPoints.length - 1, idx)));
+          const rel = ((e.clientX - rect.left) / Math.max(1, rect.width)) * HISTORY_W - HISTORY_PAD_L;
+          const tt = (rel / innerW) * span + tMin;
+          if (rel < -2 || rel > innerW + 2) {
+            onHoverT(null);
+            return;
+          }
+          onHoverT(Number.isFinite(tt) ? tt : null);
         }}
       >
-        <defs>
-          <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={stroke} stopOpacity="0.45" />
-            <stop offset="100%" stopColor={stroke} stopOpacity="0.04" />
-          </linearGradient>
-        </defs>
         {[0, 25, 50, 75, 100].map((v) => {
           const y = HISTORY_H - HISTORY_PAD_B - (v / 100) * innerH;
           return (
@@ -287,44 +413,57 @@ function ResourceHistoryChart({
             />
           );
         })}
-        <path d={areaPath} fill={`url(#${gradientId})`} />
-        <polyline
-          fill="none"
-          stroke={stroke}
-          strokeWidth="2"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          points={linePoints}
-        />
-        {chartPoints.map((p0, i) => (
-          <circle
-            key={`${p0.ts}-${i}`}
-            cx={p0.x}
-            cy={p0.y}
-            r={hoverIndex === i ? 3.4 : 1.9}
-            fill={stroke}
-            opacity={hoverIndex === i ? 1 : 0.45}
-          />
-        ))}
-        {activePoint ? (
+        {nonempty.map((s) => {
+          const linePoints = s.points.map((p) => `${xForTs(p.ts)},${yForVal(p.value)}`).join(" ");
+          return (
+            <polyline
+              key={s.key}
+              fill="none"
+              stroke={s.stroke}
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              points={linePoints}
+            />
+          );
+        })}
+        {hoverX != null && hoverT != null ? (
           <>
             <line
-              x1={activePoint.x}
+              x1={hoverX}
               y1={HISTORY_PAD_T}
-              x2={activePoint.x}
+              x2={hoverX}
               y2={HISTORY_H - HISTORY_PAD_B}
-              stroke={stroke}
-              strokeOpacity="0.5"
+              stroke="var(--fg-muted)"
+              strokeOpacity="0.45"
               strokeDasharray="4 5"
             />
-            <circle cx={activePoint.x} cy={activePoint.y} r={4.5} fill={stroke} />
+            {tooltipRows.map(({ s, pt }) =>
+              pt ? (
+                <circle key={`${s.key}-dot`} cx={xForTs(pt.ts)} cy={yForVal(pt.value)} r={4} fill={s.stroke} />
+              ) : null
+            )}
           </>
         ) : null}
       </svg>
-      {activePoint ? (
-        <div className="pointer-events-none absolute left-3 top-3 rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/95 px-2 py-1 text-xs shadow-lg backdrop-blur">
-          <p className="font-medium text-[var(--fg)]">{toFixed(activePoint.value, 1)}%</p>
-          <p className="text-[var(--fg-muted)]">{new Date(activePoint.ts).toLocaleString()}</p>
+      {hoverT != null && tooltipRows.some((x) => x.pt) ? (
+        <div className="pointer-events-none absolute left-3 top-3 max-w-[min(92%,420px)] rounded-md border border-[var(--border)] bg-[var(--bg-elevated)]/96 px-2 py-1.5 text-xs shadow-lg backdrop-blur">
+          <p className="mb-1 text-[var(--fg-muted)]">
+            {new Date(Math.round(hoverT)).toLocaleString()}
+          </p>
+          <ul className="list-none space-y-0.5">
+            {tooltipRows.map(({ s, pt }) =>
+              pt ? (
+                <li key={s.key} className="flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-1.5">
+                    <span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ background: s.stroke }} />
+                    <span className="truncate font-medium text-[var(--fg)]">{s.name}</span>
+                  </span>
+                  <span className="shrink-0 font-mono text-[var(--fg)]">{toFixed(pt.value, 1)}%</span>
+                </li>
+              ) : null
+            )}
+          </ul>
         </div>
       ) : null}
     </div>
@@ -423,12 +562,14 @@ export function DashboardPage() {
 
   const MAX_LOG_ENTRIES = 2000;
   const [cpuBucket, setCpuBucket] = useState(2);
-  const [cpuLong, setCpuLong] = useState<ResourceHistoryPoint[]>([]);
-  /** Last points for dashboard sparklines (CPU from API, RAM from status samples). */
-  const [cpuPreview, setCpuPreview] = useState<number[]>([]);
-  const [memHistory, setMemHistory] = useState<ResourceHistoryPoint[]>([]);
-  const [cpuHoverIndex, setCpuHoverIndex] = useState<number | null>(null);
-  const [memHoverIndex, setMemHoverIndex] = useState<number | null>(null);
+  const [memBucket, setMemBucket] = useState(2);
+  /** CPU history series (panel + nodes) for modal and preview. */
+  const [cpuHistorySeries, setCpuHistorySeries] = useState<DashboardMetricSeries[]>([]);
+  const [memHistorySeries, setMemHistorySeries] = useState<DashboardMetricSeries[]>([]);
+  const [cpuPreviewSeries, setCpuPreviewSeries] = useState<DashboardMetricSeries[]>([]);
+  const [memPreviewSeries, setMemPreviewSeries] = useState<DashboardMetricSeries[]>([]);
+  const [cpuHoverT, setCpuHoverT] = useState<number | null>(null);
+  const [memHoverT, setMemHoverT] = useState<number | null>(null);
   const [nodes, setNodes] = useState<{ id: number; name: string }[]>([]);
   const [customizeOpen, setCustomizeOpen] = useState(false);
   const [enabledWidgets, setEnabledWidgets] = useState<DashboardWidgetId[]>([...DASHBOARD_WIDGET_ORDER]);
@@ -562,42 +703,43 @@ export function DashboardPage() {
 
   useEffect(() => {
     const load = async () => {
-      const r = await getJson<{ t: number; cpu: number }[]>(panel("api/server/cpuHistory/2"));
+      const r = await getJson<unknown>(panel("api/server/cpuHistory/2"));
       if (r.success && r.obj) {
-        setCpuPreview(
-          r.obj.map((p0) => Math.max(0, Math.min(100, p0.cpu))).slice(-48)
-        );
+        setCpuPreviewSeries(parseResourceHistoryEnvelope(r.obj, "cpu"));
+      }
+      const mr = await getJson<unknown>(panel("api/server/memHistory/2"));
+      if (mr.success && mr.obj) {
+        setMemPreviewSeries(parseResourceHistoryEnvelope(mr.obj, "mem"));
       }
     };
-    load();
+    void load();
     const id = window.setInterval(load, 8000);
-    return () => clearInterval(id);
+    return () => window.clearInterval(id);
   }, []);
 
   useEffect(() => {
     if (!cpuOpen) return;
     (async () => {
       setSpin(true);
-      const r = await getJson<{ t: number; cpu: number }[]>(panel(`api/server/cpuHistory/${cpuBucket}`));
+      const r = await getJson<unknown>(panel(`api/server/cpuHistory/${cpuBucket}`));
       setSpin(false);
       if (r.success && r.obj) {
-        setCpuLong(
-          r.obj.map((p0) => ({
-            value: Math.max(0, Math.min(100, p0.cpu)),
-            ts: toUnixMs(Number(p0.t || Date.now())),
-          }))
-        );
+        setCpuHistorySeries(parseResourceHistoryEnvelope(r.obj, "cpu"));
       }
     })();
   }, [cpuOpen, cpuBucket]);
 
-  const memCurrent = st?.mem.current;
-  const memTotal = st?.mem.total;
-
   useEffect(() => {
-    if (memCurrent == null || memTotal == null) return;
-    setMemHistory((prev) => [...prev, { value: pct(memCurrent, memTotal), ts: Date.now() }].slice(-120));
-  }, [memCurrent, memTotal]);
+    if (!memOpen) return;
+    (async () => {
+      setSpin(true);
+      const r = await getJson<unknown>(panel(`api/server/memHistory/${memBucket}`));
+      setSpin(false);
+      if (r.success && r.obj) {
+        setMemHistorySeries(parseResourceHistoryEnvelope(r.obj, "mem"));
+      }
+    })();
+  }, [memOpen, memBucket]);
 
 
   const dashboardHwidUserAgentPie = useMemo(() => {
@@ -681,6 +823,44 @@ export function DashboardPage() {
     }
   }, [logsOpen, logAuto, filteredLogs.length]);
 
+  const dashboardRamStroke = "#a78bfa";
+  const cpuChartSeries = useMemo(
+    () =>
+      cpuHistorySeries.map((s, i) => ({
+        ...s,
+        name: s.key === "panel" ? t("pages.index.resourceSeriesPanel") : s.name,
+        stroke: paletteStrokeForSeries(s, accent, i),
+      })),
+    [cpuHistorySeries, accent, t]
+  );
+  const memChartSeries = useMemo(
+    () =>
+      memHistorySeries.map((s, i) => ({
+        ...s,
+        name: s.key === "panel" ? t("pages.index.resourceSeriesPanel") : s.name,
+        stroke: paletteStrokeForSeries(s, dashboardRamStroke, i),
+      })),
+    [memHistorySeries, t]
+  );
+  const cpuPreviewLegend = useMemo(
+    () =>
+      cpuPreviewSeries.map((s, i) => ({
+        key: s.key,
+        name: s.key === "panel" ? t("pages.index.resourceSeriesPanel") : s.name,
+        stroke: paletteStrokeForSeries(s, accent, i),
+      })),
+    [cpuPreviewSeries, accent, t]
+  );
+  const memPreviewLegend = useMemo(
+    () =>
+      memPreviewSeries.map((s, i) => ({
+        key: s.key,
+        name: s.key === "panel" ? t("pages.index.resourceSeriesPanel") : s.name,
+        stroke: paletteStrokeForSeries(s, dashboardRamStroke, i),
+      })),
+    [memPreviewSeries, t]
+  );
+
   if (loading) {
     return (
       <PageScaffold>
@@ -729,7 +909,7 @@ export function DashboardPage() {
   const xUi = xrayStateMsg(st.xray.state, t, { multiMode: multi });
   const nx = st.nodesXray;
   const trafficMax = Math.max(1, st.netIO.up, st.netIO.down, st.netTraffic.sent, st.netTraffic.recv);
-  const ramSparkColor = "#a78bfa";
+  const ramSparkColor = dashboardRamStroke;
   const showResources = enabledWidgets.includes("resources");
   const showXray = enabledWidgets.includes("xray");
   const showQuickActions = enabledWidgets.includes("quick_actions");
@@ -955,8 +1135,21 @@ export function DashboardPage() {
                     {st.cpuCores} {t("pages.index.cores")} · {toFixed(cpuP, 0)}%
                   </p>
                   <div className="mt-2 opacity-90 transition group-hover:opacity-100">
-                    <ResourceSparkline data={cpuPreview} stroke={accent} />
+                    <MultiResourceSparkline accent={accent} series={cpuPreviewSeries} />
                   </div>
+                  {cpuPreviewLegend.length > 1 ? (
+                    <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 px-1">
+                      {cpuPreviewLegend.map((s) => (
+                        <span
+                          key={s.key}
+                          className="inline-flex max-w-[9rem] items-center gap-1 text-[10px] text-[var(--fg-muted)]"
+                        >
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.stroke }} />
+                          <span className="truncate">{s.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </button>
                 <button
                   type="button"
@@ -972,8 +1165,21 @@ export function DashboardPage() {
                     {sizeFormat(st.mem.current)} / {sizeFormat(st.mem.total)}
                   </p>
                   <div className="mt-1 opacity-90 transition group-hover:opacity-100">
-                    <ResourceSparkline data={memHistory.map((p0) => p0.value)} stroke={ramSparkColor} />
+                    <MultiResourceSparkline accent={ramSparkColor} series={memPreviewSeries} />
                   </div>
+                  {memPreviewLegend.length > 1 ? (
+                    <div className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 px-1">
+                      {memPreviewLegend.map((s) => (
+                        <span
+                          key={s.key}
+                          className="inline-flex max-w-[9rem] items-center gap-1 text-[10px] text-[var(--fg-muted)]"
+                        >
+                          <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: s.stroke }} />
+                          <span className="truncate">{s.name}</span>
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </button>
                 <div className="rounded-xl border border-[var(--border)]/80 bg-[var(--bg-elevated)]/50 p-2.5 text-left">
                   <LinearProgress percent={swP} strokeColor={metricColor(swP, accent)} />
@@ -1594,24 +1800,21 @@ export function DashboardPage() {
         <pre className="max-h-[500px] overflow-auto text-xs text-[var(--fg-muted)]">{configText}</pre>
       </Modal>
 
-      <Modal open={cpuOpen} onClose={() => setCpuOpen(false)} title={t("pages.index.cpuHistory")} width={900}>
+      <Modal
+        open={cpuOpen}
+        onClose={() => {
+          setCpuOpen(false);
+          setCpuHoverT(null);
+        }}
+        title={t("pages.index.cpuHistory")}
+        width={900}
+      >
         <SelectNative
           className="mb-3 w-full sm:w-48"
           value={String(cpuBucket)}
-          onChange={async (e) => {
-            const v = Number(e.target.value);
-            setCpuBucket(v);
-            setSpin(true);
-            const r = await getJson<{ t: number; cpu: number }[]>(panel(`api/server/cpuHistory/${v}`));
-            setSpin(false);
-            if (r.success && r.obj) {
-              setCpuLong(
-                r.obj.map((p0) => ({
-                  value: Math.max(0, Math.min(100, p0.cpu)),
-                  ts: toUnixMs(Number(p0.t || Date.now())),
-                }))
-              );
-            }
+          onChange={(e) => {
+            setCpuBucket(Number(e.target.value));
+            setCpuHoverT(null);
           }}
         >
           {[
@@ -1627,24 +1830,69 @@ export function DashboardPage() {
             </option>
           ))}
         </SelectNative>
-        <ResourceHistoryChart
-          points={cpuLong}
-          stroke={accent}
-          gradientId="cpuHistoryAreaGradient"
-          hoverIndex={cpuHoverIndex}
-          onHoverIndex={setCpuHoverIndex}
-          onLeave={() => setCpuHoverIndex(null)}
+        {cpuChartSeries.length > 1 ? (
+          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-xs">
+            {cpuChartSeries.map((s) => (
+              <span key={s.key} className="inline-flex max-w-[220px] items-center gap-2 text-[var(--fg-muted)]">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.stroke }} />
+                <span className="truncate font-medium text-[var(--fg)]">{s.name}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <MultiSeriesResourceChart
+          series={cpuChartSeries}
+          hoverT={cpuHoverT}
+          onHoverT={setCpuHoverT}
+          onLeave={() => setCpuHoverT(null)}
         />
       </Modal>
 
-      <Modal open={memOpen} onClose={() => setMemOpen(false)} title={t("pages.index.memoryHistory")} width={900}>
-        <ResourceHistoryChart
-          points={memHistory}
-          stroke={ramSparkColor}
-          gradientId="memHistoryAreaGradient"
-          hoverIndex={memHoverIndex}
-          onHoverIndex={setMemHoverIndex}
-          onLeave={() => setMemHoverIndex(null)}
+      <Modal
+        open={memOpen}
+        onClose={() => {
+          setMemOpen(false);
+          setMemHoverT(null);
+        }}
+        title={t("pages.index.memoryHistory")}
+        width={900}
+      >
+        <SelectNative
+          className="mb-3 w-full sm:w-48"
+          value={String(memBucket)}
+          onChange={(e) => {
+            setMemBucket(Number(e.target.value));
+            setMemHoverT(null);
+          }}
+        >
+          {[
+            { value: 2, label: "2m" },
+            { value: 30, label: "30m" },
+            { value: 60, label: "1h" },
+            { value: 120, label: "2h" },
+            { value: 180, label: "3h" },
+            { value: 300, label: "5h" },
+          ].map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </SelectNative>
+        {memChartSeries.length > 1 ? (
+          <div className="mb-3 flex flex-wrap gap-x-4 gap-y-2 text-xs">
+            {memChartSeries.map((s) => (
+              <span key={s.key} className="inline-flex max-w-[220px] items-center gap-2 text-[var(--fg-muted)]">
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.stroke }} />
+                <span className="truncate font-medium text-[var(--fg)]">{s.name}</span>
+              </span>
+            ))}
+          </div>
+        ) : null}
+        <MultiSeriesResourceChart
+          series={memChartSeries}
+          hoverT={memHoverT}
+          onHoverT={setMemHoverT}
+          onLeave={() => setMemHoverT(null)}
         />
       </Modal>
 

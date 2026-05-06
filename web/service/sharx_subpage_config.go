@@ -37,6 +37,7 @@ type SharxSubpageResponseRules struct {
 	Announce              string                       `json:"announce"`
 	SupportURL            string                       `json:"supportUrl"`
 	ProfileWebPageURL     string                       `json:"profileWebPageUrl"`
+	MtProtoEnabled        *bool                        `json:"mtProtoEnabled,omitempty"`
 	ExtraHeaders          []SharxSubpageResponseHeader `json:"extraHeaders"`
 }
 

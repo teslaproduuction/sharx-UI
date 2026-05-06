@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
@@ -38,6 +39,9 @@ type ServerController struct {
 
 	lastVersions        []string
 	lastGetVersionsTime int64 // unix seconds
+
+	workerHostMetricsMu       sync.Mutex
+	lastWorkerHostMetricsPoll time.Time
 }
 
 // NewServerController creates a new ServerController, initializes routes, and starts background tasks.
@@ -55,6 +59,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.GET("/updater", a.dockerUpdaterStatus)
 	g.POST("/updater/trigger", a.dockerUpdaterTrigger)
 	g.GET("/cpuHistory/:bucket", a.getCpuHistoryBucket)
+	g.GET("/memHistory/:bucket", a.getMemHistoryBucket)
 	g.GET("/getXrayVersion", a.getXrayVersion)
 	g.GET("/getConfigJson", a.getConfigJson)
 	g.GET("/getDb", a.getDb)
@@ -191,10 +196,17 @@ func (a *ServerController) refreshStatus() {
 	a.lastStatus = a.serverService.GetStatus(a.lastStatus)
 	// collect cpu history when status is fresh
 	if a.lastStatus != nil {
-		a.serverService.AppendCpuSample(time.Now(), a.lastStatus.Cpu)
+		now := time.Now()
+		a.serverService.AppendCpuSample(now, a.lastStatus.Cpu)
+		memPct := 0.0
+		if a.lastStatus.Mem.Total > 0 {
+			memPct = float64(a.lastStatus.Mem.Current) / float64(a.lastStatus.Mem.Total) * 100
+		}
+		a.serverService.AppendMemSample(now, memPct)
 		// Broadcast status update via WebSocket
 		websocket.BroadcastStatus(a.lastStatus)
 	}
+	a.pollWorkerHostMetricsIfDue()
 }
 
 // startTask initiates background tasks for continuous status monitoring.
@@ -234,28 +246,170 @@ func (a *ServerController) dockerUpdaterTrigger(c *gin.Context) {
 	jsonMsg(c, I18nWeb(c, "pages.settings.dockerUpdaterTriggerSuccess"), nil)
 }
 
-// getCpuHistoryBucket retrieves aggregated CPU usage history based on the specified time bucket.
+// getCpuHistoryBucket retrieves aggregated CPU usage history (panel + worker nodes when multi-node).
 func (a *ServerController) getCpuHistoryBucket(c *gin.Context) {
+	a.resourceHistoryBucket(c, true)
+}
+
+// getMemHistoryBucket retrieves aggregated host memory usage history (percent) for panel + workers.
+func (a *ServerController) getMemHistoryBucket(c *gin.Context) {
+	a.resourceHistoryBucket(c, false)
+}
+
+func allowedResourceHistoryBucket(bucket int) bool {
+	allowed := map[int]bool{
+		2:   true,
+		30:  true,
+		60:  true,
+		120: true,
+		180: true,
+		300: true,
+	}
+	return allowed[bucket]
+}
+
+func (a *ServerController) resourceHistoryBucket(c *gin.Context, cpu bool) {
 	bucketStr := c.Param("bucket")
 	bucket, err := strconv.Atoi(bucketStr)
 	if err != nil || bucket <= 0 {
 		jsonMsg(c, "invalid bucket", fmt.Errorf("bad bucket"))
 		return
 	}
-	allowed := map[int]bool{
-		2:   true, // Real-time view
-		30:  true, // 30s intervals
-		60:  true, // 1m intervals
-		120: true, // 2m intervals
-		180: true, // 3m intervals
-		300: true, // 5m intervals
-	}
-	if !allowed[bucket] {
+	if !allowedResourceHistoryBucket(bucket) {
 		jsonMsg(c, "invalid bucket", fmt.Errorf("unsupported bucket"))
 		return
 	}
-	points := a.serverService.AggregateCpuHistory(bucket, 60)
-	jsonObj(c, points, nil)
+	settingSvc := service.SettingService{}
+	multi, _ := settingSvc.GetMultiNodeMode()
+
+	var panelPoints []map[string]any
+	if cpu {
+		panelPoints = a.serverService.AggregateCpuHistory(bucket, 60)
+	} else {
+		panelPoints = a.serverService.AggregateMemHistory(bucket, 60)
+	}
+
+	series := []gin.H{
+		{"key": "panel", "name": "Panel", "points": panelPoints},
+	}
+	if multi {
+		for _, nodeID := range a.serverService.WorkerResourceNodeIDs() {
+			display := strings.TrimSpace(a.serverService.WorkerDisplayName(nodeID))
+			if display == "" {
+				display = fmt.Sprintf("Node %d", nodeID)
+			}
+			var pts []map[string]any
+			if cpu {
+				pts = a.serverService.AggregateWorkerCpuHistory(nodeID, bucket, 60)
+			} else {
+				pts = a.serverService.AggregateWorkerMemHistory(nodeID, bucket, 60)
+			}
+			series = append(series, gin.H{
+				"key":    fmt.Sprintf("node-%d", nodeID),
+				"nodeId": nodeID,
+				"name":   display,
+				"points": pts,
+			})
+		}
+	}
+	jsonObj(c, gin.H{"series": series}, nil)
+}
+
+func (a *ServerController) pollWorkerHostMetricsIfDue() {
+	settingSvc := service.SettingService{}
+	multi, err := settingSvc.GetMultiNodeMode()
+	if err != nil || !multi {
+		return
+	}
+	const minGap = 2 * time.Second
+	now := time.Now()
+	a.workerHostMetricsMu.Lock()
+	if now.Sub(a.lastWorkerHostMetricsPoll) < minGap {
+		a.workerHostMetricsMu.Unlock()
+		return
+	}
+	a.lastWorkerHostMetricsPoll = now
+	a.workerHostMetricsMu.Unlock()
+
+	go func() {
+		nodeSvc := service.NodeService{}
+		nodes, err := nodeSvc.GetAllNodes()
+		if err != nil || len(nodes) == 0 {
+			return
+		}
+		ts := time.Now()
+		for _, node := range nodes {
+			if node == nil || !node.Enable {
+				continue
+			}
+			status, err := nodeSvc.GetNodeStatus(node)
+			if err != nil {
+				continue
+			}
+			cpuV := statusHostCpuPercent(status)
+			memPct := statusHostMemPercent(status)
+			a.serverService.AppendWorkerResourceSample(node.Id, node.Name, ts, cpuV, memPct)
+		}
+	}()
+}
+
+func statusHostCpuPercent(st map[string]interface{}) float64 {
+	v, ok := st["hostCpu"]
+	if !ok || v == nil {
+		return 0
+	}
+	switch x := v.(type) {
+	case float64:
+		return clampPercent(x)
+	case float32:
+		return clampPercent(float64(x))
+	default:
+		return 0
+	}
+}
+
+func statusHostMemPercent(st map[string]interface{}) float64 {
+	hm, ok := st["hostMem"].(map[string]interface{})
+	if !ok || hm == nil {
+		return 0
+	}
+	cur := uint64Interface(hm["current"])
+	tot := uint64Interface(hm["total"])
+	if tot == 0 {
+		return 0
+	}
+	return clampPercent(float64(cur) / float64(tot) * 100)
+}
+
+func uint64Interface(v interface{}) uint64 {
+	switch x := v.(type) {
+	case float64:
+		if x < 0 {
+			return 0
+		}
+		return uint64(x)
+	case json.Number:
+		i, err := x.Int64()
+		if err != nil {
+			return 0
+		}
+		if i < 0 {
+			return 0
+		}
+		return uint64(i)
+	default:
+		return 0
+	}
+}
+
+func clampPercent(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }
 
 // getXrayVersion retrieves available Xray versions, with caching for 1 minute.

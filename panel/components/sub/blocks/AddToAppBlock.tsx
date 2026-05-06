@@ -7,6 +7,7 @@ import {
   type AppButton,
   type BlockAddToApp,
 } from "@/lib/sharxSubpageConfig";
+import { resolveMtProtoLinks } from "../types";
 import shell from "../subscription-shell.module.css";
 import type { BlockRenderContext } from "./index";
 
@@ -76,11 +77,24 @@ function makeSubstitutionVars(opts: {
 function renderButton(
   button: AppButton,
   vars: SubstitutionVars,
+  tgProxyFirst: string,
 ): RenderedButton | null {
   if (button.enabled === false) return null;
   const catalog = APP_CATALOG[button.app];
   const label = button.label?.trim() || catalog?.label || button.app;
   const iconUrl = button.iconUrl?.trim() || catalog?.iconUrl || "";
+
+  if (button.app === "telegram") {
+    const href = tgProxyFirst.trim();
+    if (!href) return null;
+    return {
+      id: button.id,
+      label,
+      href,
+      iconUrl,
+      platforms: button.platforms,
+    };
+  }
 
   // Prefer encrypted-specific shortcuts when admin opted in and server gave us one.
   if (button.useEncrypted && catalog?.supportsEncrypted) {
@@ -143,8 +157,10 @@ export function AddToAppBlock({
     preferJsonUrl: normalized.preferJsonUrl,
   });
 
+  const tgProxyFirst = resolveMtProtoLinks(data)[0] ?? "";
+
   const rendered = buttons
-    .map((b) => renderButton(b, vars))
+    .map((b) => renderButton(b, vars, tgProxyFirst))
     .filter((r): r is RenderedButton => r !== null);
   if (rendered.length === 0) return null;
 

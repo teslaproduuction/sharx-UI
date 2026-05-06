@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "Không có máy chủ Fake DNS nào được thêm."
 emptyBalancersDesc = "Không có bộ cân bằng tải nào được thêm."
 emptyReverseDesc = "Không có proxy ngược nào được thêm."
 somethingWentWrong = "Đã xảy ra lỗi"
+"api.pullXrayConfig.buildFailed" = "Không tạo được cấu hình"
+"api.pullXrayConfig.unknownNode" = "Không có node cho địa chỉ này"
+"api.pullXrayConfig.nodeDisabled" = "Node đã bị tắt"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "Lịch sử CPU"
+resourceSeriesPanel = "Máy chủ panel"
 nodesAvailability = "Sẵn sàng node"
 database = "Cơ sở dữ liệu"
 dbSize = "Kích thước"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "Đóng thanh bên"
+clickEditJson = "Nhấn để chỉnh JSON"
+copyCellValue = "Sao chép giá trị"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "Lấy liên kết"
+scanQrCode = "Quét mã QR trong ứng dụng"
+scanQrCodeDescription = "Hoặc sao chép liên kết bên dưới và dán vào ứng dụng VPN."
+copyLink = "Sao chép liên kết"
+connectionKeys = "Khóa kết nối"
+copyProxyLink = "Sao chép liên kết proxy"
+
+[pages.publicSub.step.install]
+title = "Cài đặt ứng dụng"
+textDownload = "Tải {{app}} bằng nút bên dưới."
+textStore = "Cài {{app}} từ cửa hàng chính thức cho nền tảng của bạn."
+
+[pages.publicSub.step.addSub]
+title = "Thêm gói đăng ký"
+text = "Dùng nút «Thêm gói đăng ký» bên dưới để nhập tự động, hoặc sao chép URL gói rồi dán vào ứng dụng."
+
+[pages.publicSub.step.connect]
+title = "Kết nối"
+text = "Chọn máy chủ và bật đường hầm. Xong."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "Thêm proxy MTProto"
+text = "Chạm «Thêm proxy» (tương tự «Thêm gói đăng ký» trong VPN). Để sao chép liên kết hãy mở mã QR — thao tác sao chép ở đó."
+
+[pages.publicSub.stepTelegram.done]
+title = "Bật trong Telegram"
+text = "Telegram: Cài đặt → Nâng cao → Kiểu kết nối → Dùng proxy (có thể khác theo phiên bản)."
+
+[pages.publicSub.mtproto]
+addProxy = "Thêm proxy"
+
 
 [tgbot]
 keyboardClosed = "❌ Bàn phím đã đóng!"
@@ -2578,6 +2617,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "Xóa hồ sơ định tuyến"
+  routingProfileName = "Tên"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2649,6 +2692,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "VPN của tôi"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "Thông báo bảo trì: thứ Sáu 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"

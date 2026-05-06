@@ -23,6 +23,14 @@ const (
 	publicSubRateMax    = 120
 )
 
+// publicSubMtProtoHook supplies tg://proxy lines for the subscription page (Telemt); not part of GetSubs / VPN feed.
+var publicSubMtProtoHook func(subID, host string) []string
+
+// RegisterPublicSubMtProtoHook registers the hook used to fill obj.mtProtoLinks on GET /panel/api/public/subscription.
+func RegisterPublicSubMtProtoHook(fn func(subID, host string) []string) {
+	publicSubMtProtoHook = fn
+}
+
 type publicSubRateBucket struct {
 	mu sync.Mutex
 	ts []time.Time
@@ -193,12 +201,21 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 			}
 		}
 
+		mtProtoLinks := []string{}
+		if publicSubMtProtoHook != nil {
+			mtProtoLinks = publicSubMtProtoHook(subID, host)
+			if mtProtoLinks == nil {
+				mtProtoLinks = []string{}
+			}
+		}
+
 		out := gin.H{
 			"config":              cfgParsed,
 			"configUuid":          cfgRow.UUID,
 			"subscriptionUrl":     feedURL,
 			"subscriptionJsonUrl": jsonURL,
 			"links":               subs,
+			"mtProtoLinks":        mtProtoLinks,
 			"user": gin.H{
 				"shortUuid":                subID,
 				"username":                 client.Email,

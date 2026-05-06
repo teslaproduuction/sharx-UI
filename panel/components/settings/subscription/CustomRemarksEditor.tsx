@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslation } from "react-i18next";
-import { Switch } from "@/components/ui";
+import { Switch, Textarea } from "@/components/ui";
 import {
   defaultCustomRemarks,
   type CustomRemarks,
@@ -18,10 +18,7 @@ function arrToText(a: string[] | undefined): string {
 }
 
 function textToArr(s: string): string[] {
-  return s
-    .split("\n")
-    .map((x) => x.trim())
-    .filter(Boolean);
+  return s.split("\n").filter((line) => line.length > 0);
 }
 
 const KEYS = [
@@ -100,8 +97,7 @@ export function CustomRemarksEditor({ config, onChange }: Props) {
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         {KEYS.map((key) => (
           <Field key={key} label={label(key)}>
-            <textarea
-              className="min-h-[88px] w-full resize-y rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 text-sm text-[var(--fg)] outline-none transition-colors focus:border-[var(--accent)] focus:ring-1 focus:ring-[var(--accent)]"
+            <Textarea
               value={arrToText(remarks[key])}
               onChange={(e) => setRemark(key, e.target.value)}
               spellCheck={false}
@@ -126,10 +122,10 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label className="flex flex-col gap-1">
-      <span className="text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
+    <label className="block">
+      <div className="mb-1 text-xs font-medium uppercase tracking-wide text-[var(--fg-subtle)]">
         {label}
-      </span>
+      </div>
       {children}
     </label>
   );

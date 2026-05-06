@@ -72,6 +72,9 @@ emptyFakeDnsDesc = "Eklenmiş Fake DNS sunucusu yok."
 emptyBalancersDesc = "Eklenmiş dengeleyici yok."
 emptyReverseDesc = "Eklenmiş ters proxy yok."
 somethingWentWrong = "Bir şeyler yanlış gitti"
+"api.pullXrayConfig.buildFailed" = "Yapılandırma oluşturulamadı"
+"api.pullXrayConfig.unknownNode" = "Adres için bilinmeyen düğüm"
+"api.pullXrayConfig.nodeDisabled" = "Düğüm devre dışı"
 back = "Back"
 retry = "Retry"
 add = "Add"
@@ -246,6 +249,7 @@ xrayVersionLine = "Version {{version}}"
 panelUptimeLabel = "Panel"
 nodesCoresRunningPill = "Node cores: {{running}} / {{total}}"
 cpuHistory = "CPU geçmişi"
+resourceSeriesPanel = "Panel ana bilgisayarı"
 nodesAvailability = "Düğüm kullanılabilirliği"
 database = "Veritabanı"
 dbSize = "Boyut"
@@ -1912,6 +1916,10 @@ rowDeleted = "Row deleted."
 rowCreated = "Row created."
 deleteRowTitle = "Delete row"
 deleteRowDesc = "Are you sure you want to delete this row?"
+closeSidebar = "Kenar çubuğunu kapat"
+clickEditJson = "JSON düzenlemek için tıklayın"
+copyCellValue = "Değeri kopyala"
+
 
 [pages.publicSub]
 title = "Subscription"
@@ -1939,6 +1947,37 @@ addSubscription = "Add subscription"
 links = "Connection links"
 addToApp = "Add to app"
 qr = "QR"
+getLink = "Bağlantıyı al"
+scanQrCode = "Uygulamada QR kodunu tarayın"
+scanQrCodeDescription = "Veya aşağıdaki bağlantıyı kopyalayıp VPN istemcisine yapıştırın."
+copyLink = "Bağlantıyı kopyala"
+connectionKeys = "Bağlantı anahtarları"
+copyProxyLink = "Proxy bağlantısını kopyala"
+
+[pages.publicSub.step.install]
+title = "Uygulamayı yükleyin"
+textDownload = "Aşağıdaki düğmeyle {{app}} öğesini indirin."
+textStore = "{{app}} uygulamasını platformunuzun resmi mağazasından yükleyin."
+
+[pages.publicSub.step.addSub]
+title = "Abonelik ekleyin"
+text = "Otomatik içe aktarmak için alttaki «Abonelik ekle» düğmesini kullanın veya abonelik URL'sini kopyalayıp uygulamaya yapıştırın."
+
+[pages.publicSub.step.connect]
+title = "Bağlanın"
+text = "Bir sunucu seçin ve tüneli açın. Bu kadar."
+
+[pages.publicSub.stepTelegram.addProxy]
+title = "MTProto proxy ekleyin"
+text = "«Proxy ekle»ye basın (VPN'de «Abonelik ekle» ile aynı mantık). Bağlantıyı kopyalamak için QR kodunu açın — kopyalama orada."
+
+[pages.publicSub.stepTelegram.done]
+title = "Telegram'da etkinleştirin"
+text = "Telegram: Ayarlar → Gelişmiş → Bağlantı tipi → proxy kullanın (ifadeler sürüme göre değişebilir)."
+
+[pages.publicSub.mtproto]
+addProxy = "Proxy ekle"
+
 
 [tgbot]
 keyboardClosed = "❌ Klavye kapatıldı!"
@@ -2579,6 +2618,10 @@ addBlock = "Add block"
   emptyTitle = "No routing profiles yet"
   emptyDesc = "Add a profile to author DIRECT / PROXY / BLOCK lists and copy deep links (happ://, incy://, sharx://, …) for clients."
   addProfile = "Add routing profile"
+  removeProfileAria = "Yönlendirme profilini kaldır"
+  routingProfileName = "Ad"
+  customPrefixPlaceholder = "myapp://routing/add/"
+  importPastePlaceholder = "incy://routing/add/…"
 
   [subBuilder.migrated]
   title = "Config was upgraded to sharx-v2"
@@ -2650,6 +2693,13 @@ addBlock = "Add block"
   extraHeadersHint = "Any additional HTTP headers sent with the subscription response (e.g. Sub-Info-Color)."
   addHeader = "Add header"
   extraHeadersEmpty = "No extra headers configured."
+  profileTitlePlaceholder = "VPN'im"
+  updateIntervalPlaceholder = "12"
+  announcePlaceholder = "Bakım penceresi: Cuma 22:00 UTC"
+  supportUrlPlaceholder = "https://t.me/your_support"
+  profileWebPageUrlPlaceholder = "https://example.com/account"
+  extraHeaderKeyPlaceholder = "Sub-Info-Color"
+  extraHeaderValuePlaceholder = "blue"
 
 [subBuilder.appSettings.groups]
 encryption = "Encryption"
