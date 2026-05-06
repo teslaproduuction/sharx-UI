@@ -25,8 +25,10 @@ type Payload struct {
 
 // Manager supervises one Telemt OS process per inbound tag.
 type Manager struct {
-	mu      sync.Mutex
-	running map[string]*procState
+	mu         sync.Mutex
+	running    map[string]*procState
+	workRootMu sync.RWMutex
+	workRoot   string // if empty: TELEMT_WORK_ROOT env, else /app/telemt
 }
 
 type procState struct {
@@ -37,6 +39,30 @@ type procState struct {
 // NewManager creates a Telemt manager.
 func NewManager() *Manager {
 	return &Manager{running: make(map[string]*procState)}
+}
+
+// SetWorkRoot sets the per-manager state directory root (e.g.panel: $XUI_DATA_FOLDER/telemt).
+// Worker nodes omit this and rely on TELEMT_WORK_ROOT or the default /app/telemt.
+func (m *Manager) SetWorkRoot(abs string) {
+	if m == nil {
+		return
+	}
+	m.workRootMu.Lock()
+	defer m.workRootMu.Unlock()
+	m.workRoot = strings.TrimSpace(abs)
+}
+
+func (m *Manager) stateDirForTag(tag string) string {
+	m.workRootMu.RLock()
+	root := strings.TrimSpace(m.workRoot)
+	m.workRootMu.RUnlock()
+	if root == "" {
+		root = strings.TrimSpace(os.Getenv("TELEMT_WORK_ROOT"))
+	}
+	if root == "" {
+		root = "/app/telemt"
+	}
+	return filepath.Join(root, tag)
 }
 
 func findTelemtBinary() string {
@@ -123,7 +149,7 @@ func (m *Manager) Apply(payloads []Payload) error {
 			delete(m.running, tag)
 		}
 
-		root := filepath.Join("/app/telemt", tag)
+		root := m.stateDirForTag(tag)
 		if err := os.MkdirAll(filepath.Join(root, "tlsfront"), 0o755); err != nil {
 			return fmt.Errorf("telemt mkdir %s: %w", root, err)
 		}

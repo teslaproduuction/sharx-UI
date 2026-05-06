@@ -441,32 +441,41 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	}
 
 	if multiMode {
+		StopLocalTelemtStandalone()
 		return s.restartXrayMultiMode(isForce)
 	}
 
-	// Single mode: use local Xray
+	// Single mode: local Xray + Telemt sidecars on this host.
 	xrayConfig, err := s.GetXrayConfig()
 	if err != nil {
 		return err
 	}
 
+	needRestart := isForce || isNeedXrayRestart.Load()
 	if s.IsXrayRunning() {
-		if !isForce && p.GetConfig().Equals(xrayConfig) && !isNeedXrayRestart.Load() {
-			logger.Debug("It does not need to restart Xray")
-			return nil
-		}
+		needRestart = needRestart || !p.GetConfig().Equals(xrayConfig)
+	} else {
+		needRestart = true
+	}
+
+	if s.IsXrayRunning() && needRestart {
 		// Close API connections before stopping Xray
 		s.CloseAPIConnections()
 		p.Stop()
 	}
 
-	p = xray.NewProcess(xrayConfig)
-	result = ""
-	err = p.Start()
-	if err != nil {
-		return err
+	if needRestart {
+		p = xray.NewProcess(xrayConfig)
+		result = ""
+		err = p.Start()
+		if err != nil {
+			return err
+		}
+	} else {
+		logger.Debug("It does not need to restart Xray")
 	}
 
+	TryApplyLocalTelemtStandalone(s)
 	return nil
 }
 
@@ -954,6 +963,13 @@ func (s *XrayService) StopXray() error {
 	defer lock.Unlock()
 	isManuallyStopped.Store(true)
 	logger.Debug("Attempting to stop Xray...")
+	multiMode, multiErr := s.settingService.GetMultiNodeMode()
+	if multiErr != nil {
+		multiMode = false
+	}
+	if !multiMode {
+		StopLocalTelemtStandalone()
+	}
 	if s.IsXrayRunning() {
 		// Close API connections before stopping Xray
 		s.CloseAPIConnections()

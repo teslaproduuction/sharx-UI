@@ -5,9 +5,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
+	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/database"
 	"github.com/konstpic/sharx-code/v2/database/model"
 )
@@ -297,6 +299,36 @@ func BuildTelemtPayloadsForNode(node *model.Node, ibs []*model.Inbound) ([]Telem
 		}
 		workDir := fmt.Sprintf("/app/telemt/%s", ib.Tag)
 		tomlStr, err := BuildTelemtToml(ib, users, pubHost, pubPort, workDir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TelemtNodePayload{InboundId: ib.Id, Tag: ib.Tag, Toml: tomlStr})
+	}
+	return out, nil
+}
+
+// BuildTelemtPayloadsStandalone builds Telemt TOML payloads for every enabled Telemt inbound
+// when Xray runs on the panel host (!multiNode). Node assignment / published address are not used;
+// links.publicHost / publicPort in inbound JSON control subscription links unless overridden in UI.
+func BuildTelemtPayloadsStandalone() ([]TelemtNodePayload, error) {
+	db := database.GetDB()
+	var inbounds []model.Inbound
+	if err := db.Where("enable = ?", true).Find(&inbounds).Error; err != nil {
+		return nil, err
+	}
+	base := filepath.Join(config.GetDataFolderPath(), "telemt")
+	out := make([]TelemtNodePayload, 0)
+	for i := range inbounds {
+		ib := &inbounds[i]
+		if model.NormalizeProtocol(ib.Protocol) != model.Telemt {
+			continue
+		}
+		users, err := TelemtAccessUsersForInbound(ib.Id)
+		if err != nil {
+			return nil, err
+		}
+		workDir := filepath.Join(base, ib.Tag)
+		tomlStr, err := BuildTelemtToml(ib, users, "", 0, workDir)
 		if err != nil {
 			return nil, err
 		}

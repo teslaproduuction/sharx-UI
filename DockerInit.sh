@@ -82,3 +82,22 @@ echo "DockerInit: rules 6/6 — RU geosite..."
 download_with_retry "https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download/geosite.dat" "geosite_RU.dat"
 echo "DockerInit: done."
 cd ../../
+
+# Telemt (MTProto) binary for panel standalone and shared layout with node builds.
+TELEMT_VERSION="${TELEMT_VERSION:-3.4.10}"
+case "$FNAME" in
+    amd64) TELEMT_ARCH_DL="x86_64-linux-musl" ;;
+    arm64) TELEMT_ARCH_DL="aarch64-linux-musl" ;;
+    *)
+        echo "DockerInit: skipping Telemt download (no musl build for arch $FNAME)"
+        TELEMT_ARCH_DL=""
+        ;;
+esac
+if [ -n "$TELEMT_ARCH_DL" ]; then
+    echo "DockerInit: downloading Telemt ${TELEMT_VERSION} (${TELEMT_ARCH_DL})..."
+    download_with_retry "https://github.com/telemt/telemt/releases/download/${TELEMT_VERSION}/telemt-${TELEMT_ARCH_DL}.tar.gz" "/tmp/telemt.tgz"
+    tar -xzf /tmp/telemt.tgz -C build/bin
+    chmod +x build/bin/telemt
+    rm -f /tmp/telemt.tgz
+    echo "DockerInit: telemt -> build/bin/telemt"
+fi
