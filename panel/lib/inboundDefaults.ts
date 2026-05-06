@@ -202,7 +202,7 @@ export function defaultTelemtForm(): TelemtFormState {
     censorshipTlsFrontDir: "tlsfront",
     censorshipUnknownSniAction: "",
     metricsPort: "",
-    apiEnabled: false,
+    apiEnabled: true,
     apiListen: "127.0.0.1:9091",
   };
 }

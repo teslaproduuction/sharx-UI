@@ -475,10 +475,15 @@ func mapToSlice[T any](m map[string]*T) []*T {
 	return result
 }
 
-// OnlineIPSession is one client IP tracked by Xray policy statsUserOnline (user>>>email>>>online).
+// OnlineIPSession is one client IP tracked by Xray policy statsUserOnline (user>>>email>>>online),
+// or an analogous row from Telemt (MTProto) Control API.
 type OnlineIPSession struct {
 	IP       string `json:"ip"`
-	LastSeen int64  `json:"lastSeen"` // Unix seconds (from Xray online map)
+	LastSeen int64  `json:"lastSeen"` // Unix seconds (from Xray online map); Telemt may use collector time
+	// Protocol is "mtproto" for Telemt-sourced rows; empty for Xray.
+	Protocol string `json:"protocol,omitempty"`
+	// Remark is Telemt inbound tag when Protocol is mtproto (optional).
+	Remark string `json:"remark,omitempty"`
 }
 
 // GetUserOnlineIPList returns IP -> last-seen unix time for the given client email via gRPC GetStatsOnlineIpList.

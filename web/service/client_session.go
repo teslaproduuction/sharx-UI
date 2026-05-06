@@ -93,40 +93,36 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 
 	if !multi {
 		xs := XrayService{}
-		if !xs.IsXrayRunning() {
-			out.Results = append(out.Results, ClientSessionNodeResult{
-				NodeName:      "Local",
-				Sessions:      nil,
-				DropAvailable: conndrop.Available(),
-				Error:         "",
-			})
-			out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
-			return out, nil
+		var sessions []xray.OnlineIPSession
+		var xrayErr string
+		if xs.IsXrayRunning() {
+			apiPort := xs.GetAPIPort()
+			api, cleanup, err := xs.GetOrCreateAPI(apiPort)
+			if err != nil {
+				xrayErr = err.Error()
+			} else {
+				defer cleanup()
+				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+				defer cancel()
+				xsSess, err := api.GetUserOnlineIPList(ctx, email, false)
+				if err != nil {
+					logger.Warningf("local user online IP list: %v", err)
+					xrayErr = err.Error()
+				} else {
+					sessions = append(sessions, xsSess...)
+				}
+			}
 		}
-		apiPort := xs.GetAPIPort()
-		api, cleanup, err := xs.GetOrCreateAPI(apiPort)
-		if err != nil {
-			return nil, err
-		}
-		defer cleanup()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		sessions, err := api.GetUserOnlineIPList(ctx, email, false)
-		if err != nil {
-			logger.Warningf("local user online IP list: %v", err)
-			out.Results = append(out.Results, ClientSessionNodeResult{
-				NodeName:      "Local",
-				Sessions:      nil,
-				DropAvailable: conndrop.Available(),
-				Error:         err.Error(),
-			})
-			out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
-			return out, nil
+		sessions = append(sessions, CollectLocalTelemtOnlineSessions(email)...)
+		errStr := ""
+		if len(sessions) == 0 && xrayErr != "" {
+			errStr = xrayErr
 		}
 		out.Results = append(out.Results, ClientSessionNodeResult{
 			NodeName:      "Local",
 			Sessions:      sessions,
 			DropAvailable: conndrop.Available(),
+			Error:         errStr,
 		})
 		out.Results = mergeOfflineBlockedSessionRows(out.Results, blockedIPs)
 		return out, nil

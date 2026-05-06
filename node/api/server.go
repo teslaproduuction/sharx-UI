@@ -461,7 +461,7 @@ func (s *Server) stats(c *gin.Context) {
 	logger.Debugf("Stats response sent")
 }
 
-// userOnlineSessions returns per-IP online data from Xray stats (user>>>email>>>online).
+// userOnlineSessions returns per-IP online data from Xray stats (user>>>email>>>online) plus Telemt MTProto IPs.
 func (s *Server) userOnlineSessions(c *gin.Context) {
 	email := strings.TrimSpace(c.Query("email"))
 	if email == "" {
@@ -470,13 +470,21 @@ func (s *Server) userOnlineSessions(c *gin.Context) {
 	}
 	reset := c.DefaultQuery("reset", "false") == "true"
 	sessions, err := s.xrayManager.GetUserOnlineSessions(email, reset)
-	if err != nil {
-		if errors.Is(err, xray.ErrXrayNotReady) {
-			logXrayNotReadyThrottled("user-online-sessions")
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": errCodeXrayNotReady})
-			return
-		}
+	xrayNotReady := errors.Is(err, xray.ErrXrayNotReady)
+	if err != nil && !xrayNotReady {
+		logger.Errorf("Failed to get user online sessions: %v", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	if xrayNotReady {
+		sessions = nil
+	}
+	if s.telemtManager != nil {
+		sessions = append(sessions, s.telemtManager.CollectOnlineSessionsForUser(email)...)
+	}
+	if xrayNotReady && len(sessions) == 0 && (s.telemtManager == nil || !s.telemtManager.HasRunning()) {
+		logXrayNotReadyThrottled("user-online-sessions")
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": xray.ErrXrayNotReady.Error(), "code": errCodeXrayNotReady})
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{

@@ -1,3 +1,4 @@
+# SharX Telemt fork: build once with ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
 # Build stage
 FROM golang:1.26-alpine AS builder
 
@@ -33,6 +34,15 @@ ARG TARGETARCH
 RUN sh /docker-init.sh "${TARGETARCH}" && \
     f=$(ls /build/bin/xray-linux-* 2>/dev/null | head -1) && [ -f "$f" ] && \
     echo "Xray+geo+telemt in /build/bin:" && ls -la /build/bin/
+# Optional overlay: ./scripts/build-telemt-sharx.sh produces prebuilt/linux-{amd64,arm64}/telemt
+RUN ARCH="" && case "${TARGETARCH}" in amd64) ARCH=linux-amd64 ;; arm64) ARCH=linux-arm64 ;; esac && \
+    PRE="/build/third_party/telemt-sharx/prebuilt/${ARCH}/telemt" && \
+    if [ -n "$ARCH" ] && [ -f "$PRE" ]; then \
+      cp "$PRE" /build/bin/telemt && chmod +x /build/bin/telemt && \
+      echo "telemt: SharX fork prebuilt (${ARCH})"; \
+    else \
+      echo "telemt: no SharX prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
+    fi
 WORKDIR /build
 
 # Runtime stage
