@@ -86,22 +86,22 @@ func (j *CheckNodeHealthJob) Run() {
 	if checked == 0 {
 		return
 	}
-	
+
 	// Get updated nodes with response times
 	updatedNodes, err := j.nodeService.GetAllNodes()
 	if err != nil {
 		logger.Warningf("Failed to get nodes for WebSocket broadcast: %v", err)
 		return
 	}
-	
+
 	// Enrich nodes with assigned inbounds information
 	type NodeWithInbounds struct {
 		*model.Node
-		Inbounds    []*model.Inbound                    `json:"inbounds,omitempty"`
-		Profiles    []*model.XrayCoreConfigProfile       `json:"profiles,omitempty"`
-		XrayVersion string                                `json:"xrayVersion,omitempty"`
+		Inbounds    []*model.Inbound               `json:"inbounds,omitempty"`
+		Profiles    []*model.XrayCoreConfigProfile `json:"profiles,omitempty"`
+		XrayVersion string                         `json:"xrayVersion,omitempty"`
 	}
-	
+
 	profileService := service.XrayCoreConfigProfileService{}
 	result := make([]NodeWithInbounds, 0, len(updatedNodes))
 	for _, node := range updatedNodes {

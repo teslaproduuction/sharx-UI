@@ -112,19 +112,34 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 	var traffic xray.ClientTraffic
 	var lastOnline int64
 	var clientTraffics []xray.ClientTraffic
-	
+
+	subCfg, _ := (service.SubscriptionPageConfigService{}).GetActiveV2Config()
+	mergedRemarks := service.EffectiveCustomRemarks(subCfg)
+	showCustom := service.ShowCustomRemarksEnabled(subCfg)
+
 	// Try to find client by subId in new architecture (ClientEntity)
 	db := database.GetDB()
+
+	var disabledClient model.ClientEntity
+	if err := db.Where("sub_id = ?", subId).First(&disabledClient).Error; err == nil && !disabledClient.Enable {
+		lines := subscriptionPlaceholderLines(mergedRemarks.DisabledUsers)
+		if len(lines) > 0 {
+			t := trafficFromClientEntity(&disabledClient)
+			return lines, disabledClient.LastOnline, t, nil
+		}
+		return nil, 0, xray.ClientTraffic{}, common.NewError("subscription disabled for ", subId)
+	}
+
 	var clientEntity *model.ClientEntity
 	err := db.Where("sub_id = ? AND enable = ?", subId, true).First(&clientEntity).Error
 	useNewArchitecture := (err == nil && clientEntity != nil)
-	
+
 	if err != nil {
 		logger.Debugf("GetSubs: Client not found by subId '%s': %v", subId, err)
 	} else if clientEntity != nil {
-		logger.Debugf("GetSubs: Found client by subId '%s': clientId=%d, email=%s, hwidEnabled=%v", 
+		logger.Debugf("GetSubs: Found client by subId '%s': clientId=%d, email=%s, hwidEnabled=%v",
 			subId, clientEntity.Id, clientEntity.Email, clientEntity.HWIDEnabled)
-		
+
 		// Check traffic limits and expiry time before returning subscription
 		// Traffic statistics are now stored directly in ClientEntity
 		now := time.Now().Unix() * 1000
@@ -132,28 +147,32 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 		trafficLimit := int64(clientEntity.TotalGB * 1024 * 1024 * 1024)
 		trafficExceeded := clientEntity.TotalGB > 0 && totalUsed >= trafficLimit
 		timeExpired := clientEntity.ExpiryTime > 0 && clientEntity.ExpiryTime <= now
-		
+
 		// Check if client exceeded limits - set status but keep Enable = true to allow subscription
 		if trafficExceeded || timeExpired {
-			// Client exceeded limits - set status but keep Enable = true
-			// Subscription should still work to show traffic information to client
 			status := "expired_traffic"
 			if timeExpired {
 				status = "expired_time"
 			}
-			
-			// Update status if not already set
+
 			if clientEntity.Status != status {
 				db.Model(&model.ClientEntity{}).Where("id = ?", clientEntity.Id).Update("status", status)
 				clientEntity.Status = status
-				logger.Warningf("GetSubs: Client %s (subId: %s) exceeded limits - set status to %s: trafficExceeded=%v, timeExpired=%v, totalUsed=%d, total=%d", 
+				logger.Warningf("GetSubs: Client %s (subId: %s) exceeded limits - set status to %s: trafficExceeded=%v, timeExpired=%v, totalUsed=%d, total=%d",
 					clientEntity.Email, subId, status, trafficExceeded, timeExpired, totalUsed, trafficLimit)
 			}
-			// Continue to generate subscription - client will be blocked in Xray config, not in subscription
 		}
-		
-		// Note: We don't block subscription even if client has expired status
-		// Subscription provides traffic information, and client blocking is handled in Xray config
+
+		if showCustom {
+			if timeExpired && len(mergedRemarks.ExpiredUsers) > 0 {
+				t := trafficFromClientEntity(clientEntity)
+				return subscriptionPlaceholderLines(mergedRemarks.ExpiredUsers), clientEntity.LastOnline, t, nil
+			}
+			if trafficExceeded && len(mergedRemarks.LimitedUsers) > 0 {
+				t := trafficFromClientEntity(clientEntity)
+				return subscriptionPlaceholderLines(mergedRemarks.LimitedUsers), clientEntity.LastOnline, t, nil
+			}
+		}
 	}
 
 	if c != nil && clientEntity != nil {
@@ -162,24 +181,37 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 			return nil, 0, xray.ClientTraffic{}, err
 		}
 	}
-	
+
 	// Register HWID from headers if context is provided and client is found
 	if c != nil && clientEntity != nil {
 		err := s.registerHWIDFromRequest(c, clientEntity)
 		if err != nil {
-			// HWID limit exceeded - block subscription
+			if showCustom && isHWIDLimitStyleError(err) && len(mergedRemarks.HWIDMaxDevicesExceeded) > 0 {
+				t := trafficFromClientEntity(clientEntity)
+				return subscriptionPlaceholderLines(mergedRemarks.HWIDMaxDevicesExceeded), clientEntity.LastOnline, t, nil
+			}
 			return nil, 0, xray.ClientTraffic{}, fmt.Errorf("HWID limit exceeded: %w", err)
 		}
 	} else if c != nil {
 		logger.Debugf("GetSubs: Skipping HWID registration - client not found or context is nil (subId: %s)", subId)
 	}
-	
+
 	inbounds, err := s.getInboundsBySubId(subId)
 	if err != nil {
 		return nil, 0, traffic, err
 	}
 
 	if len(inbounds) == 0 {
+		lines := subscriptionPlaceholderLines(mergedRemarks.EmptyHosts)
+		if len(lines) > 0 {
+			tr := xray.ClientTraffic{}
+			lo := int64(0)
+			if clientEntity != nil {
+				tr = trafficFromClientEntity(clientEntity)
+				lo = clientEntity.LastOnline
+			}
+			return lines, lo, tr, nil
+		}
 		return nil, 0, traffic, common.NewError("No inbounds found with ", subId)
 	}
 
@@ -187,7 +219,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 	if err != nil {
 		s.datepicker = "gregorian"
 	}
-	
+
 	// New architecture: traffic lives on ClientEntity once; do not append per-inbound or aggregation doubles it.
 	var newArchTrafficAdded bool
 	for _, inbound := range inbounds {
@@ -237,24 +269,24 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 					err = db.Where("LOWER(email) = ?", strings.ToLower(client.Email)).First(&clientEntity).Error
 					if err != nil {
 						// Client not found in ClientEntity - skip (old architecture clients should be migrated)
-						logger.Warningf("GetSubs: Client %s (subId: %s) not found in ClientEntity - skipping", 
+						logger.Warningf("GetSubs: Client %s (subId: %s) not found in ClientEntity - skipping",
 							client.Email, subId)
 						continue
 					}
-					
+
 					// Check traffic limits from ClientEntity
 					now := time.Now().Unix() * 1000
 					totalUsed := clientEntity.Up + clientEntity.Down
 					trafficLimit := int64(clientEntity.TotalGB * 1024 * 1024 * 1024)
 					trafficExceeded := clientEntity.TotalGB > 0 && totalUsed >= trafficLimit
 					timeExpired := clientEntity.ExpiryTime > 0 && clientEntity.ExpiryTime <= now
-					
+
 					if trafficExceeded || timeExpired || !clientEntity.Enable {
-						logger.Warningf("GetSubs: Client %s (subId: %s) exceeded limits or disabled - skipping", 
+						logger.Warningf("GetSubs: Client %s (subId: %s) exceeded limits or disabled - skipping",
 							client.Email, subId)
 						continue
 					}
-					
+
 					// Create ClientTraffic from ClientEntity for statistics
 					clientTraffic := xray.ClientTraffic{
 						Email:      clientEntity.Email,
@@ -264,7 +296,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 						ExpiryTime: clientEntity.ExpiryTime,
 						LastOnline: clientEntity.LastOnline,
 					}
-					
+
 					link := s.getLink(prepared, client.Email)
 					// Split link by newline to handle multiple links (for multiple nodes)
 					linkLines := strings.Split(link, "\n")
@@ -321,7 +353,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 // New architecture: Find client by subId, then find inbounds through ClientInboundMapping.
 func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) {
 	db := database.GetDB()
-	
+
 	// First, try to find client by subId in ClientEntity (new architecture)
 	var client model.ClientEntity
 	err := db.Where("sub_id = ? AND enable = ?", subId, true).First(&client).Error
@@ -332,16 +364,16 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 		if err != nil {
 			return nil, err
 		}
-		
+
 		if len(mappings) == 0 {
 			return []*model.Inbound{}, nil
 		}
-		
+
 		inboundIds := make([]int, len(mappings))
 		for i, mapping := range mappings {
 			inboundIds[i] = mapping.InboundId
 		}
-		
+
 		var all []*model.Inbound
 		err = db.Model(model.Inbound{}).Preload("ClientStats").
 			Where("id IN ? AND enable = ?", inboundIds, true).
@@ -375,7 +407,7 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 		}
 		return inbounds, nil
 	}
-	
+
 	// Fallback to old architecture: search in Settings JSON (for backward compatibility)
 	var inbounds []*model.Inbound
 	err = db.Model(model.Inbound{}).Preload("ClientStats").Where(`id in (
@@ -773,7 +805,7 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 	if inbound.Protocol != model.VMESS {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	// Base object template (address will be set per node)
@@ -887,7 +919,7 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 	// Generate links for each node address (or external proxy)
 	links := ""
 	linkIndex := 0
-	
+
 	// First, handle external proxies if any
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
@@ -939,7 +971,7 @@ func (s *SubService) genVmessLink(inbound *model.Inbound, email string) string {
 		links += "vmess://" + base64.StdEncoding.EncodeToString(jsonStr)
 		linkIndex++
 	}
-	
+
 	return links
 }
 
@@ -948,7 +980,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	if inbound.Protocol != model.VMESS {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	// Base object template (address will be set per node)
@@ -1055,7 +1087,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 	// Generate links for each node address (or external proxy)
 	links := ""
 	linkIndex := 0
-	
+
 	// First, handle external proxies if any
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
@@ -1107,7 +1139,7 @@ func (s *SubService) genVmessLinkWithClient(inbound *model.Inbound, client *mode
 		links += "vmess://" + base64.StdEncoding.EncodeToString(jsonStr)
 		linkIndex++
 	}
-	
+
 	return links
 }
 
@@ -1167,7 +1199,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 	if inbound.Protocol != model.VLESS || client == nil {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
@@ -1333,7 +1365,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		initialCapacity = len(nodeAddresses)
 	}
 	links := make([]string, 0, initialCapacity)
-	
+
 	// First, handle external proxies if any
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
@@ -1392,7 +1424,7 @@ func (s *SubService) genVlessLinkWithClient(inbound *model.Inbound, client *mode
 		url.Fragment = s.genRemarkWithClient(inbound, client, strings.TrimSpace(addrPort.RemarkSuffix), remarkTplFromAP(addrPort))
 		links = append(links, url.String())
 	}
-	
+
 	return strings.Join(links, "\n")
 }
 
@@ -1400,7 +1432,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 	if inbound.Protocol != model.VLESS {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
@@ -1564,7 +1596,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 		initialCapacity = len(nodeAddresses)
 	}
 	links := make([]string, 0, initialCapacity)
-	
+
 	// First, handle external proxies if any
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
@@ -1630,7 +1662,7 @@ func (s *SubService) genVlessLink(inbound *model.Inbound, email string) string {
 
 		links = append(links, url.String())
 	}
-	
+
 	return strings.Join(links, "\n")
 }
 
@@ -1639,7 +1671,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 	if inbound.Protocol != model.Trojan {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
@@ -1776,7 +1808,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 
 	links := ""
 	linkIndex := 0
-	
+
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
 			ep, _ := externalProxy.(map[string]any)
@@ -1843,7 +1875,7 @@ func (s *SubService) genTrojanLinkWithClient(inbound *model.Inbound, client *mod
 		links += url.String()
 		linkIndex++
 	}
-	
+
 	return links
 }
 
@@ -1851,7 +1883,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 	if inbound.Protocol != model.Trojan {
 		return ""
 	}
-	
+
 	// Get addresses (Host > Nodes > Default)
 	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	var stream map[string]any
@@ -1997,7 +2029,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 	// Generate links for each node address (or external proxy)
 	links := ""
 	linkIndex := 0
-	
+
 	// First, handle external proxies if any
 	if len(externalProxies) > 0 {
 		for _, externalProxy := range externalProxies {
@@ -2071,7 +2103,7 @@ func (s *SubService) genTrojanLink(inbound *model.Inbound, email string) string 
 		links += url.String()
 		linkIndex++
 	}
-	
+
 	return links
 }
 
@@ -3027,20 +3059,20 @@ func searchHost(headers any) string {
 // PageData is a view model for subpage.html
 // PageData contains data for rendering the subscription information page.
 type PageData struct {
-	Host            string
-	BasePath        string
-	SId             string
-	Download        string
-	Upload          string
-	Total           string
-	Used            string
-	Remained        string
-	Expire          int64
-	LastOnline      int64
-	Datepicker      string
-	DownloadByte    int64
-	UploadByte      int64
-	TotalByte       int64
+	Host                 string
+	BasePath             string
+	SId                  string
+	Download             string
+	Upload               string
+	Total                string
+	Used                 string
+	Remained             string
+	Expire               int64
+	LastOnline           int64
+	Datepicker           string
+	DownloadByte         int64
+	UploadByte           int64
+	TotalByte            int64
 	SubUrl               string
 	SubJsonUrl           string
 	Result               []string
@@ -3165,21 +3197,21 @@ func (s *SubService) joinPathWithID(basePath, subId string) string {
 	} else {
 		subURL = basePath + "/" + subId
 	}
-	
+
 	// Add Provider ID to URL if configured and method is "url" (for Happ extended headers)
 	providerID, err := s.settingService.GetSubProviderID()
 	if err == nil && providerID != "" {
 		providerMethod, err := s.settingService.GetSubProviderIDMethod()
 		if err == nil && providerMethod == "url" {
-		// Add Provider ID as query parameter (according to Happ documentation: providerid)
-		if strings.Contains(subURL, "?") {
-			subURL += "&providerid=" + url.QueryEscape(providerID)
-		} else {
-			subURL += "?providerid=" + url.QueryEscape(providerID)
-		}
+			// Add Provider ID as query parameter (according to Happ documentation: providerid)
+			if strings.Contains(subURL, "?") {
+				subURL += "&providerid=" + url.QueryEscape(providerID)
+			} else {
+				subURL += "?providerid=" + url.QueryEscape(providerID)
+			}
 		}
 	}
-	
+
 	return subURL
 }
 
@@ -3220,7 +3252,7 @@ func (s *SubService) BuildPageData(subId string, hostHeader string, traffic xray
 	theme, _ := s.settingService.GetSubPageTheme()
 	logoUrl, _ := s.settingService.GetSubPageLogoUrl()
 	brandText, _ := s.settingService.GetSubPageBrandText()
-	
+
 	return PageData{
 		Host:                 hostHeader,
 		BasePath:             basePath,
@@ -3264,7 +3296,7 @@ func (s *SubService) extractNodeHost(nodeAddress string) string {
 	// Remove protocol prefix
 	address := strings.TrimPrefix(nodeAddress, "http://")
 	address = strings.TrimPrefix(address, "https://")
-	
+
 	// Extract host (remove port if present)
 	host, _, err := net.SplitHostPort(address)
 	if err != nil {
@@ -3278,9 +3310,9 @@ func (s *SubService) extractNodeHost(nodeAddress string) string {
 // This method reads HWID and device metadata from headers and calls RegisterHWIDFromHeaders.
 // Returns error if HWID limit is exceeded (should block subscription).
 func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model.ClientEntity) error {
-	logger.Debugf("registerHWIDFromRequest called for client %d (subId: %s, email: %s, hwidEnabled: %v)", 
+	logger.Debugf("registerHWIDFromRequest called for client %d (subId: %s, email: %s, hwidEnabled: %v)",
 		clientEntity.Id, clientEntity.SubID, clientEntity.Email, clientEntity.HWIDEnabled)
-	
+
 	// Check HWID mode - only register in client_header mode
 	settingService := service.SettingService{}
 	hwidMode, err := settingService.GetHwidMode()
@@ -3292,14 +3324,14 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 
 	// Only register in client_header mode
 	if hwidMode != "client_header" {
-		logger.Debugf("HWID registration skipped: hwidMode is '%s' (not 'client_header') for client %d (subId: %s)", 
+		logger.Debugf("HWID registration skipped: hwidMode is '%s' (not 'client_header') for client %d (subId: %s)",
 			hwidMode, clientEntity.Id, clientEntity.SubID)
 		return nil
 	}
 
 	// Check if client has HWID tracking enabled
 	if !clientEntity.HWIDEnabled {
-		logger.Debugf("HWID registration skipped: HWID tracking disabled for client %d (subId: %s, email: %s)", 
+		logger.Debugf("HWID registration skipped: HWID tracking disabled for client %d (subId: %s, email: %s)",
 			clientEntity.Id, clientEntity.SubID, clientEntity.Email)
 		return nil
 	}
@@ -3313,7 +3345,7 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 	if hwid == "" {
 		// No HWID header - mark as "unknown" device, don't register
 		// In client_header mode, we don't auto-generate HWID
-		logger.Debugf("No x-hwid header provided for client %d (subId: %s, email: %s) - HWID not registered", 
+		logger.Debugf("No x-hwid header provided for client %d (subId: %s, email: %s) - HWID not registered",
 			clientEntity.Id, clientEntity.SubID, clientEntity.Email)
 		return nil
 	}
@@ -3343,15 +3375,10 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
 			return fmt.Errorf("HWID limit exceeded: %w", err)
 		}
-		if errors.Is(err, service.ErrHWIDUsedByAnotherClient) {
-			logger.Errorf("HWID already registered to another client for client %d (subId: %s, email: %s, hwid: %s) - BLOCKING subscription",
-				clientEntity.Id, clientEntity.SubID, clientEntity.Email, hwid)
-			return fmt.Errorf("HWID is already in use by another subscription: %w", err)
-		}
 		// Check if error is HWID limit exceeded
 		if strings.Contains(err.Error(), "HWID limit exceeded") {
 			// Log as error - this should block subscription access
-			logger.Errorf("HWID limit exceeded for client %d (subId: %s, email: %s): %v - BLOCKING subscription", 
+			logger.Errorf("HWID limit exceeded for client %d (subId: %s, email: %s): %v - BLOCKING subscription",
 				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
 			// Return error to block subscription - this will prevent the subscription from being returned
 			// The calling function should handle this error and return appropriate response to client
@@ -3364,7 +3391,7 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 		// The subscription will still be returned, but HWID won't be registered
 	} else if hwidRecord != nil {
 		// Successfully registered HWID
-		logger.Debugf("Successfully registered HWID for client %d (subId: %s, email: %s, hwid: %s, hwidId: %d)", 
+		logger.Debugf("Successfully registered HWID for client %d (subId: %s, email: %s, hwid: %s, hwidId: %d)",
 			clientEntity.Id, clientEntity.SubID, clientEntity.Email, hwid, hwidRecord.Id)
 	}
 	return nil

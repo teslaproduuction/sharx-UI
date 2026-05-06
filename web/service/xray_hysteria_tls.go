@@ -65,7 +65,7 @@ func patchHysteriaStreamTLS(stream map[string]any, defaultCertFile, defaultKeyFi
 		ts["certificates"] = []any{
 			map[string]any{
 				"certificateFile": cf,
-				"keyFile":           kf,
+				"keyFile":         kf,
 			},
 		}
 	}

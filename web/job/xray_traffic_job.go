@@ -56,7 +56,7 @@ func (j *XrayTrafficJob) Run() {
 	if err != nil {
 		return
 	}
-	
+
 	err, needRestart0 := j.inboundService.AddTraffic(traffics, clientTraffics)
 	if err != nil {
 		logger.Warning("add inbound traffic failed:", err)
@@ -152,7 +152,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 			now := time.Now().Unix() * 1000
 			// Collect clients that need to be disabled (for API removal)
 			clientsToDisable := make(map[string]string) // map[email]tag
-			
+
 			for _, client := range allClients {
 				inboundIds, inboundErr := clientService.GetInboundIdsForClient(client.Id)
 				if inboundErr == nil {
@@ -163,13 +163,13 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 				if hwidErr == nil {
 					client.HWIDs = hwids
 				}
-				
+
 				// Check and update status if expired (same logic as GetClients)
 				totalUsed := client.Up + client.Down
 				trafficLimit := int64(client.TotalGB * 1024 * 1024 * 1024)
 				trafficExceeded := client.TotalGB > 0 && totalUsed >= trafficLimit
 				timeExpired := client.ExpiryTime > 0 && client.ExpiryTime <= now
-				
+
 				if trafficExceeded || timeExpired {
 					status := "expired_traffic"
 					if timeExpired {
@@ -182,7 +182,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 						if err := db.Model(&model.ClientEntity{}).Where("id = ?", client.Id).Update("status", status).Error; err != nil {
 							logger.Warningf("Failed to update status for client %s: %v", client.Email, err)
 						}
-						
+
 						// Collect client for API removal if enabled
 						if client.Enable && len(inboundIds) > 0 {
 							// Get tag from first inbound
@@ -194,7 +194,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 					}
 				}
 			}
-			
+
 			// Remove expired clients from Xray API (both local and nodes) asynchronously
 			if len(clientsToDisable) > 0 {
 				go func() {
@@ -205,7 +205,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 					}
 				}()
 			}
-			
+
 			for _, c := range allClients {
 				service.MergePanelClientLiveSpeedInto(c)
 			}

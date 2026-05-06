@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/config"
-	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/conndrop"
+	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/json_util"
 	"github.com/konstpic/sharx-code/v2/xray"
 )
@@ -61,7 +61,7 @@ func ensureNodeXrayLoggingDefaults(cfg *xray.Config) {
 type NodeStats struct {
 	Traffic       []*xray.Traffic       `json:"traffic"`
 	ClientTraffic []*xray.ClientTraffic `json:"clientTraffic"`
-	OnlineClients []string               `json:"onlineClients"`
+	OnlineClients []string              `json:"onlineClients"`
 }
 
 // Manager manages the XRAY Core process lifecycle.
@@ -175,7 +175,7 @@ func (m *Manager) downloadGeoFiles() {
 
 	for _, file := range geoFiles {
 		destPath := filepath.Join(binPath, file.FileName)
-		
+
 		// Check if file already exists
 		if _, err := os.Stat(destPath); err == nil {
 			logger.Debugf("Geo file %s already exists, skipping download", file.FileName)
@@ -416,10 +416,10 @@ func (m *Manager) ForceReload() error {
 		"/app/bin/config.json",
 		"/app/config/config.json",
 	}
-	
+
 	var configData []byte
 	var configPath string
-	
+
 	// Find config file
 	for _, path := range configPaths {
 		if _, statErr := os.Stat(path); statErr == nil {
@@ -431,7 +431,7 @@ func (m *Manager) ForceReload() error {
 			}
 		}
 	}
-	
+
 	// If config file found, try to use it
 	if configPath != "" {
 		var config xray.Config
@@ -446,7 +446,7 @@ func (m *Manager) ForceReload() error {
 						break
 					}
 				}
-				
+
 				// Add API inbound if missing
 				if !hasAPIInbound {
 					apiInbound := xray.InboundConfig{
@@ -459,7 +459,7 @@ func (m *Manager) ForceReload() error {
 					config.InboundConfigs = append([]xray.InboundConfig{apiInbound}, config.InboundConfigs...)
 					configData, _ = json.MarshalIndent(&config, "", "  ")
 				}
-				
+
 				// Apply config from file
 				m.config = &config
 				m.process = xray.NewProcess(&config)
@@ -731,11 +731,11 @@ func (m *Manager) persistSessionIPBlockRuleToSavedConfig(ruleTag, email, cidr st
 		filtered = append(filtered, r)
 	}
 	newRule := map[string]any{
-		"type":         "field",
-		"ruleTag":      ruleTag,
-		"user":         []string{email},
-		"source":       []string{cidr},
-		"outboundTag":  sessionIPBlockRoutingOutboundTag,
+		"type":        "field",
+		"ruleTag":     ruleTag,
+		"user":        []string{email},
+		"source":      []string{cidr},
+		"outboundTag": sessionIPBlockRoutingOutboundTag,
 	}
 	combined := append([]any{newRule}, filtered...)
 	routing["rules"] = combined
@@ -1269,7 +1269,7 @@ func (m *Manager) InstallXrayVersion(version string) error {
 	if binPath == "" {
 		binPath = "bin"
 	}
-	
+
 	var targetBinary string
 	if runtime.GOOS == "windows" {
 		targetBinary = filepath.Join(binPath, "xray-windows-amd64.exe")
@@ -1343,15 +1343,15 @@ func (m *Manager) downloadXRay(version string) (string, error) {
 	}
 
 	fileName := fmt.Sprintf("Xray-%s-%s.zip", osName, arch)
-	
+
 	// Ensure version has 'v' prefix for GitHub releases
 	versionTag := version
 	if !strings.HasPrefix(versionTag, "v") {
 		versionTag = "v" + versionTag
 	}
-	
+
 	url := fmt.Sprintf("https://github.com/XTLS/Xray-core/releases/download/%s/%s", versionTag, fileName)
-	
+
 	logger.Infof("Downloading Xray %s from %s", versionTag, url)
 	resp, err := http.Get(url)
 	if err != nil {

@@ -22,13 +22,13 @@ type LogPusher struct {
 	panelURL    string
 	hmacKey     [32]byte
 	nodeAddress string // Node's own address for identification
-	logBuffer []nodeLogItem
-	bufferMu  sync.Mutex
-	client     *http.Client
-	enabled    bool
-	lastPush   time.Time
-	pushTicker *time.Ticker
-	stopCh     chan struct{}
+	logBuffer   []nodeLogItem
+	bufferMu    sync.Mutex
+	client      *http.Client
+	enabled     bool
+	lastPush    time.Time
+	pushTicker  *time.Ticker
+	stopCh      chan struct{}
 }
 
 type nodeLogItem struct {
@@ -87,8 +87,8 @@ func InitLogPusher(nodeAddress string) {
 			client: &http.Client{
 				Timeout: 5 * time.Second,
 			},
-			enabled:  panelURL != "", // Enable only if panel URL is set
-			stopCh:   make(chan struct{}),
+			enabled: panelURL != "", // Enable only if panel URL is set
+			stopCh:  make(chan struct{}),
 		}
 
 		if pusher.enabled {
@@ -112,7 +112,7 @@ type nodeConfigData struct {
 // It reads the config file directly to avoid importing the config package.
 func getNodeConfig() *nodeConfigData {
 	configPaths := []string{"bin/node-config.json", "config/node-config.json", "./node-config.json", "/app/bin/node-config.json", "/app/config/node-config.json"}
-	
+
 	for _, path := range configPaths {
 		if data, err := os.ReadFile(path); err == nil {
 			var config nodeConfigData
@@ -201,12 +201,12 @@ func PushLog(logLine string) {
 	pusherMu.RLock()
 	pusherLocal := pusher
 	pusherMu.RUnlock()
-	
+
 	if pusherLocal == nil {
 		// Don't log here to avoid infinite loop
 		return
 	}
-	
+
 	if !pusherLocal.enabled {
 		// Don't log here to avoid infinite loop
 		return
@@ -219,10 +219,10 @@ func PushLog(logLine string) {
 	}
 
 	// Skip logs about log pushing itself to avoid infinite loop
-	if strings.Contains(logLine, "Logs pushed:") || 
-	   strings.Contains(logLine, "Failed to push logs") ||
-	   strings.Contains(logLine, "Log pusher") ||
-	   strings.Contains(logLine, "Panel URL") {
+	if strings.Contains(logLine, "Logs pushed:") ||
+		strings.Contains(logLine, "Failed to push logs") ||
+		strings.Contains(logLine, "Log pusher") ||
+		strings.Contains(logLine, "Panel URL") {
 		return
 	}
 

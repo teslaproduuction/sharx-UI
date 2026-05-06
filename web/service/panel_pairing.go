@@ -30,11 +30,11 @@ const NodeServerName = "sharx-node"
 type PanelPairingService struct{}
 
 type pairingCache struct {
-	loaded       bool
-	row          model.PanelPairing
-	secret       string
-	tlsClient    *tls.Config
-	jwtPrivate   *rsa.PrivateKey
+	loaded     bool
+	row        model.PanelPairing
+	secret     string
+	tlsClient  *tls.Config
+	jwtPrivate *rsa.PrivateKey
 }
 
 var (

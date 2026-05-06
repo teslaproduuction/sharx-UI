@@ -119,7 +119,7 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	var store sessions.Store
 	store = cookie.NewStore(secret)
 	logger.Info("Using cookie store for sessions")
-	
+
 	// Configure default session cookie options, including expiration (MaxAge)
 	if sessionMaxAge, err := s.settingService.GetSessionMaxAge(); err == nil {
 		store.Options(sessions.Options{
@@ -265,7 +265,7 @@ func (s *Server) startTask() {
 	// check client ips from log file every 1 second for real-time updates
 	// IP limit job disabled - using HWID only
 	// s.cron.AddJob("@every 1s", job.NewCheckClientIpJob())
-	
+
 	// Check client HWIDs from log file every 1 second for real-time updates
 	s.cron.AddJob("@every 1s", job.NewCheckClientHWIDJob())
 
@@ -478,4 +478,3 @@ func (s *Server) GetCron() *cron.Cron {
 func (s *Server) GetWSHub() any {
 	return s.wsHub
 }
-

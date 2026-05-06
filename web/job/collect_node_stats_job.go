@@ -20,10 +20,10 @@ var (
 
 // CollectNodeStatsJob collects traffic and online clients statistics from all nodes.
 type CollectNodeStatsJob struct {
-	nodeService      service.NodeService
-	runMu            sync.Mutex
-	statsThrottleMu  sync.Mutex
-	lastStatsRunAt   time.Time
+	nodeService     service.NodeService
+	runMu           sync.Mutex
+	statsThrottleMu sync.Mutex
+	lastStatsRunAt  time.Time
 }
 
 // NewCollectNodeStatsJob creates a new CollectNodeStatsJob instance.

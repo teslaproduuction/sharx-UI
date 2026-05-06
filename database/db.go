@@ -136,17 +136,16 @@ func InitDB(dbConnectionString string) error {
 
 	// Set connection pool settings
 	// These values can be overridden via environment variables if needed
-	sqlDB.SetMaxOpenConns(25)                    // Maximum number of open connections
-	sqlDB.SetMaxIdleConns(5)                     // Maximum number of idle connections
-	sqlDB.SetConnMaxLifetime(5 * time.Minute)    // Maximum connection lifetime
-	sqlDB.SetConnMaxIdleTime(10 * time.Minute)   // Maximum idle time before closing
+	sqlDB.SetMaxOpenConns(25)                  // Maximum number of open connections
+	sqlDB.SetMaxIdleConns(5)                   // Maximum number of idle connections
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)  // Maximum connection lifetime
+	sqlDB.SetConnMaxIdleTime(10 * time.Minute) // Maximum idle time before closing
 
 	// Step 3: Run schema migrations
 	migrator := NewMigrator(db)
 	if err := migrator.Migrate(); err != nil {
 		return fmt.Errorf("failed to run migrations: %w", err)
 	}
-
 
 	// Step 3.5: Clean up invalid group_id references (safety check)
 	// This ensures data integrity even if migrations didn't run or were applied before cleanup was added

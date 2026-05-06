@@ -15,9 +15,9 @@ import (
 // XrayLogTailJob tails Xray access/error log files and forwards new lines into panel logger buffer.
 // This is required when Xray is configured to write logs to files instead of stdout/stderr.
 type XrayLogTailJob struct {
-	mu       sync.Mutex
-	offsets  map[string]int64
-	inited   bool
+	mu      sync.Mutex
+	offsets map[string]int64
+	inited  bool
 }
 
 var xrayLogTailJob *XrayLogTailJob
@@ -137,4 +137,3 @@ func (j *XrayLogTailJob) tailNewLinesLocked(path string, isErrorFile bool) {
 		j.offsets[path] = size
 	}
 }
-

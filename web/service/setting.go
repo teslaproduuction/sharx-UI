@@ -83,13 +83,13 @@ var defaultValueMap = map[string]string{
 	"subJsonNoises":               "",
 	"subJsonMux":                  "",
 	"subJsonRules":                "",
-	"subHeaders":                   "{}",   // JSON string for subscription headers
-	"subProviderID":                "",     // Provider ID for Happ extended headers
-	"subProviderIDMethod":          "url",  // Method to send Provider ID: "url" (query parameter), "header" (HTTP header), "none" (disabled)
-	"subPageTheme":                 "",     // Subscription page theme: "rainbow", "coffee", "banana", "sunset"
-	"subPageLogoUrl":               "",   // Logo URL for subscription page
-	"subPageBrandText":             "",   // Brand text for subscription page
-	"subPageBackgroundUrl":         "",   // Background image URL for subscription card
+	"subHeaders":                  "{}",  // JSON string for subscription headers
+	"subProviderID":               "",    // Provider ID for Happ extended headers
+	"subProviderIDMethod":         "url", // Method to send Provider ID: "url" (query parameter), "header" (HTTP header), "none" (disabled)
+	"subPageTheme":                "",    // Subscription page theme: "rainbow", "coffee", "banana", "sunset"
+	"subPageLogoUrl":              "",    // Logo URL for subscription page
+	"subPageBrandText":            "",    // Brand text for subscription page
+	"subPageBackgroundUrl":        "",    // Background image URL for subscription card
 	"datepicker":                  "gregorian",
 	"warp":                        "",
 	"externalTrafficInformEnable": "false",
@@ -118,23 +118,23 @@ var defaultValueMap = map[string]string{
 	// Multi-node mode
 	"multiNodeMode": "false", // "true" for multi-mode, "false" for single-mode
 	// Dashboard public IPv6 detection
-	"enableIPv6": "false",
-	"nodeStatsCollectionIntervalSec":       "3",
-	"nodeHealthCheckIntervalSec":           "15",
-	"nodeHealthCheckDegradedIntervalSec":   "5",
+	"enableIPv6":                         "false",
+	"nodeStatsCollectionIntervalSec":     "3",
+	"nodeHealthCheckIntervalSec":         "15",
+	"nodeHealthCheckDegradedIntervalSec": "5",
 	// HWID tracking mode
 	"hwidMode": "client_header", // "off" = disabled, "client_header" = use x-hwid header (default), "legacy_fingerprint" = deprecated fingerprint-based (deprecated)
 	// Grafana integration
-	"grafanaLokiUrl":        "",
+	"grafanaLokiUrl":            "",
 	"grafanaVictoriaMetricsUrl": "",
-	"grafanaEnable":         "false",
+	"grafanaEnable":             "false",
 	// Panel log level (overrides XUI_LOG_LEVEL env var)
 	"panelLogLevel": "info", // Valid values: "debug", "info", "notice", "warning", "error"
 	// Panel UI preferences persisted in DB (instead of browser localStorage)
-	"panelTheme":       "web",
-	"panelLang":        "en",
-	"dashboardWidgets": `["resources","xray","quick_actions","uptime","users_online","user_agent","database","network","panel_runtime"]`,
-	"hideSecAlert":     "false",
+	"panelTheme":        "web",
+	"panelLang":         "en",
+	"dashboardWidgets":  `["resources","xray","quick_actions","uptime","users_online","user_agent","database","network","panel_runtime"]`,
+	"hideSecAlert":      "false",
 	"clientsTablePrefs": "",
 }
 
@@ -357,7 +357,7 @@ func (s *SettingService) saveSetting(key string, value string) error {
 		setting.Value = value
 		err = db.Save(setting).Error
 	}
-	
+
 	return err
 }
 
@@ -853,19 +853,19 @@ func (s *SettingService) GetSubHeadersParsed() (*entity.SubscriptionHeaders, err
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// If empty or "{}", return empty headers
 	if headersJSON == "" || headersJSON == "{}" {
 		return &entity.SubscriptionHeaders{}, nil
 	}
-	
+
 	var headers entity.SubscriptionHeaders
 	if err := json.Unmarshal([]byte(headersJSON), &headers); err != nil {
 		// If parsing fails, return empty headers instead of error
 		// This allows the system to continue working even with invalid JSON
 		return &entity.SubscriptionHeaders{}, nil
 	}
-	
+
 	return &headers, nil
 }
 
@@ -874,12 +874,12 @@ func (s *SettingService) SetSubHeadersParsed(headers *entity.SubscriptionHeaders
 	if headers == nil {
 		return s.SetSubHeaders("{}")
 	}
-	
+
 	headersJSON, err := json.Marshal(headers)
 	if err != nil {
 		return fmt.Errorf("failed to marshal subscription headers: %w", err)
 	}
-	
+
 	return s.SetSubHeaders(string(headersJSON))
 }
 
@@ -910,7 +910,6 @@ func (s *SettingService) GetExternalTrafficInformURI() (string, error) {
 func (s *SettingService) SetExternalTrafficInformURI(InformURI string) error {
 	return s.setString("externalTrafficInformURI", InformURI)
 }
-
 
 // LDAP exported getters
 func (s *SettingService) GetLdapEnable() (bool, error) {
@@ -1060,7 +1059,7 @@ func (s *SettingService) GetHwidMode() (string, error) {
 	// Validate mode
 	validModes := map[string]bool{
 		"off":                true,
-		"client_header":     true,
+		"client_header":      true,
 		"legacy_fingerprint": true,
 	}
 	if !validModes[mode] {
@@ -1075,7 +1074,7 @@ func (s *SettingService) GetHwidMode() (string, error) {
 func (s *SettingService) SetHwidMode(mode string) error {
 	validModes := map[string]bool{
 		"off":                true,
-		"client_header":     true,
+		"client_header":      true,
 		"legacy_fingerprint": true,
 	}
 	if !validModes[mode] {
@@ -1115,14 +1114,14 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	errs := make([]error, 0)
 	for _, field := range fields {
 		key := field.Tag.Get("json")
-		
+
 		// Skip settings that should only be configured via environment variables
 		if envOnlySettings[key] {
 			continue
 		}
-		
+
 		fieldV := v.FieldByName(field.Name)
-		
+
 		// Handle boolean fields explicitly to ensure correct string representation
 		var value string
 		switch fieldV.Kind() {
@@ -1137,13 +1136,13 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		default:
 			value = fmt.Sprint(fieldV.Interface())
 		}
-		
+
 		err := s.saveSetting(key, value)
 		if err != nil {
 			errs = append(errs, err)
 		}
 	}
-	
+
 	// Reinitialize logger and metrics exporter if Grafana settings changed
 	if allSetting.GrafanaEnable && allSetting.GrafanaLokiUrl != "" {
 		// Validate Loki URL format before initializing
@@ -1195,7 +1194,7 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		}
 		logger.InitLogger(logLevel)
 	}
-	
+
 	// Initialize metrics exporter (metrics are exposed via /panel/metrics endpoint)
 	InitMetricsExporter()
 
@@ -1204,7 +1203,7 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 	if err := s.ensureXrayLoggingDefaults(); err != nil {
 		logger.Warningf("ensure xray logging defaults: %v", err)
 	}
-	
+
 	return common.Combine(errs...)
 }
 

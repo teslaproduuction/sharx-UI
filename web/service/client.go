@@ -99,14 +99,14 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 		// Traffic statistics are now stored directly in ClientEntity table
 		// No need to load from client_traffics - fields are already loaded from DB
 		MergePanelClientLastConnectedNodeInto(client)
-		
+
 		// Check if client exceeded limits and update status if needed (but keep Enable = true)
 		now := time.Now().Unix() * 1000
 		totalUsed := client.Up + client.Down
 		trafficLimit := int64(client.TotalGB * 1024 * 1024 * 1024)
 		trafficExceeded := client.TotalGB > 0 && totalUsed >= trafficLimit
 		timeExpired := client.ExpiryTime > 0 && client.ExpiryTime <= now
-		
+
 		// Update status if expired, but don't change Enable
 		if trafficExceeded || timeExpired {
 			status := "expired_traffic"
@@ -131,7 +131,7 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 					multiMode, _ := settingService.GetMultiNodeMode()
 					nodeService := NodeService{}
 					inboundService := InboundService{}
-					
+
 					// Get all inbound IDs for this client
 					clientInboundIds, err := s.GetInboundIdsForClient(client.Id)
 					if err == nil {
@@ -140,7 +140,7 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 							if err != nil {
 								continue
 							}
-							
+
 							if multiMode {
 								// Multi-node mode: remove from all nodes assigned to this inbound
 								nodes, err := nodeService.GetNodesForInbound(inboundId)
@@ -329,11 +329,11 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	if len(client.Announce) > 200 {
 		return false, common.NewError("Client announce exceeds maximum length of 200 characters")
 	}
-	
+
 	// Trim whitespace from comment
 	client.Comment = strings.TrimSpace(client.Comment)
 	client.Announce = strings.TrimSpace(client.Announce)
-	
+
 	// Normalize email to lowercase
 	client.Email = strings.ToLower(client.Email)
 	client.UserId = userId
@@ -360,12 +360,12 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	client.Down = 0
 	client.AllTime = 0
 	client.LastOnline = 0
-	
+
 	// Set default status to "active" if not specified
 	if client.Status == "" {
 		client.Status = "active"
 	}
-	
+
 	// Ensure GroupId is explicitly set (can be nil for no group)
 	// This prevents foreign key constraint violations
 	if client.GroupId != nil && *client.GroupId <= 0 {
@@ -388,7 +388,7 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	if client.GroupId != nil {
 		fieldsToInsert = append(fieldsToInsert, "group_id")
 	}
-	
+
 	err = tx.Select(fieldsToInsert).Create(client).Error
 	if err != nil {
 		return false, err
@@ -404,13 +404,13 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 			return false, err
 		}
 	}
-	
+
 	// Commit client transaction first to avoid nested transactions
 	err = tx.Commit().Error
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Now update Settings for all assigned inbounds
 	// This is done AFTER committing the client transaction to avoid nested transactions and database locks
 	needRestart := false
@@ -422,21 +422,21 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 				logger.Warningf("Failed to get inbound %d for settings update: %v", inboundId, err)
 				continue
 			}
-			
+
 			// Get all clients for this inbound (from ClientEntity)
 			clientEntities, err := s.GetClientsForInbound(inboundId)
 			if err != nil {
 				logger.Warningf("Failed to get clients for inbound %d: %v", inboundId, err)
 				continue
 			}
-			
+
 			// Rebuild Settings from ClientEntity
 			newSettings, err := inboundService.BuildSettingsFromClientEntities(inbound, clientEntities)
 			if err != nil {
 				logger.Warningf("Failed to build settings for inbound %d: %v", inboundId, err)
 				continue
 			}
-			
+
 			// Update inbound Settings (this will open its own transaction)
 			// Use retry logic to handle database lock errors
 			inbound.Settings = newSettings
@@ -504,7 +504,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if client.Comment != "" && len(client.Comment) > 100 {
 		return false, common.NewError("Client comment exceeds maximum length of 100 characters (spaces count as characters)")
 	}
-	
+
 	// Trim whitespace from comment if provided
 	if client.Comment != "" {
 		client.Comment = strings.TrimSpace(client.Comment)
@@ -613,7 +613,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Get current inbound assignments to determine which inbounds need updating
 	var currentMappings []model.ClientInboundMapping
 	tx.Where("client_id = ?", client.Id).Find(&currentMappings)
@@ -621,13 +621,13 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	for _, mapping := range currentMappings {
 		oldInboundIds[mapping.InboundId] = true
 	}
-	
+
 	// Track all affected inbounds (old + new) for settings update
 	affectedInboundIds := make(map[int]bool)
 	for inboundId := range oldInboundIds {
 		affectedInboundIds[inboundId] = true
 	}
-	
+
 	// Update inbound assignments if provided
 	// Note: InboundIds is a slice, so we need to check if it was explicitly set
 	// We'll always update if InboundIds is not nil (even if empty array means remove all)
@@ -671,23 +671,23 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		return false, err
 	}
 	client.Flow = syncedFlow
-	
+
 	// Traffic statistics are now stored directly in ClientEntity table
 	// No need to sync with client_traffics - all fields (TotalGB, ExpiryTime, Enable, Email) are in ClientEntity
-	
+
 	// Check if client was expired and is now no longer expired (traffic reset or limit increased)
 	// Reload client to get updated values
 	var updatedClient model.ClientEntity
 	if err := tx.Where("id = ?", client.Id).First(&updatedClient).Error; err == nil {
 		wasExpired := existing.Status == "expired_traffic" || existing.Status == "expired_time"
-		
+
 		// Check if client is no longer expired
 		now := time.Now().Unix() * 1000
 		totalUsed := updatedClient.Up + updatedClient.Down
 		trafficLimit := int64(updatedClient.TotalGB * 1024 * 1024 * 1024)
 		trafficExceeded := updatedClient.TotalGB > 0 && totalUsed >= trafficLimit
 		timeExpired := updatedClient.ExpiryTime > 0 && updatedClient.ExpiryTime <= now
-		
+
 		// If client was expired but is no longer expired, reset status and re-add to Xray
 		if wasExpired && !trafficExceeded && !timeExpired && updatedClient.Enable {
 			updates["status"] = "active"
@@ -697,23 +697,23 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 			}
 		}
 	}
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] UpdateClient: before Commit, clientId=%d, userId=%d", client.Id, userId)
 	// #endregion
-	
+
 	// Commit client transaction first to avoid nested transactions
 	err = tx.Commit().Error
 	committed = true
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] UpdateClient: after Commit, clientId=%d, error=%v", client.Id, err)
 	// #endregion
-	
+
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Reload client from DB after commit to get latest status and values
 	var finalClient model.ClientEntity
 	db = database.GetDB()
@@ -721,7 +721,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		logger.Warningf("UpdateClient: failed to reload client %d after commit: %v", client.Id, err)
 		finalClient = updatedClient // Fallback to previous value
 	}
-	
+
 	// Now update Settings for all affected inbounds (old + new) ASYNCHRONOUSLY
 	// This is needed even if InboundIds wasn't changed, because client data (UUID, password, etc.) might have changed
 	// We do this AFTER committing the client transaction to avoid nested transactions and database locks
@@ -732,11 +732,11 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		settingService := SettingService{}
 		multiMode, _ := settingService.GetMultiNodeMode()
 		xrayService := XrayService{}
-		
+
 		// Check if enable status changed
 		enableChanged := existing.Enable != finalClient.Enable
 		wasExpired := existing.Status == "expired_traffic" || existing.Status == "expired_time"
-		
+
 		// Check if client is no longer expired (by traffic or time)
 		now := time.Now().Unix() * 1000
 		totalUsed := finalClient.Up + finalClient.Down
@@ -744,16 +744,16 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		trafficExceeded := finalClient.TotalGB > 0 && totalUsed >= trafficLimit
 		timeExpired := finalClient.ExpiryTime > 0 && finalClient.ExpiryTime <= now
 		nowActive := (!trafficExceeded && !timeExpired) && (finalClient.Status == "active" || finalClient.Status == "")
-		
+
 		needsReAdd := wasExpired && nowActive && finalClient.Enable
-		
+
 		// Instant config update + async restart approach (no API needed)
 		// 1. Update config.json instantly (add/remove client from Settings)
 		// 2. Update DB Settings
 		// 3. Async restart to apply changes
-		logger.Infof("UpdateClient: enableChanged=%v, needsReAdd=%v, multiMode=%v, xrayRunning=%v", 
+		logger.Infof("UpdateClient: enableChanged=%v, needsReAdd=%v, multiMode=%v, xrayRunning=%v",
 			enableChanged, needsReAdd, multiMode, xrayService.IsXrayRunning())
-		
+
 		// Single mode: keep config.json in sync (same idea as nodes: live core via API + persisted config).
 		// Touch every affected inbound so email changes and inbound reassignment update the file correctly.
 		if !multiMode {
@@ -841,21 +841,21 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 				logger.Warningf("Failed to get inbound %d for settings update: %v", inboundId, err)
 				continue
 			}
-			
+
 			// Get all clients for this inbound (from ClientEntity)
 			clientEntities, err := s.GetClientsForInbound(inboundId)
 			if err != nil {
 				logger.Warningf("Failed to get clients for inbound %d: %v", inboundId, err)
 				continue
 			}
-			
+
 			// Rebuild Settings from ClientEntity
 			newSettings, err := inboundService.BuildSettingsFromClientEntities(inbound, clientEntities)
 			if err != nil {
 				logger.Warningf("Failed to build settings for inbound %d: %v", inboundId, err)
 				continue
 			}
-			
+
 			logger.Debugf("UpdateClient: rebuilding settings for inbound %d (%s), clientCount=%d",
 				inboundId, inbound.Protocol, len(clientEntities))
 
@@ -896,7 +896,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 			existing.HWIDs = oldHwids
 		}
 	}
-	
+
 	// Send notification about client update
 	tgbotService := Tgbot{}
 	if tgbotService.IsRunning() {
@@ -923,7 +923,7 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 	if existing.UserId != userId {
 		return false, common.NewError("Client not found or access denied")
 	}
-	
+
 	// Get inbound assignments before deleting
 	var mappings []model.ClientInboundMapping
 	db := database.GetDB()
@@ -931,12 +931,12 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	
+
 	affectedInboundIds := make(map[int]bool)
 	for _, mapping := range mappings {
 		affectedInboundIds[mapping.InboundId] = true
 	}
-	
+
 	needRestart := false
 
 	tx := db.Begin()
@@ -960,23 +960,23 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DeleteClient: before Commit, clientId=%d, userId=%d", id, userId)
 	// #endregion
-	
+
 	// Commit deletion transaction first to avoid nested transactions
 	err = tx.Commit().Error
 	committed = true
-	
+
 	// #region agent log
 	logger.Debugf("[DEBUG-AGENT] DeleteClient: after Commit, clientId=%d, error=%v", id, err)
 	// #endregion
-	
+
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Instant config update + async restart approach (no API needed)
 	// 1. Update config.json instantly (remove client from Settings)
 	// 2. Update DB Settings
@@ -985,7 +985,7 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 	multiMode, _ := settingService.GetMultiNodeMode()
 	inboundService := InboundService{}
 	xrayService := XrayService{}
-	
+
 	// Single mode: instantly update config.json before restart
 	if !multiMode {
 		if xrayService.IsXrayRunning() {
@@ -1008,7 +1008,7 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 			}
 		}
 	}
-	
+
 	// Update Settings for affected inbounds (after deletion)
 	// We do this AFTER committing the deletion transaction to avoid nested transactions and database locks
 	for inboundId := range affectedInboundIds {
@@ -1017,21 +1017,21 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 			logger.Warningf("Failed to get inbound %d for settings update: %v", inboundId, err)
 			continue
 		}
-		
+
 		// Get all remaining clients for this inbound (from ClientEntity)
 		clientEntities, err := s.GetClientsForInbound(inboundId)
 		if err != nil {
 			logger.Warningf("Failed to get clients for inbound %d: %v", inboundId, err)
 			continue
 		}
-		
+
 		// Rebuild Settings from ClientEntity
 		newSettings, err := inboundService.BuildSettingsFromClientEntities(inbound, clientEntities)
 		if err != nil {
 			logger.Warningf("Failed to build settings for inbound %d: %v", inboundId, err)
 			continue
 		}
-		
+
 		// Update inbound Settings in DB (to keep database in sync)
 		// Use retry logic to handle database lock errors
 		inbound.Settings = newSettings
@@ -1059,13 +1059,13 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 				logger.Debugf("DeleteClient: Xray restarted successfully (config synced)")
 			}
 		}()
-		
+
 		// Send notification about client deletion
 		tgbotService := Tgbot{}
 		if tgbotService.IsRunning() {
 			tgbotService.NotifyClientDeleted(existing)
 		}
-		
+
 		return false, nil // No need for synchronous restart
 	}
 
@@ -1205,7 +1205,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 		tag       string
 		inboundId int
 	})
-	
+
 	for email, tag := range clientsToDisable {
 		// Find inbound by tag to get inboundId
 		var inbound model.Inbound
@@ -1282,7 +1282,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 				trafficLimit := int64(client.TotalGB * 1024 * 1024 * 1024)
 				trafficExceeded := client.TotalGB > 0 && totalUsed >= trafficLimit
 				timeExpired := client.ExpiryTime > 0 && client.ExpiryTime <= now
-				
+
 				if trafficExceeded {
 					client.Status = "expired_traffic"
 				} else if timeExpired {
@@ -1315,7 +1315,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 					}
 				}
 				logger.Debugf("DisableClientsByEmail: inbound %d has %d total clients, %d expired", inbound.Id, len(allClients), expiredCount)
-				
+
 				newSettings, err := inboundService.BuildSettingsFromClientEntities(&inbound, allClients)
 				if err == nil {
 					inbound.Settings = newSettings
@@ -1344,14 +1344,14 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 // Returns whether Xray needs restart and any error.
 func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 	db := database.GetDB()
-	
+
 	// Get all clients that were expired due to traffic before reset
 	var expiredClients []model.ClientEntity
 	err := db.Where("user_id = ? AND status = ?", userId, "expired_traffic").Find(&expiredClients).Error
 	if err != nil {
 		return false, err
 	}
-	
+
 	// Reset traffic for all clients of this user in ClientEntity table
 	result := db.Model(&model.ClientEntity{}).
 		Where("user_id = ?", userId).
@@ -1360,7 +1360,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 			"down":     0,
 			"all_time": 0,
 		})
-	
+
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -1396,14 +1396,14 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 					}
 				}
 			}
-			
+
 			// Re-add clients to Xray for each inbound
 			for inboundId, clients := range inboundClients {
 				inbound, err := inboundService.GetInbound(inboundId)
 				if err != nil {
 					continue
 				}
-				
+
 				// Get method for shadowsocks
 				var method string
 				if inbound.Protocol == model.Shadowsocks {
@@ -1413,12 +1413,12 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 						method = m
 					}
 				}
-				
+
 				for _, client := range clients {
 					// Build client data for Xray API
 					clientData := make(map[string]any)
 					clientData["email"] = client.Email
-					
+
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
@@ -1451,7 +1451,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 							}
 						}
 					}
-					
+
 					// Single mode: instantly update config.json and restart
 					if !multiMode {
 						if xrayService.IsXrayRunning() {
@@ -1469,7 +1469,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 						}
 					}
 				}
-				
+
 				// Update inbound settings to include all clients
 				allClients, err := s.GetClientsForInbound(inboundId)
 				if err == nil {
@@ -1487,7 +1487,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 			}
 		}
 	}
-	
+
 	return needRestart, nil
 }
 
@@ -1495,7 +1495,7 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 // Returns whether Xray needs restart and any error.
 func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, error) {
 	db := database.GetDB()
-	
+
 	// Get client and verify ownership
 	client, err := s.GetClient(clientId)
 	if err != nil {
@@ -1504,10 +1504,10 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 	if client.UserId != userId {
 		return false, common.NewError("Client not found or access denied")
 	}
-	
+
 	// Check if client was expired due to traffic
 	wasExpired := client.Status == "expired_traffic" || client.Status == "expired_time"
-	
+
 	// Reset traffic in ClientEntity
 	result := db.Model(&model.ClientEntity{}).
 		Where("id = ? AND user_id = ?", clientId, userId).
@@ -1516,7 +1516,7 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 			"down":     0,
 			"all_time": 0,
 		})
-	
+
 	if result.Error != nil {
 		return false, result.Error
 	}
@@ -1538,10 +1538,10 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 		multiMode, _ := settingService.GetMultiNodeMode()
 		nodeService := NodeService{}
 		xrayService := XrayService{}
-		
+
 		// Check if we can use API (multi-node mode or local Xray running)
 		canUseAPI := multiMode || xrayService.IsXrayRunning()
-		
+
 		if canUseAPI {
 			// Get all inbounds for this client
 			inboundIds, err := s.GetInboundIdsForClient(clientId)
@@ -1551,11 +1551,11 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 					if err != nil {
 						continue
 					}
-					
+
 					// Build client data for Xray API
 					clientData := make(map[string]any)
 					clientData["email"] = client.Email
-					
+
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
@@ -1590,7 +1590,7 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 							}
 						}
 					}
-					
+
 					if multiMode {
 						// Multi-node mode: add to all nodes assigned to this inbound
 						nodes, err := nodeService.GetNodesForInbound(inboundId)
@@ -1629,26 +1629,26 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 						}
 					}
 				}
-				
+
 				// Update inbound settings to include the client
 				for _, inboundId := range inboundIds {
 					inbound, err := inboundService.GetInbound(inboundId)
 					if err != nil {
 						continue
 					}
-					
+
 					// Get all clients for this inbound
 					clientEntities, err := s.GetClientsForInbound(inboundId)
 					if err != nil {
 						continue
 					}
-					
+
 					// Rebuild Settings from ClientEntity
 					newSettings, err := inboundService.BuildSettingsFromClientEntities(inbound, clientEntities)
 					if err != nil {
 						continue
 					}
-					
+
 					// Update inbound Settings
 					inbound.Settings = newSettings
 					_, inboundNeedRestart, err := inboundService.updateInboundWithRetry(inbound)
@@ -1661,7 +1661,7 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 			}
 		}
 	}
-	
+
 	return needRestart, nil
 }
 
@@ -1670,23 +1670,23 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 	db := database.GetDB()
 	now := time.Now().Unix() * 1000
-	
+
 	// Get all clients for this user
 	var clients []model.ClientEntity
 	err := db.Where("user_id = ?", userId).Find(&clients).Error
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	if len(clients) == 0 {
 		return 0, false, nil
 	}
-	
+
 	emails := make([]string, len(clients))
 	for i, client := range clients {
 		emails[i] = strings.ToLower(client.Email)
 	}
-	
+
 	// Find depleted client traffics
 	var depletedTraffics []xray.ClientTraffic
 	err = db.Model(&xray.ClientTraffic{}).
@@ -1695,17 +1695,17 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	if len(depletedTraffics) == 0 {
 		return 0, false, nil
 	}
-	
+
 	// Get emails of depleted clients
 	depletedEmails := make([]string, len(depletedTraffics))
 	for i, traffic := range depletedTraffics {
 		depletedEmails[i] = traffic.Email
 	}
-	
+
 	// Get client IDs to delete
 	var clientIdsToDelete []int
 	err = db.Model(&model.ClientEntity{}).
@@ -1714,11 +1714,11 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	if len(clientIdsToDelete) == 0 {
 		return 0, false, nil
 	}
-	
+
 	// Delete clients and their mappings
 	tx := db.Begin()
 	defer func() {
@@ -1728,35 +1728,35 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 			tx.Commit()
 		}
 	}()
-	
+
 	// Delete client-inbound mappings
 	err = tx.Where("client_id IN (?)", clientIdsToDelete).Delete(&model.ClientInboundMapping{}).Error
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	// Delete client traffic records
 	err = tx.Where("email IN (?)", depletedEmails).Delete(&xray.ClientTraffic{}).Error
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	// Delete clients
 	err = tx.Where("id IN (?) AND user_id = ?", clientIdsToDelete, userId).Delete(&model.ClientEntity{}).Error
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	// Commit transaction before rebuilding inbounds (to avoid nested transactions)
 	err = tx.Commit().Error
 	if err != nil {
 		return 0, false, err
 	}
-	
+
 	// Rebuild Settings for all affected inbounds
 	needRestart := false
 	inboundService := InboundService{}
-	
+
 	// Get all unique inbound IDs that had these clients (from committed data)
 	var affectedInboundIds []int
 	err = db.Model(&model.ClientInboundMapping{}).
@@ -1766,7 +1766,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 	if err != nil && err != gorm.ErrRecordNotFound {
 		return 0, false, err
 	}
-	
+
 	// Also check from client_traffics for backward compatibility (before deletion)
 	// Note: This query runs after deletion, so we need to get inbound IDs from depleted traffics before deletion
 	var trafficInboundIds []int
@@ -1785,7 +1785,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 			}
 		}
 	}
-	
+
 	// Merge inbound IDs
 	inboundIdSet := make(map[int]bool)
 	for _, id := range affectedInboundIds {
@@ -1796,7 +1796,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 			affectedInboundIds = append(affectedInboundIds, id)
 		}
 	}
-	
+
 	// Rebuild Settings for each affected inbound
 	for _, inboundId := range affectedInboundIds {
 		var inbound model.Inbound
@@ -1804,20 +1804,20 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 		if err != nil {
 			continue
 		}
-		
+
 		// Get all remaining clients for this inbound (from ClientEntity)
 		clientEntities, err := s.GetClientsForInbound(inboundId)
 		if err != nil {
 			continue
 		}
-		
+
 		// Rebuild Settings from ClientEntity
 		newSettings, err := inboundService.BuildSettingsFromClientEntities(&inbound, clientEntities)
 		if err != nil {
 			logger.Warningf("Failed to build settings for inbound %d: %v", inboundId, err)
 			continue
 		}
-		
+
 		// Update inbound Settings
 		inbound.Settings = newSettings
 		_, inboundNeedRestart, err := inboundService.updateInboundWithRetry(&inbound)
@@ -1828,7 +1828,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 			needRestart = true
 		}
 	}
-	
+
 	return len(clientIdsToDelete), needRestart, nil
 }
 
@@ -2308,10 +2308,10 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 				logger.Debugf("BulkEnable: Xray restarted successfully (config synced)")
 			}
 		}()
-		
+
 		// Note: Notifications are now handled by the caller (e.g., bulkEnable controller)
 		// to allow sending group-level notifications instead of per-client notifications
-		
+
 		return false, nil // No need for synchronous restart
 	}
 

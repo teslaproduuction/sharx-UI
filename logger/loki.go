@@ -12,25 +12,25 @@ import (
 )
 
 const (
-	lokiBufferSize         = 100                    // Maximum log entries in buffer before sending
-	lokiFlushInterval      = 5 * time.Second        // Flush interval for sending logs
-	lokiMaxRetries         = 3                      // Maximum retry attempts
-	lokiRetryDelay         = 1 * time.Second        // Delay between retries
-	lokiCircuitBreakerFail = 5                      // Number of consecutive failures before circuit breaker opens
-	lokiCircuitBreakerReset = 30 * time.Second      // Time to wait before attempting to reset circuit breaker
+	lokiBufferSize          = 100              // Maximum log entries in buffer before sending
+	lokiFlushInterval       = 5 * time.Second  // Flush interval for sending logs
+	lokiMaxRetries          = 3                // Maximum retry attempts
+	lokiRetryDelay          = 1 * time.Second  // Delay between retries
+	lokiCircuitBreakerFail  = 5                // Number of consecutive failures before circuit breaker opens
+	lokiCircuitBreakerReset = 30 * time.Second // Time to wait before attempting to reset circuit breaker
 )
 
 // LokiClient handles sending logs to Loki
 type LokiClient struct {
-	url        string
-	httpClient *http.Client
-	buffer     []LokiLogEntry
-	bufferMu   sync.Mutex
+	url         string
+	httpClient  *http.Client
+	buffer      []LokiLogEntry
+	bufferMu    sync.Mutex
 	flushTicker *time.Ticker
-	stopCh     chan struct{}
-	component  string // Component name: "x-ui", "xray", "node"
-	nodeID     string // Node ID for node logs (empty for panel)
-	
+	stopCh      chan struct{}
+	component   string // Component name: "x-ui", "xray", "node"
+	nodeID      string // Node ID for node logs (empty for panel)
+
 	// Circuit breaker state
 	circuitBreakerMu    sync.RWMutex
 	consecutiveFailures int

@@ -104,7 +104,7 @@ func GenerateSelfSignedServerTLS(p SelfSignedTLSParams) (*SelfSignedTLSPEM, erro
 		SerialNumber: serial,
 		Subject: pkix.Name{
 			Organization: []string{"SharX"},
-			CommonName:     cn,
+			CommonName:   cn,
 		},
 		NotBefore:   now.Add(-1 * time.Hour),
 		NotAfter:    now.AddDate(0, 0, days),

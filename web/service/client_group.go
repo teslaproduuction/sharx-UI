@@ -55,16 +55,16 @@ func (s *ClientGroupService) AddGroup(userId int, group *model.ClientGroup) erro
 	if len(group.Name) > 30 {
 		return common.NewError("Group name exceeds maximum length of 30 characters (spaces count as characters)")
 	}
-	
+
 	// Validate description length (spaces count as characters)
 	if len(group.Description) > 100 {
 		return common.NewError("Group description exceeds maximum length of 100 characters (spaces count as characters)")
 	}
-	
+
 	// Trim whitespace from name and description
 	group.Name = strings.TrimSpace(group.Name)
 	group.Description = strings.TrimSpace(group.Description)
-	
+
 	group.UserId = userId
 
 	// Set timestamps
@@ -95,12 +95,12 @@ func (s *ClientGroupService) UpdateGroup(userId int, id int, group *model.Client
 	if len(group.Name) > 30 {
 		return common.NewError("Group name exceeds maximum length of 30 characters (spaces count as characters)")
 	}
-	
+
 	// Validate description length (spaces count as characters)
 	if len(group.Description) > 100 {
 		return common.NewError("Group description exceeds maximum length of 100 characters (spaces count as characters)")
 	}
-	
+
 	// Trim whitespace from name and description
 	group.Name = strings.TrimSpace(group.Name)
 	group.Description = strings.TrimSpace(group.Description)

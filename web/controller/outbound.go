@@ -65,7 +65,7 @@ func (a *OutboundController) addOutbound(c *gin.Context) {
 	user := session.GetLoginUser(c)
 
 	outbound := &model.Outbound{}
-	
+
 	// Try to parse as JSON first (for API calls)
 	contentType := c.GetHeader("Content-Type")
 	if contentType == "application/json" {

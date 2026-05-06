@@ -55,22 +55,22 @@ func (s *XrayCoreConfigProfileService) GetProfilesForNode(nodeId int) ([]*model.
 	if err != nil {
 		return nil, err
 	}
-	
+
 	if len(mappings) == 0 {
 		return []*model.XrayCoreConfigProfile{}, nil
 	}
-	
+
 	profileIds := make([]int, len(mappings))
 	for i, mapping := range mappings {
 		profileIds[i] = mapping.ProfileId
 	}
-	
+
 	var profiles []*model.XrayCoreConfigProfile
 	err = db.Where("id IN ?", profileIds).Find(&profiles).Error
 	if err != nil {
 		return nil, err
 	}
-	
+
 	return profiles, nil
 }
 

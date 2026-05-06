@@ -86,10 +86,10 @@ func MergeSessionIPBlockRoutingIntoConfig(cfg *xray.Config, filter map[int]struc
 		}
 		ruleTag := xray.SessionIPBlockRuleTag(r.ClientId, norm)
 		prefix = append(prefix, map[string]any{
-			"type":         "field",
-			"ruleTag":      ruleTag,
-			"user":         []string{email},
-			"source":       []string{cidr},
+			"type":        "field",
+			"ruleTag":     ruleTag,
+			"user":        []string{email},
+			"source":      []string{cidr},
 			"outboundTag": sessionIPBlockOutboundTag,
 		})
 	}

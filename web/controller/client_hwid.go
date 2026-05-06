@@ -15,14 +15,14 @@ import (
 // ClientHWIDController handles HTTP requests for client HWID management.
 type ClientHWIDController struct {
 	clientHWIDService *service.ClientHWIDService
-	clientService      *service.ClientService
+	clientService     *service.ClientService
 }
 
 // NewClientHWIDController creates a new ClientHWIDController.
 func NewClientHWIDController(g *gin.RouterGroup) *ClientHWIDController {
 	a := &ClientHWIDController{
 		clientHWIDService: &service.ClientHWIDService{},
-		clientService:      &service.ClientService{},
+		clientService:     &service.ClientService{},
 	}
 	a.initRouter(g)
 	return a

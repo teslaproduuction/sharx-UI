@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	metricsMu        sync.RWMutex
+	metricsMu       sync.RWMutex
 	userAgentCounts = make(map[string]int64)
 	userAgentMu     sync.RWMutex
 )
@@ -38,7 +38,7 @@ func RecordUserAgent(userAgent string) {
 		}
 		userAgent = normalized
 	}
-	
+
 	userAgentMu.Lock()
 	defer userAgentMu.Unlock()
 	userAgentCounts[userAgent]++
@@ -173,7 +173,7 @@ func CollectMetrics() string {
 		builder.WriteString(fmt.Sprintf("# TYPE xui_inbound_traffic_bytes counter\n"))
 		builder.WriteString(fmt.Sprintf("# HELP xui_inbound_state Inbound state (1=enabled, 0=disabled)\n"))
 		builder.WriteString(fmt.Sprintf("# TYPE xui_inbound_state gauge\n"))
-		
+
 		for _, inbound := range inbounds {
 			if inbound.Enable {
 				enabledCount++
@@ -216,7 +216,7 @@ func CollectMetrics() string {
 		builder.WriteString(fmt.Sprintf("# TYPE xui_client_traffic_bytes counter\n"))
 		builder.WriteString(fmt.Sprintf("# HELP xui_client_state Client state (1=enabled, 0=disabled)\n"))
 		builder.WriteString(fmt.Sprintf("# TYPE xui_client_state gauge\n"))
-		
+
 		for _, client := range clients {
 			if client.Enable {
 				enabledClientCount++
@@ -255,7 +255,7 @@ func CollectMetrics() string {
 		builder.WriteString(fmt.Sprintf("# TYPE xui_node_state gauge\n"))
 		builder.WriteString(fmt.Sprintf("# HELP xui_node_response_time_ms Node response time in milliseconds\n"))
 		builder.WriteString(fmt.Sprintf("# TYPE xui_node_response_time_ms gauge\n"))
-		
+
 		for _, node := range nodes {
 			builder.WriteString(fmt.Sprintf("xui_node_traffic_bytes{node=\"%s\",node_id=\"%d\",direction=\"up\"} %d\n",
 				escapeLabelValue(node.Name), node.Id, node.Up))

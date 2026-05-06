@@ -42,9 +42,9 @@ type uiPreferenceSetForm struct {
 
 // SettingController handles settings and user management operations.
 type SettingController struct {
-	settingService  service.SettingService
-	userService     service.UserService
-	panelService    service.PanelService
+	settingService service.SettingService
+	userService    service.UserService
+	panelService   service.PanelService
 }
 
 // NewSettingController creates a new SettingController and initializes its routes.

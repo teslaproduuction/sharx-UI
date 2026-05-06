@@ -331,7 +331,7 @@ func (a *ClientGroupController) bulkEnable(c *gin.Context) {
 		jsonMsg(c, "Failed to get group", err)
 		return
 	}
-	
+
 	// Get all clients in group
 	clients, err := a.groupService.GetClientsInGroup(id, user.Id)
 	if err != nil {
@@ -352,7 +352,7 @@ func (a *ClientGroupController) bulkEnable(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	
+
 	// Send group-level notification instead of per-client notifications
 	tgbotService := service.Tgbot{}
 	if tgbotService.IsRunning() {
@@ -360,7 +360,7 @@ func (a *ClientGroupController) bulkEnable(c *gin.Context) {
 		updatedClients, _ := a.groupService.GetClientsInGroup(id, user.Id)
 		tgbotService.NotifyGroupChanged(group.Name, req.Enable, updatedClients)
 	}
-	
+
 	jsonMsg(c, "Clients updated successfully", nil)
 	if needRestart {
 		// Restart asynchronously to avoid blocking the response

@@ -106,4 +106,3 @@ func BroadcastClientTrafficPerNode(userId int, matrix any) {
 	}
 	hub.BroadcastToUser(userId, MessageTypeClientTrafficPerNode, matrix)
 }
-

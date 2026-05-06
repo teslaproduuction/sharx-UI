@@ -60,9 +60,9 @@ func mergeOfflineBlockedSessionRows(results []ClientSessionNodeResult, blockedIP
 
 // ClientOnlineSessionsResponse aggregates results from local Xray and/or worker nodes.
 type ClientOnlineSessionsResponse struct {
-	Email               string                    `json:"email"`
-	Results             []ClientSessionNodeResult `json:"results"`
-	BlockedSessionIPs   []string                  `json:"blockedSessionIps,omitempty"`
+	Email             string                    `json:"email"`
+	Results           []ClientSessionNodeResult `json:"results"`
+	BlockedSessionIPs []string                  `json:"blockedSessionIps,omitempty"`
 }
 
 // ClientSessionService lists and drops per-IP client sessions (Xray user>>>email>>>online + conntrack).

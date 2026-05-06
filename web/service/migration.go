@@ -16,8 +16,8 @@ import (
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/util/common"
 
-	_ "modernc.org/sqlite"
 	"gorm.io/gorm"
+	_ "modernc.org/sqlite"
 )
 
 // MigrationService provides SQLite to PostgreSQL migration functionality.
@@ -25,16 +25,16 @@ type MigrationService struct{}
 
 // MigrationPreview contains preview information about data to be migrated.
 type MigrationPreview struct {
-	UsersCount            int    `json:"usersCount"`
-	SettingsCount         int    `json:"settingsCount"`
-	InboundsCount         int    `json:"inboundsCount"`
-	ClientsCount          int    `json:"clientsCount"`
-	ClientTrafficsCount   int    `json:"clientTrafficsCount"`
-	InboundClientIpsCount int    `json:"inboundClientIpsCount"`
-	OutboundTrafficsCount int    `json:"outboundTrafficsCount"`
-	HistoryOfSeedersCount int    `json:"historyOfSeedersCount"`
+	UsersCount            int                   `json:"usersCount"`
+	SettingsCount         int                   `json:"settingsCount"`
+	InboundsCount         int                   `json:"inboundsCount"`
+	ClientsCount          int                   `json:"clientsCount"`
+	ClientTrafficsCount   int                   `json:"clientTrafficsCount"`
+	InboundClientIpsCount int                   `json:"inboundClientIpsCount"`
+	OutboundTrafficsCount int                   `json:"outboundTrafficsCount"`
+	HistoryOfSeedersCount int                   `json:"historyOfSeedersCount"`
 	PanelSettings         *PanelSettingsPreview `json:"panelSettings,omitempty"`
-	Errors                []string `json:"errors,omitempty"`
+	Errors                []string              `json:"errors,omitempty"`
 }
 
 // PanelSettingsPreview contains panel settings found in source database.
@@ -52,18 +52,18 @@ type PanelSettingsPreview struct {
 
 // MigrationResult contains the result of migration execution.
 type MigrationResult struct {
-	Success               bool     `json:"success"`
-	UsersMigrated         int      `json:"usersMigrated"`
-	SettingsMigrated      int      `json:"settingsMigrated"`
-	InboundsMigrated      int      `json:"inboundsMigrated"`
-	ClientsMigrated       int      `json:"clientsMigrated"`
-	ClientTrafficsMigrated int     `json:"clientTrafficsMigrated"`
-	InboundClientIpsMigrated int   `json:"inboundClientIpsMigrated"`
-	OutboundTrafficsMigrated int  `json:"outboundTrafficsMigrated"`
-	HistoryOfSeedersMigrated int  `json:"historyOfSeedersMigrated"`
-	PanelSettingsIgnored   []string `json:"panelSettingsIgnored,omitempty"` // List of panel settings that were NOT migrated
-	Errors                []string `json:"errors,omitempty"`
-	Warnings              []string `json:"warnings,omitempty"`
+	Success                  bool     `json:"success"`
+	UsersMigrated            int      `json:"usersMigrated"`
+	SettingsMigrated         int      `json:"settingsMigrated"`
+	InboundsMigrated         int      `json:"inboundsMigrated"`
+	ClientsMigrated          int      `json:"clientsMigrated"`
+	ClientTrafficsMigrated   int      `json:"clientTrafficsMigrated"`
+	InboundClientIpsMigrated int      `json:"inboundClientIpsMigrated"`
+	OutboundTrafficsMigrated int      `json:"outboundTrafficsMigrated"`
+	HistoryOfSeedersMigrated int      `json:"historyOfSeedersMigrated"`
+	PanelSettingsIgnored     []string `json:"panelSettingsIgnored,omitempty"` // List of panel settings that were NOT migrated
+	Errors                   []string `json:"errors,omitempty"`
+	Warnings                 []string `json:"warnings,omitempty"`
 }
 
 // OldSQLiteInbound represents the old SQLite inbound structure.
@@ -400,75 +400,75 @@ func (s *MigrationService) migrateUsers(sqliteDB *sql.DB, tx *gorm.DB) (int, err
 // ignoredPanelSettings contains settings that should NOT be migrated
 // to preserve the current panel configuration (port, paths, certificates, etc.)
 var ignoredPanelSettings = map[string]bool{
-	"webPort":                      true,
-	"webBasePath":                  true,
-	"secret":                       true,
-	"webCertFile":                  true,
-	"webKeyFile":                   true,
-	"xrayTemplateConfig":           true,
-	"webListen":                    true,
-	"webDomain":                    true,
-	"sessionMaxAge":                true,
-	"pageSize":                     true,
-	"expireDiff":                   true,
-	"trafficDiff":                  true,
-	"remarkModel":                  true,
-	"datepicker":                   true,
-	"tgBotEnable":                  true,
-	"tgBotToken":                   true,
-	"tgBotProxy":                   true,
-	"tgBotAPIServer":               true,
-	"tgBotChatId":                  true,
-	"tgRunTime":                    true,
-	"tgBotBackup":                  true,
-	"tgBotLoginNotify":             true,
-	"tgCpu":                        true,
-	"tgLang":                       true,
-	"timeLocation":                 true,
-	"twoFactorEnable":              true,
-	"twoFactorToken":               true,
-	"twoFactorTelegram":            true,
-	"subEnable":                    true,
-	"subJsonEnable":                true,
-	"subTitle":                     true,
-	"subListen":                    true,
-	"subPort":                      true,
-	"subPath":                      true,
-	"subDomain":                    true,
-	"subCertFile":                  true,
-	"subKeyFile":                   true,
-	"subUpdates":                   true,
-	"externalTrafficInformEnable":  true,
-	"externalTrafficInformURI":     true,
-	"subEncrypt":                   true,
-	"subShowInfo":                  true,
-	"subURI":                       true,
-	"subJsonPath":                  true,
-	"subJsonURI":                   true,
-	"subJsonFragment":              true,
-	"subJsonNoises":                true,
-	"subJsonMux":                   true,
-	"subJsonRules":                 true,
-	"ldapEnable":                   true,
-	"ldapHost":                     true,
-	"ldapPort":                     true,
-	"ldapUseTLS":                   true,
-	"ldapBindDN":                   true,
-	"ldapPassword":                  true,
-	"ldapBaseDN":                   true,
-	"ldapUserFilter":               true,
-	"ldapUserAttr":                 true,
-	"ldapVlessField":               true,
-	"ldapSyncCron":                 true,
-	"ldapFlagField":                true,
-	"ldapTruthyValues":             true,
-	"ldapInvertFlag":               true,
-	"ldapInboundTags":              true,
-	"ldapAutoCreate":               true,
-	"ldapAutoDelete":               true,
-	"ldapDefaultTotalGB":           true,
-	"ldapDefaultExpiryDays":        true,
-	"ldapDefaultLimitIP":           true,
+	"webPort":                     true,
+	"webBasePath":                 true,
+	"secret":                      true,
+	"webCertFile":                 true,
+	"webKeyFile":                  true,
+	"xrayTemplateConfig":          true,
+	"webListen":                   true,
+	"webDomain":                   true,
+	"sessionMaxAge":               true,
+	"pageSize":                    true,
+	"expireDiff":                  true,
+	"trafficDiff":                 true,
+	"remarkModel":                 true,
+	"datepicker":                  true,
+	"tgBotEnable":                 true,
+	"tgBotToken":                  true,
+	"tgBotProxy":                  true,
+	"tgBotAPIServer":              true,
+	"tgBotChatId":                 true,
+	"tgRunTime":                   true,
+	"tgBotBackup":                 true,
+	"tgBotLoginNotify":            true,
+	"tgCpu":                       true,
+	"tgLang":                      true,
+	"timeLocation":                true,
+	"twoFactorEnable":             true,
+	"twoFactorToken":              true,
+	"twoFactorTelegram":           true,
+	"subEnable":                   true,
+	"subJsonEnable":               true,
+	"subTitle":                    true,
+	"subListen":                   true,
+	"subPort":                     true,
+	"subPath":                     true,
+	"subDomain":                   true,
+	"subCertFile":                 true,
+	"subKeyFile":                  true,
+	"subUpdates":                  true,
+	"externalTrafficInformEnable": true,
+	"externalTrafficInformURI":    true,
+	"subEncrypt":                  true,
+	"subShowInfo":                 true,
+	"subURI":                      true,
+	"subJsonPath":                 true,
+	"subJsonURI":                  true,
+	"subJsonFragment":             true,
+	"subJsonNoises":               true,
+	"subJsonMux":                  true,
+	"subJsonRules":                true,
+	"ldapEnable":                  true,
+	"ldapHost":                    true,
+	"ldapPort":                    true,
+	"ldapUseTLS":                  true,
+	"ldapBindDN":                  true,
+	"ldapPassword":                true,
+	"ldapBaseDN":                  true,
+	"ldapUserFilter":              true,
+	"ldapUserAttr":                true,
+	"ldapVlessField":              true,
+	"ldapSyncCron":                true,
+	"ldapFlagField":               true,
+	"ldapTruthyValues":            true,
+	"ldapInvertFlag":              true,
+	"ldapInboundTags":             true,
+	"ldapAutoCreate":              true,
+	"ldapAutoDelete":              true,
+	"ldapDefaultTotalGB":          true,
+	"ldapDefaultExpiryDays":       true,
+	"ldapDefaultLimitIP":          true,
 }
 
 func (s *MigrationService) migrateSettings(sqliteDB *sql.DB, tx *gorm.DB) (int, error) {
@@ -558,7 +558,7 @@ func (s *MigrationService) migrateInbounds(sqliteDB *sql.DB, tx *gorm.DB) (int, 
 			LastTrafficResetTime: oldInbound.LastTrafficResetTime.Int64,
 			Listen:               oldInbound.Listen.String,
 			Port:                 int(oldInbound.Port.Int64),
-			Protocol:              model.Protocol(oldInbound.Protocol.String),
+			Protocol:             model.Protocol(oldInbound.Protocol.String),
 			Settings:             oldInbound.Settings.String,
 			StreamSettings:       oldInbound.StreamSettings.String,
 			Tag:                  oldInbound.Tag.String,
@@ -649,19 +649,19 @@ func (s *MigrationService) migrateClientsFromInbounds(sqliteDB *sql.DB, tx *gorm
 				// Check in database
 				var existingDB model.ClientEntity
 				if err := tx.Where("LOWER(email) = ?", email).First(&existingDB).Error; err == nil {
-				// Client exists, update it
-				existingDB.Enable = s.getBoolFromMap(clientMap, "enable", true)
-				existingDB.Status = "active"
-				// LimitIP removed - using HWID only
-				// Convert bytes to GB (old format stores bytes, new format stores GB)
-				totalBytes := s.getInt64FromMap(clientMap, "totalGB")
-				existingDB.TotalGB = float64(totalBytes) / (1024 * 1024 * 1024)
-				existingDB.ExpiryTime = s.getInt64FromMap(clientMap, "expiryTime")
+					// Client exists, update it
+					existingDB.Enable = s.getBoolFromMap(clientMap, "enable", true)
+					existingDB.Status = "active"
+					// LimitIP removed - using HWID only
+					// Convert bytes to GB (old format stores bytes, new format stores GB)
+					totalBytes := s.getInt64FromMap(clientMap, "totalGB")
+					existingDB.TotalGB = float64(totalBytes) / (1024 * 1024 * 1024)
+					existingDB.ExpiryTime = s.getInt64FromMap(clientMap, "expiryTime")
 					existingDB.TgID = s.getInt64FromMap(clientMap, "tgId")
 					existingDB.SubID = s.getStringFromMap(clientMap, "subId")
 					existingDB.Comment = s.getStringFromMap(clientMap, "comment")
 					existingDB.Reset = int(s.getInt64FromMap(clientMap, "reset"))
-					
+
 					// Update UUID/ID or Password based on protocol
 					protocolStr := protocol.String
 					if protocolStr == "vmess" || protocolStr == "vless" {
@@ -683,33 +683,33 @@ func (s *MigrationService) migrateClientsFromInbounds(sqliteDB *sql.DB, tx *gorm
 							existingDB.Password = password
 						}
 					}
-					
+
 					if err := tx.Save(&existingDB).Error; err != nil {
 						warnings = append(warnings, fmt.Sprintf("Failed to update client %s: %v", email, err))
 						continue
 					}
-					
+
 					clientEntity = &existingDB
 					clientEmailMap[email] = clientEntity
 				} else {
-				// Create new client entity
-				// Convert bytes to GB (old format stores bytes, new format stores GB)
-				totalBytesNew := s.getInt64FromMap(clientMap, "totalGB")
-				clientEntity = &model.ClientEntity{
-					UserId:     1, // Default user
-					Email:      email,
-					Enable:     s.getBoolFromMap(clientMap, "enable", true),
-					Status:     "active",
-					// LimitIP removed - using HWID only
-					TotalGB:    float64(totalBytesNew) / (1024 * 1024 * 1024),
-					ExpiryTime: s.getInt64FromMap(clientMap, "expiryTime"),
-					TgID:       s.getInt64FromMap(clientMap, "tgId"),
-					SubID:      s.getStringFromMap(clientMap, "subId"),
-					Comment:    s.getStringFromMap(clientMap, "comment"),
-					Reset:      int(s.getInt64FromMap(clientMap, "reset")),
-					CreatedAt:  s.getInt64FromMap(clientMap, "created_at"),
-					UpdatedAt:  s.getInt64FromMap(clientMap, "updated_at"),
-				}
+					// Create new client entity
+					// Convert bytes to GB (old format stores bytes, new format stores GB)
+					totalBytesNew := s.getInt64FromMap(clientMap, "totalGB")
+					clientEntity = &model.ClientEntity{
+						UserId: 1, // Default user
+						Email:  email,
+						Enable: s.getBoolFromMap(clientMap, "enable", true),
+						Status: "active",
+						// LimitIP removed - using HWID only
+						TotalGB:    float64(totalBytesNew) / (1024 * 1024 * 1024),
+						ExpiryTime: s.getInt64FromMap(clientMap, "expiryTime"),
+						TgID:       s.getInt64FromMap(clientMap, "tgId"),
+						SubID:      s.getStringFromMap(clientMap, "subId"),
+						Comment:    s.getStringFromMap(clientMap, "comment"),
+						Reset:      int(s.getInt64FromMap(clientMap, "reset")),
+						CreatedAt:  s.getInt64FromMap(clientMap, "created_at"),
+						UpdatedAt:  s.getInt64FromMap(clientMap, "updated_at"),
+					}
 
 					// Set UUID/ID or Password based on protocol
 					protocolStr := protocol.String
@@ -1179,4 +1179,3 @@ func (s *MigrationService) getBoolFromMap(m map[string]interface{}, key string, 
 	}
 	return defaultValue
 }
-

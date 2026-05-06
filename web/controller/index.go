@@ -126,8 +126,8 @@ func (a *IndexController) login(c *gin.Context) {
 				Success: false,
 				Msg:     I18nWeb(c, "pages.login.toasts.needTwoFactor"),
 				Obj: map[string]any{
-					"needTwoFactor":  true,
-					"telegramSent": tgSent,
+					"needTwoFactor": true,
+					"telegramSent":  tgSent,
 				},
 			})
 			return

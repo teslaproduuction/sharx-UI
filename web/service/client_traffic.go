@@ -15,10 +15,10 @@ import (
 
 // clientTrafficState stores previous traffic values for speed calculation
 type clientTrafficState struct {
-	prevUp      int64
-	prevDown    int64
-	prevTime    int64
-	mu          sync.RWMutex
+	prevUp   int64
+	prevDown int64
+	prevTime int64
+	mu       sync.RWMutex
 }
 
 // bpsPair holds last computed upload/download speeds (bits per second) for panel display.
@@ -31,9 +31,9 @@ type bpsPair struct {
 var (
 	// panelLiveSpeed is the latest per-client speeds from the traffic collector (replaced each tick).
 	// Merged into HTTP list/get and WebSocket client payloads so the Speed column is not always empty.
-	panelLiveSpeedMu sync.RWMutex
-	panelLiveSpeed   map[int]bpsPair
-	panelLastNodeMu  sync.RWMutex
+	panelLiveSpeedMu     sync.RWMutex
+	panelLiveSpeed       map[int]bpsPair
+	panelLastNodeMu      sync.RWMutex
 	panelLastNodeByEmail map[string]string
 
 	// trafficStateMap stores previous traffic states for speed calculation
@@ -159,11 +159,11 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 
 	// Group traffic by email (aggregate traffic from all inbounds for each client)
 	emailTrafficMap := make(map[string]struct {
-		Up        int64
-		Down      int64
+		Up         int64
+		Down       int64
 		InboundIds []int
 	})
-	
+
 	for _, traffic := range traffics {
 		email := strings.ToLower(traffic.Email)
 		existing := emailTrafficMap[email]
@@ -191,7 +191,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	for email := range emailTrafficMap {
 		emails = append(emails, email)
 	}
-	
+
 	if len(emails) == 0 {
 		return clientsToDisable, affectedInboundIds, nil
 	}
@@ -349,12 +349,12 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 		// Xray API returns traffic in bytes, and we store it directly in bytes
 		if newTotal > 0 {
 			// Log traffic values to debug unit issues
-			// If these values seem too small (e.g., 1024 bytes for 1MB transfer), 
+			// If these values seem too small (e.g., 1024 bytes for 1MB transfer),
 			// it means traffic is being divided somewhere
 			// Check if traffic values are suspiciously small (might be in KB instead of bytes)
 			if trafficData.Up > 0 || trafficData.Down > 0 {
 				logger.Debugf("AddClientTraffic: client %s - incoming Up: %d, Down: %d, Total: %d | "+
-					"adding Up: %d, Down: %d | current total: %d bytes (Up: %.2f MB, Down: %.2f MB)", 
+					"adding Up: %d, Down: %d | current total: %d bytes (Up: %.2f MB, Down: %.2f MB)",
 					client.Email, trafficData.Up, trafficData.Down, newTotal, newDown, newUp, client.Up+client.Down,
 					float64(client.Up)/(1024*1024), float64(client.Down)/(1024*1024))
 			}
@@ -362,11 +362,11 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 		// Store previous values for speed calculation (BEFORE updating)
 		prevUp := client.Up
 		prevDown := client.Down
-		
+
 		// Calculate speed BEFORE updating traffic values
 		// This ensures we use the correct difference between old and new values
 		currentTime := time.Now().Unix()
-		
+
 		// Get or create traffic state for this client
 		trafficStateMu.Lock()
 		state, exists := trafficStateMap[client.Id]
@@ -379,7 +379,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			trafficStateMap[client.Id] = state
 		}
 		trafficStateMu.Unlock()
-		
+
 		// Calculate speed if we have previous values
 		state.mu.Lock()
 		timeDiff := currentTime - state.prevTime
@@ -392,13 +392,13 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			// Calculate what the NEW values will be after adding traffic (with swap)
 			futureUp := prevUp + newDown   // Upload will be: old + newDown (from trafficData)
 			futureDown := prevDown + newUp // Download will be: old + newUp (from trafficData)
-			
+
 			// Calculate differences: new - old (using state.prevUp/Down from previous call)
 			// Note: state.prevUp/Down are from the LAST time we updated, so they represent the "old" values
 			// futureUp = upload traffic (client sends), futureDown = download traffic (client receives)
-			upDiff := futureUp - state.prevUp      // Upload difference (client sends to server)
+			upDiff := futureUp - state.prevUp       // Upload difference (client sends to server)
 			downDiff := futureDown - state.prevDown // Download difference (client receives from server)
-			
+
 			// Calculate speed in BITS per second (not bytes)
 			// Speed = bytes / seconds * 8 = bits per second
 			// This matches standard internet speed measurement (Mbps, Gbps)
@@ -409,13 +409,13 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			// So if upDiff = 37,500,000 bytes and timeDiff = 1 sec, speed = 37,500,000 * 8 = 300,000,000 bps = 300 Mbps
 			bytesPerSecUp := float64(upDiff) / float64(timeDiff)
 			bytesPerSecDown := float64(downDiff) / float64(timeDiff)
-			
+
 			// Calculate speed in bits per second: bytes/sec * 8 = bits/sec
 			// upDiff = upload difference (client sends), downDiff = download difference (client receives)
 			// Assign correctly: UpSpeed = upload speed, DownSpeed = download speed
 			client.UpSpeed = int64(bytesPerSecUp * 8)     // Upload speed (client sends)
 			client.DownSpeed = int64(bytesPerSecDown * 8) // Download speed (client receives)
-			
+
 			// Log speed calculation for debugging (only for significant speeds > 10Kbps)
 			// Log detailed info to understand units and verify calculation
 			if (client.UpSpeed > 10*1024 || client.DownSpeed > 10*1024) && newTotal > 0 {
@@ -428,7 +428,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					client.UpSpeed, float64(client.UpSpeed)/(1024*1024), float64(client.UpSpeed)/(1024*1024*1024),
 					client.DownSpeed, float64(client.DownSpeed)/(1024*1024), float64(client.DownSpeed)/(1024*1024*1024))
 			}
-			
+
 			// Ensure non-negative speeds
 			if client.UpSpeed < 0 {
 				client.UpSpeed = 0
@@ -441,12 +441,12 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			client.UpSpeed = 0
 			client.DownSpeed = 0
 		}
-		
+
 		// NOW update traffic values AFTER calculating speed
-		client.Up += newDown   // Upload (client→server) goes to Up
-		client.Down += newUp   // Download (server→client) goes to Down
+		client.Up += newDown // Upload (client→server) goes to Up
+		client.Down += newUp // Download (server→client) goes to Down
 		client.AllTime += newTotal
-		
+
 		// Update state for next calculation (use updated values)
 		state.prevUp = client.Up
 		state.prevDown = client.Down
@@ -471,7 +471,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 				client.Status = "expired_time"
 				shouldUpdateStatus = true
 			}
-			
+
 			// Only add to disable list if status was just set (not already expired)
 			// This prevents repeated attempts to remove already-removed clients
 			if shouldUpdateStatus {
@@ -495,7 +495,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 						}
 					}
 				}
-				
+
 				logger.Infof("Client %s marked with status %s: trafficExceeded=%v, timeExpired=%v, currentUsed=%d, newTraffic=%d, finalUsed=%d, total=%d",
 					client.Email, client.Status, finalTrafficExceeded, timeExpired, currentUsed, newTotal, finalUsed, trafficLimit)
 				go func(oldClient model.ClientEntity, newClient *model.ClientEntity) {
@@ -543,12 +543,12 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			logger.Debugf("Retrying Save client entities (attempt %d/%d) after %v", attempt+1, maxRetries, delay)
 			time.Sleep(delay)
 		}
-		
+
 		err = tx.Save(clientEntities).Error
 		if err == nil {
 			break
 		}
-		
+
 		// Check if error is "database is locked"
 		errStr := err.Error()
 		if strings.Contains(errStr, "database is locked") || strings.Contains(errStr, "locked") {
@@ -560,7 +560,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			logger.Warningf("Failed to save client entities after %d retries: %v", maxRetries, err)
 			return nil, nil, err
 		}
-		
+
 		// For other errors, don't retry
 		logger.Warning("AddClientTraffic update data ", err)
 		return nil, nil, err
