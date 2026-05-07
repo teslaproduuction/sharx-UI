@@ -495,6 +495,7 @@ export function XrayCoreConfigProfilesPage() {
             nodes.map((n) => (
               <CheckboxField
                 key={n.id}
+                className="flex w-full rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] px-3 py-2 !text-sm shadow-sm"
                 label={
                   <span>
                     <span className="font-medium text-[var(--fg)]">{n.name}</span>{" "}

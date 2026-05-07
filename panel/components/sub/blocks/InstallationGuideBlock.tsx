@@ -1,6 +1,6 @@
 "use client";
 
-import { ChevronDown, Copy, Download, QrCode, Smartphone, Zap } from "lucide-react";
+import { Copy, Download, QrCode, Smartphone, Zap } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import {
   APP_CATALOG,
@@ -20,6 +20,7 @@ import { resolveMtProtoLinks } from "../types";
 import { PlatformBrandIcon } from "../PlatformBrandIcon";
 import shell from "../subscription-shell.module.css";
 import type { BlockRenderContext } from "./index";
+import { SelectNative } from "@/components/ui";
 
 const PLATFORM_META: Record<SupportedPlatform, { label: string }> = {
   ios: { label: "iOS" },
@@ -583,10 +584,10 @@ function AppDropdownSelector({
 
   return (
     <div className="relative">
-      <select
-        value={selectedIdx}
+      <SelectNative
+        value={String(selectedIdx)}
         onChange={(e) => onSelect(Number(e.target.value))}
-        className="w-full appearance-none rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] py-2.5 pl-10 pr-8 text-[13px] font-medium text-[var(--sub-fg,#c9d1d9)] outline-none transition focus:border-[var(--sub-accent,rgba(34,211,238,0.55))]"
+        className="!h-auto min-h-[2.75rem] py-2.5 pl-10 text-[13px] font-medium shadow-none"
       >
         {apps.map((entry: InstallationAppEntry, i: number) => {
           const meta = getAppMeta(entry);
@@ -596,8 +597,8 @@ function AppDropdownSelector({
             </option>
           );
         })}
-      </select>
-      <span className="pointer-events-none absolute left-3 top-1/2 grid -translate-y-1/2 size-5 place-items-center overflow-hidden rounded text-[var(--sub-accent,#22d3ee)]">
+      </SelectNative>
+      <span className="pointer-events-none absolute left-3 top-1/2 z-[1] grid -translate-y-1/2 size-5 place-items-center overflow-hidden rounded text-[var(--accent)]">
         {iconUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={iconUrl} alt="" className="size-full object-contain" loading="lazy" />
@@ -605,7 +606,6 @@ function AppDropdownSelector({
           <Smartphone className="size-3" />
         )}
       </span>
-      <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--sub-fg-muted,#8b949e)]" />
     </div>
   );
 }
@@ -856,10 +856,10 @@ function PlatformDropdown(props: GuideProps) {
         <h2 className={shell.sectionTitle}>{title}</h2>
 
         <div className="relative mb-3">
-          <select
+          <SelectNative
             value={current.platform}
             onChange={(e) => setActivePlatform(e.target.value as SupportedPlatform)}
-            className="w-full appearance-none rounded-lg border border-[var(--sub-border,rgba(255,255,255,0.08))] bg-[var(--sub-surface,rgba(255,255,255,0.04))] py-2.5 pl-10 pr-8 text-[13px] font-medium text-[var(--sub-fg,#c9d1d9)] outline-none transition focus:border-[var(--sub-accent,rgba(34,211,238,0.55))]"
+            className="!h-auto min-h-[2.75rem] py-2.5 pl-10 text-[13px] font-medium shadow-none"
           >
             {enabled.map((g: InstallationPlatform) => {
               const plat = g.platform as SupportedPlatform;
@@ -870,11 +870,10 @@ function PlatformDropdown(props: GuideProps) {
                 </option>
               );
             })}
-          </select>
-          <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-[var(--sub-accent,#22d3ee)]">
+          </SelectNative>
+          <span className="pointer-events-none absolute left-3 top-1/2 z-[1] -translate-y-1/2 text-[var(--accent)]">
             <PlatformBrandIcon platform={current.platform as SupportedPlatform} className="size-4" />
           </span>
-          <ChevronDown className="pointer-events-none absolute right-2.5 top-1/2 size-4 -translate-y-1/2 text-[var(--sub-fg-muted,#8b949e)]" />
         </div>
 
         <PlatformContent

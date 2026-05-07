@@ -70,6 +70,8 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.GET("/getNewVlessEnc", a.getNewVlessEnc)
 
 	g.POST("/stopXrayService", a.stopXrayService)
+	g.POST("/stopTelemtService", a.stopTelemtService)
+	g.POST("/restartTelemtService", a.restartTelemtService)
 	g.POST("/restartXrayService", a.restartXrayService)
 	g.POST("/installXray/:version", a.installXray)
 	g.POST("/installXrayOnNodes/:version", a.installXrayOnNodes)
@@ -742,6 +744,26 @@ func (a *ServerController) stopXrayService(c *gin.Context) {
 	if tg.IsRunning() {
 		tg.NotifyPanelAction("Xray service stopped (panel)", "", getRemoteIp(c))
 	}
+}
+
+// stopTelemtService stops local Telemt sidecars on the panel host (standalone mode only).
+func (a *ServerController) stopTelemtService(c *gin.Context) {
+	err := a.serverService.StopTelemtService()
+	if err != nil {
+		jsonMsg(c, err.Error(), err)
+		return
+	}
+	jsonMsg(c, "Telemt stopped", nil)
+}
+
+// restartTelemtService restarts Telemt sidecars from the latest config (standalone panel host only).
+func (a *ServerController) restartTelemtService(c *gin.Context) {
+	err := a.serverService.RestartTelemtService()
+	if err != nil {
+		jsonMsg(c, err.Error(), err)
+		return
+	}
+	jsonMsg(c, "Telemt restarted", nil)
 }
 
 // restartXrayService restarts the Xray service.

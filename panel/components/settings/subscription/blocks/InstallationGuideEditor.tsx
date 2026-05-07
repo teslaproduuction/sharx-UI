@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, IconButton, Input, Segmented, Switch } from "@/components/ui";
+import { Button, IconButton, Input, Segmented, SelectNative, Switch } from "@/components/ui";
 import {
   APP_CATALOG,
   appViewModes,
@@ -248,17 +248,17 @@ export function InstallationGuideEditor({ block, onChange }: Props) {
             <div className="text-xs font-medium text-[var(--fg-muted)]">
               {t("subBuilder.install.addPlatform", { defaultValue: "Add platform" })}
             </div>
-            <select
+            <SelectNative
+              inputSize="sm"
               value={newPlatform}
               onChange={(e) => setNewPlatform(e.target.value as SupportedPlatform)}
-              className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1.5 text-sm text-[var(--fg)] outline-none focus:border-[var(--accent)]"
             >
               {availablePlatforms.map((p) => (
                 <option key={p} value={p}>
                   {platformLabel(t, p)}
                 </option>
               ))}
-            </select>
+            </SelectNative>
             <Button
               type="button"
               variant="secondary"
@@ -410,17 +410,18 @@ function PlatformGroupCard({
                 <div className="text-[11px] font-medium text-[var(--fg-muted)]">
                   {t("subBuilder.install.addApp", { defaultValue: "Add app" })}
                 </div>
-                <select
+                <SelectNative
+                  inputSize="sm"
                   value={newApp}
                   onChange={(e) => setNewApp(e.target.value as SubscriptionApp)}
-                  className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1 text-xs text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+                  className="max-w-[12rem]"
                 >
                   {platformApps.map((app) => (
                     <option key={app} value={app}>
                       {APP_CATALOG[app]?.label ?? app}
                     </option>
                   ))}
-                </select>
+                </SelectNative>
                 <Button
                   type="button"
                   variant="secondary"

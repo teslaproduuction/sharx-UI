@@ -45,12 +45,12 @@ func try(fn func()) {
 
 // Server provides REST API for managing the node.
 type Server struct {
-	port         int
-	xrayManager  *xray.Manager
+	port          int
+	xrayManager   *xray.Manager
 	telemtManager *telemt.Manager
-	httpServer   *http.Server
-	certFile    string
-	keyFile     string
+	httpServer    *http.Server
+	certFile           string
+	keyFile            string
 	// clientCAFile, if set with cert/key, enables mTLS (panel must present a cert signed by this CA).
 	clientCAFile string
 	// pairing, if set, enables HTTPS + mandatory mTLS + JWT (SECRET_KEY bundle); overrides file-based TLS.
@@ -90,8 +90,8 @@ func logXrayNotReadyThrottled(endpoint string) {
 // NewServer creates a new API server instance. Call SetPairing before Start (pairing-only).
 func NewServer(port int, xrayManager *xray.Manager, telemtManager *telemt.Manager) *Server {
 	return &Server{
-		port:         port,
-		xrayManager:  xrayManager,
+		port:          port,
+		xrayManager:   xrayManager,
 		telemtManager: telemtManager,
 	}
 }
@@ -143,6 +143,8 @@ func (s *Server) Start() error {
 	{
 		api.POST("/apply-config", s.applyConfig)
 		api.POST("/stop-xray", s.stopXray)
+		api.POST("/stop-telemt", s.stopTelemt)
+		api.POST("/restart-telemt", s.restartTelemt)
 		api.POST("/reload", s.reload)
 		api.POST("/force-reload", s.forceReload)
 		api.POST("/install-xray/:version", s.installXray)
@@ -288,12 +290,18 @@ func verifyBearerJWT(authHeader string, pub *rsa.PublicKey) error {
 // health returns the health status of the node (includes xray readiness; no auth required).
 func (s *Server) health(c *gin.Context) {
 	st := s.xrayManager.GetStatus()
+	tCount := 0
+	if s.telemtManager != nil {
+		tCount = s.telemtManager.RunningCount()
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":      "ok",
-		"service":     "sharx-node",
-		"xrayRunning": st["running"],
-		"xrayVersion": st["version"],
-		"xrayUptime":  st["uptime"],
+		"status":        "ok",
+		"service":       "sharx-node",
+		"xrayRunning":   st["running"],
+		"xrayVersion":   st["version"],
+		"xrayUptime":    st["uptime"],
+		"telemtRunning": tCount > 0,
+		"telemtCount":   tCount,
 	})
 }
 
@@ -311,11 +319,15 @@ func (s *Server) applyConfig(c *gin.Context) {
 	logger.Infof("Request body read, size: %d bytes", len(body))
 
 	var telemtRaw json.RawMessage
+	reqCoreProfileHash := ""
+	reqExpectedSHA := ""
 
 	var requestData struct {
-		Config   json.RawMessage `json:"config"`
-		PanelURL string          `json:"panelUrl,omitempty"`
-		Telemt   json.RawMessage `json:"telemt"`
+		Config               json.RawMessage `json:"config"`
+		PanelURL             string          `json:"panelUrl,omitempty"`
+		Telemt               json.RawMessage `json:"telemt"`
+		CoreProfileHash      string          `json:"coreProfileHash,omitempty"`
+		ExpectedConfigSha256 string          `json:"expectedConfigSha256,omitempty"`
 	}
 
 	configBytes := body
@@ -323,6 +335,8 @@ func (s *Server) applyConfig(c *gin.Context) {
 	if err := json.Unmarshal(body, &requestData); err == nil && len(requestData.Config) > 0 {
 		configBytes = requestData.Config
 		telemtRaw = requestData.Telemt
+		reqCoreProfileHash = strings.TrimSpace(requestData.CoreProfileHash)
+		reqExpectedSHA = strings.TrimSpace(requestData.ExpectedConfigSha256)
 		if requestData.PanelURL != "" {
 			panelURL := requestData.PanelURL
 			logger.Infof("Parsed request with panelUrl: %s", panelURL)
@@ -360,6 +374,13 @@ func (s *Server) applyConfig(c *gin.Context) {
 	cfgHash := sha256.Sum256(configBytes)
 	cfgHashHex := hex.EncodeToString(cfgHash[:])
 
+	if reqExpectedSHA != "" && !strings.EqualFold(reqExpectedSHA, cfgHashHex) {
+		logger.Warningf("apply-config: expectedConfigSha256 mismatch: actual=%s expected=%s", cfgHashHex, reqExpectedSHA)
+	}
+	if reqCoreProfileHash != "" {
+		logger.Infof("apply-config: coreProfileHash from panel: %s", reqCoreProfileHash)
+	}
+
 	logger.Infof("Applying XRAY configuration...")
 	if err := s.xrayManager.ApplyConfig(configBytes); err != nil {
 		logger.Errorf("Failed to apply config: %v", err)
@@ -386,12 +407,18 @@ func (s *Server) applyConfig(c *gin.Context) {
 		"xrayUptime":   st["uptime"],
 		"xrayRunning":  st["running"],
 	}
+	if reqCoreProfileHash != "" {
+		resp["coreProfileHash"] = reqCoreProfileHash
+	}
+	if reqExpectedSHA != "" {
+		resp["configSha256Match"] = strings.EqualFold(reqExpectedSHA, cfgHashHex)
+	}
 	logger.Infof("Configuration applied successfully, sending response")
 	c.JSON(http.StatusOK, resp)
 	logger.Infof("Apply config response sent")
 }
 
-// stopXray stops the Xray core process on this worker (panel "disable node").
+// stopXray stops the Xray core process on this worker. Telemt sidecars are unaffected; use POST /stop-telemt separately.
 func (s *Server) stopXray(c *gin.Context) {
 	logger.Infof("stop-xray: stopping Xray core on worker")
 	if err := s.xrayManager.Stop(); err != nil {
@@ -399,10 +426,40 @@ func (s *Server) stopXray(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 		return
 	}
-	if s.telemtManager != nil {
-		s.telemtManager.Stop()
-	}
 	c.JSON(http.StatusOK, gin.H{"message": "XRAY stopped", "xrayRunning": false})
+}
+
+// stopTelemt stops Telemt sidecars only (Xray keeps running).
+func (s *Server) stopTelemt(c *gin.Context) {
+	logger.Infof("stop-telemt: stopping Telemt sidecars on worker")
+	if s.telemtManager == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Telemt not configured", "telemtRunning": false, "telemtCount": 0})
+		return
+	}
+	s.telemtManager.Stop()
+	c.JSON(http.StatusOK, gin.H{"message": "Telemt stopped", "telemtRunning": false, "telemtCount": 0})
+}
+
+// restartTelemt stops Telemt sidecars and reapplies the last successful Telemt payloads from the panel.
+func (s *Server) restartTelemt(c *gin.Context) {
+	logger.Infof("restart-telemt: restarting Telemt sidecars on worker")
+	if s.telemtManager == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "Telemt not configured", "telemtRunning": false, "telemtCount": 0})
+		return
+	}
+	payloads, ok := s.telemtManager.ReplaySnapshotForRestart()
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no Telemt config applied yet; push config from the panel first"})
+		return
+	}
+	s.telemtManager.Stop()
+	if err := s.telemtManager.Apply(payloads); err != nil {
+		logger.Errorf("restart-telemt: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	tCount := s.telemtManager.RunningCount()
+	c.JSON(http.StatusOK, gin.H{"message": "Telemt restarted", "telemtRunning": tCount > 0, "telemtCount": tCount})
 }
 
 // reload reloads XRAY configuration.
@@ -430,6 +487,12 @@ func (s *Server) forceReload(c *gin.Context) {
 // status returns the current status of XRAY.
 func (s *Server) status(c *gin.Context) {
 	status := s.xrayManager.GetStatus()
+	tCount := 0
+	if s.telemtManager != nil {
+		tCount = s.telemtManager.RunningCount()
+	}
+	status["telemtRunning"] = tCount > 0
+	status["telemtCount"] = tCount
 	for k, v := range hostMetricsForStatusJSON() {
 		status[k] = v
 	}

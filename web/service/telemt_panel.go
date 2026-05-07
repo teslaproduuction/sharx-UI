@@ -41,6 +41,25 @@ func StopLocalTelemtStandalone() {
 	}
 }
 
+// StopLocalTelemtSidecars stops Telemt children on the panel host without niling the manager.
+func StopLocalTelemtSidecars() {
+	panelTelemtMu.Lock()
+	defer panelTelemtMu.Unlock()
+	if panelTelemt != nil {
+		panelTelemt.Stop()
+	}
+}
+
+// LocalTelemtSidecarCount returns supervised Telemt tags on this panel (0 if multi-node manager unused or none running).
+func LocalTelemtSidecarCount() int {
+	panelTelemtMu.Lock()
+	defer panelTelemtMu.Unlock()
+	if panelTelemt == nil {
+		return 0
+	}
+	return panelTelemt.RunningCount()
+}
+
 func nodePayloadsToTelemt(in []TelemtNodePayload) []telemt.Payload {
 	out := make([]telemt.Payload, 0, len(in))
 	for _, p := range in {

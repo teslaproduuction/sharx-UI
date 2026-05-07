@@ -51,7 +51,11 @@ func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.POST("/logs/:id", a.getNodeLogs)
 	g.POST("/check-connection", a.checkNodeConnection) // Check node connection without API key
 	g.POST("/resetTraffic/:id", a.resetNodeTraffic)    // Reset node traffic
-	g.GET("/secret", a.getPairingSecret)               // Panel-wide SECRET_KEY for node docker-compose
+	g.POST("/stopTelemt/:id", a.stopTelemtOnNode)
+	g.POST("/stopXray/:id", a.stopXrayOnNode)
+	g.POST("/restartXray/:id", a.restartXrayOnNode)
+	g.POST("/restartTelemt/:id", a.restartTelemtOnNode)
+	g.GET("/secret", a.getPairingSecret) // Panel-wide SECRET_KEY for node docker-compose
 	g.GET("/geography", a.getNodesGeography)
 	g.GET("/client-traffic-per-node", a.getClientTrafficPerNode)
 	// push-logs endpoint moved to APIController to bypass session auth
@@ -293,12 +297,15 @@ func (a *NodeController) updateNode(c *gin.Context) {
 				if err != nil || n == nil {
 					return
 				}
+				// Telemt is not stopped by stop-xray on the worker; shut it down explicitly when the node is disabled in the panel.
+				if terr := a.nodeService.StopTelemtOnNode(n); terr != nil {
+					logger.Warningf("[Node: %s] stop Telemt on worker while disabling node: %v", n.Name, terr)
+				}
 				if err := a.nodeService.StopXrayOnNode(n); err != nil {
 					logger.Warningf("[Node: %s] stop Xray on worker: %v", n.Name, err)
 					_ = a.nodeService.SetNodeXrayState(n.Id, model.NodeXrayError)
 				} else {
 					logger.Infof("[Node: %s] Xray stopped on worker (node disabled in panel)", n.Name)
-					_ = a.nodeService.SetNodeXrayState(n.Id, model.NodeXrayStopped)
 				}
 				time.Sleep(100 * time.Millisecond)
 				a.broadcastNodesUpdate()
@@ -311,6 +318,7 @@ func (a *NodeController) updateNode(c *gin.Context) {
 				n, err := a.nodeService.GetNode(nodeID)
 				if err == nil && n != nil && n.Enable {
 					_ = a.nodeService.RefreshNodeXrayStateFromWorker(n)
+					_ = a.nodeService.RefreshNodeTelemtStateFromWorker(n)
 				}
 				a.broadcastNodesUpdate()
 			}(id)
@@ -326,6 +334,110 @@ func (a *NodeController) updateNode(c *gin.Context) {
 		return
 	}
 	jsonMsgObj(c, "Node updated successfully", out, nil)
+}
+
+// stopTelemtOnNode stops Telemt sidecars on a worker (Xray keeps running).
+func (a *NodeController) stopTelemtOnNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid node ID", err)
+		return
+	}
+	n, err := a.nodeService.GetNode(id)
+	if err != nil || n == nil {
+		jsonMsg(c, "Node not found", err)
+		return
+	}
+	if !n.Enable {
+		jsonMsg(c, "Node is disabled", nil)
+		return
+	}
+	if err := a.nodeService.StopTelemtOnNode(n); err != nil {
+		jsonMsg(c, "Failed to stop Telemt on node", err)
+		return
+	}
+	a.broadcastNodesUpdate()
+	jsonMsg(c, "Telemt stopped on node", nil)
+}
+
+// stopXrayOnNode stops the Xray core on a worker only; Telemt is left running unless stopped via stopTelemt.
+func (a *NodeController) stopXrayOnNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid node ID", err)
+		return
+	}
+	n, err := a.nodeService.GetNode(id)
+	if err != nil || n == nil {
+		jsonMsg(c, "Node not found", err)
+		return
+	}
+	if !n.Enable {
+		jsonMsg(c, "Node is disabled", nil)
+		return
+	}
+	if err := a.nodeService.StopXrayOnNode(n); err != nil {
+		jsonMsg(c, "Failed to stop Xray on node", err)
+		return
+	}
+	a.broadcastNodesUpdate()
+	jsonMsg(c, "Xray stopped on node", nil)
+}
+
+// restartXrayOnNode force-reloads Xray on a worker.
+func (a *NodeController) restartXrayOnNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid node ID", err)
+		return
+	}
+	n, err := a.nodeService.GetNode(id)
+	if err != nil || n == nil {
+		jsonMsg(c, "Node not found", err)
+		return
+	}
+	if !n.Enable {
+		jsonMsg(c, "Node is disabled", nil)
+		return
+	}
+	if err := a.nodeService.RestartXrayOnNode(n); err != nil {
+		if isNodeReregistrationError(err) {
+			jsonMsg(c, "Node was recreated and needs to be re-registered. Please delete this node and add it again, or contact administrator to re-register it.", err)
+		} else {
+			jsonMsg(c, "Failed to restart Xray on node", err)
+		}
+		return
+	}
+	a.broadcastNodesUpdate()
+	jsonMsg(c, "Xray restarted on node", nil)
+}
+
+// restartTelemtOnNode restarts Telemt sidecars on a worker.
+func (a *NodeController) restartTelemtOnNode(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil {
+		jsonMsg(c, "Invalid node ID", err)
+		return
+	}
+	n, err := a.nodeService.GetNode(id)
+	if err != nil || n == nil {
+		jsonMsg(c, "Node not found", err)
+		return
+	}
+	if !n.Enable {
+		jsonMsg(c, "Node is disabled", nil)
+		return
+	}
+	if err := a.nodeService.RestartTelemtOnNode(n); err != nil {
+		if isNodeReregistrationError(err) {
+			jsonMsg(c, "Node was recreated and needs to be re-registered. Please delete this node and add it again, or contact administrator to re-register it.", err)
+		} else {
+			jsonMsg(c, "Failed to restart Telemt on node", err)
+		}
+		return
+	}
+	a.broadcastNodesUpdate()
+	jsonMsg(c, "Telemt restarted on node", nil)
 }
 
 // deleteNode deletes a node by its ID.

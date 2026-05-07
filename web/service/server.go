@@ -78,6 +78,12 @@ type Status struct {
 		ErrorMsg string       `json:"errorMsg"`
 		Version  string       `json:"version"`
 	} `json:"xray"`
+	// Telemt is local panel Telemt sidecars (standalone); in multi-node local Telemt is not used.
+	Telemt struct {
+		State    ProcessState `json:"state"`
+		Count    int          `json:"count"`
+		ErrorMsg string       `json:"errorMsg"`
+	} `json:"telemt"`
 	// PanelVersion is the SharX panel release (embedded at build from config/version).
 	PanelVersion string `json:"panelVersion"`
 	// PanelUptime is seconds since the panel process started (not local Xray).
@@ -115,6 +121,13 @@ type Status struct {
 		Error   int `json:"error"`
 		Unknown int `json:"unknown"`
 	} `json:"nodesXray"`
+	// NodesTelemt counts telemt_state on worker nodes (enable=true only).
+	NodesTelemt struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Stopped int `json:"stopped"`
+		Unknown int `json:"unknown"`
+	} `json:"nodesTelemt"`
 	// UsersOnline is the number of distinct client emails currently considered online (local Xray or worker nodes).
 	UsersOnline int `json:"usersOnline"`
 	Database    struct {
@@ -699,6 +712,20 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	}
 	status.Xray.Version = s.xrayService.GetXrayVersion()
 
+	multiModeTelemt, _ := settingService.GetMultiNodeMode()
+	if multiModeTelemt {
+		status.Telemt.State = Stop
+		status.Telemt.Count = 0
+	} else {
+		tc := LocalTelemtSidecarCount()
+		status.Telemt.Count = tc
+		if tc > 0 {
+			status.Telemt.State = Running
+		} else {
+			status.Telemt.State = Stop
+		}
+	}
+
 	// Application stats
 	var rtm runtime.MemStats
 	runtime.ReadMemStats(&rtm)
@@ -739,6 +766,15 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 					status.NodesXray.Error++
 				default:
 					status.NodesXray.Unknown++
+				}
+				status.NodesTelemt.Total++
+				switch node.TelemtState {
+				case model.NodeTelemtRunning:
+					status.NodesTelemt.Running++
+				case model.NodeTelemtStopped:
+					status.NodesTelemt.Stopped++
+				default:
+					status.NodesTelemt.Unknown++
 				}
 			}
 		} else {
@@ -948,6 +984,33 @@ func (s *ServerService) StopXrayService() error {
 		return err
 	}
 	return nil
+}
+
+func (s *ServerService) StopTelemtService() error {
+	ss := SettingService{}
+	multi, err := ss.GetMultiNodeMode()
+	if err != nil {
+		multi = false
+	}
+	if multi {
+		return common.NewError("in multi-node mode, stop Telemt from the Nodes page on each worker")
+	}
+	StopLocalTelemtSidecars()
+	return nil
+}
+
+// RestartTelemtService restarts Telemt sidecars from the latest panel config (standalone only).
+func (s *ServerService) RestartTelemtService() error {
+	ss := SettingService{}
+	multi, err := ss.GetMultiNodeMode()
+	if err != nil {
+		multi = false
+	}
+	if multi {
+		return common.NewError("in multi-node mode, restart Telemt from the Nodes page on each worker")
+	}
+	StopLocalTelemtSidecars()
+	return ApplyLocalTelemtStandalone(&s.xrayService)
 }
 
 func (s *ServerService) RestartXrayService() error {

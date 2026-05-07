@@ -15,7 +15,7 @@ import {
   serializeOutboundsSection,
   updateRowProtocol,
 } from "@/lib/xrayOutboundForm";
-import { Button, Input, SelectNative } from "@/components/ui";
+import { Button, CheckboxField, Input, SelectNative } from "@/components/ui";
 
 type Props = {
   value: string;
@@ -462,16 +462,13 @@ function OutboundSettingsBody({
                 />
               </div>
               <div className="flex items-end gap-2 sm:col-span-2">
-                <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--fg-muted)]">
-                  <input
-                    type="checkbox"
-                    className="rounded border-[var(--border)]"
-                    checked={Boolean(tls.allowInsecure)}
-                    disabled={readOnly}
-                    onChange={(e) => patchTls({ allowInsecure: e.target.checked })}
-                  />
-                  {t("pages.xray.outbound.tlsAllowInsecure", { defaultValue: "allowInsecure" })}
-                </label>
+                <CheckboxField
+                  className="!items-center !text-xs"
+                  label={t("pages.xray.outbound.tlsAllowInsecure", { defaultValue: "allowInsecure" })}
+                  checked={Boolean(tls.allowInsecure)}
+                  disabled={readOnly}
+                  onChange={(e) => patchTls({ allowInsecure: e.target.checked })}
+                />
               </div>
             </div>
           </div>

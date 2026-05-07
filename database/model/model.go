@@ -259,6 +259,13 @@ const (
 	NodeXrayUnknown = "unknown"
 )
 
+// Node TelemtState values: worker Telemt sidecars as reported by the node API.
+const (
+	NodeTelemtRunning = "running"
+	NodeTelemtStopped = "stopped"
+	NodeTelemtUnknown = "unknown"
+)
+
 // Node represents a worker node in multi-node architecture.
 type Node struct {
 	Id           int    `json:"id" gorm:"primaryKey;autoIncrement"`                                      // Unique identifier
@@ -277,6 +284,7 @@ type Node struct {
 	Enable       bool   `json:"enable" form:"enable" gorm:"column:enable;default:true"`                  // When false, panel skips health checks, stats collection, and config push
 	XrayState    string `json:"xrayState" gorm:"column:xray_state;default:unknown"`                      // running | stopped | error | unknown (worker Xray)
 	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`                       // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
+	TelemtState  string `json:"telemtState" gorm:"column:telemt_state;default:unknown"`                  // running | stopped | unknown (worker Telemt sidecars)
 
 	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy values accepted; see IsPairingMode.
 	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing
@@ -425,6 +433,8 @@ type XrayCoreConfigProfile struct {
 
 	// Relations (not stored in DB, loaded via queries)
 	NodeIds []int `json:"nodeIds,omitempty" form:"-" gorm:"-"` // Node IDs array (not stored in Profile table, from mapping) - use this for multi-node support
+	// ConfigHash is SHA-256 (hex) of ConfigJson as stored; for change tracking and client sync.
+	ConfigHash string `json:"configHash,omitempty" form:"-" gorm:"-"`
 }
 
 // ProfileNodeMapping maps profiles to nodes in multi-node mode.
