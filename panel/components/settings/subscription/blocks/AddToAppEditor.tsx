@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Button, IconButton, Input, Switch } from "@/components/ui";
+import { Button, IconButton, Input, SelectNative, Switch } from "@/components/ui";
 import {
   APP_CATALOG,
   defaultAppButtons,
@@ -160,17 +160,18 @@ export function AddToAppEditor({ block, onChange }: Props) {
           <div className="text-xs font-medium text-[var(--fg-muted)]">
             {t("subBuilder.addToApp.addButton", { defaultValue: "Add button for" })}
           </div>
-          <select
+          <SelectNative
+            inputSize="sm"
             value={newApp}
             onChange={(e) => setNewApp(e.target.value as SubscriptionApp)}
-            className="rounded-md border border-[var(--border)] bg-[var(--bg-elevated)] px-2 py-1.5 text-sm text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+            className="max-w-[14rem]"
           >
             {subscriptionApps.map((app) => (
               <option key={app} value={app}>
                 {APP_CATALOG[app]?.label ?? app}
               </option>
             ))}
-          </select>
+          </SelectNative>
           <Button
             type="button"
             variant="secondary"

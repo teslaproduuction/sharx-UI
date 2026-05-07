@@ -2529,7 +2529,7 @@ curl -X POST "http://localhost:2053/panel/xray-core-config-profile/reset-to-defa
 
 ### POST `/panel/xray-core-config-profile/assign-nodes/{id}`
 
-Assign nodes to a profile. Nodes can only be assigned to one profile at a time. After assignment, the configuration is automatically applied to the assigned nodes.
+Assign nodes to a profile. Each node may belong to at most one profile; assigning a node that is already on another profile removes the old mapping first. After assignment, the configuration is automatically applied to the assigned nodes.
 
 **Path Parameters:**
 
@@ -2561,7 +2561,7 @@ curl -X POST "http://localhost:2053/panel/xray-core-config-profile/assign-nodes/
 }
 ```
 
-**Note:** If a node is already assigned to another profile, the request will fail with an error message listing the conflicting nodes.
+**Note:** If a node was assigned to another profile, it is unassigned from that profile and added to this one (no error).
 
 ---
 

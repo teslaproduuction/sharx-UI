@@ -34,6 +34,7 @@ import {
   defaultStreamForm,
   defaultStreamFormHysteria,
   defaultStreamSettingsString,
+  defaultVlessTrojanFallbackRow,
   getInboundStreamTransportMode,
   hostFromRealityTarget,
   mergeFirstClientIntoSettings,
@@ -55,6 +56,7 @@ import {
   XHTTP_MODES,
   type InboundFormProtocol,
   type SniffingFormState,
+  type VlessTrojanFallbackFormRow,
   type StreamFormState,
 } from "@/lib/inboundDefaults";
 import { sizeFormat } from "@/lib/format";
@@ -535,6 +537,7 @@ const defaultForm = () => ({
   trafficReset: "never",
   streamForm: defaultStreamForm(),
   sniffingForm: defaultSniffingForm(),
+  vlessTrojanFallbacks: [] as VlessTrojanFallbackFormRow[],
 });
 
 export function InboundsPage() {
@@ -731,6 +734,7 @@ export function InboundsPage() {
             ? '{"enabled":false,"destOverride":[],"metadataOnly":false,"routeOnly":false}'
             : (ib.sniffing || defaultSniffingString()),
         ),
+        vlessTrojanFallbacks: parsed.vlessTrojanFallbacks ?? ([] as VlessTrojanFallbackFormRow[]),
       });
       setNodeBindings(inboundBindingsToForm(ib));
     } catch {
@@ -982,6 +986,10 @@ export function InboundsPage() {
       ssPassword: form.ssPassword,
       mixedUser: form.mixedUser,
       mixedPassword: form.mixedPassword,
+      vlessTrojanFallbacks:
+        form.protocol === "vless" || form.protocol === "trojan"
+          ? form.vlessTrojanFallbacks
+          : undefined,
     };
 
     let settings: string;
@@ -1716,7 +1724,8 @@ export function InboundsPage() {
                     </th>
                     <th className="p-2 align-top font-normal">
                       <SelectNative
-                        className="!h-8 w-full min-w-0 !px-2 !text-xs"
+                        inputSize="sm"
+                        className="w-full min-w-0 shadow-none"
                         value={filterStatus}
                         onChange={(e) =>
                           setFilterStatus(e.target.value as InboundFilterStatus)
@@ -4116,6 +4125,191 @@ export function InboundsPage() {
               </div>
             ) : null}
 
+            {form.protocol === "vless" || form.protocol === "trojan" ? (
+              <div className="space-y-3 border-t border-[var(--border)] pt-4">
+                <div>
+                  <p className="text-xs font-semibold text-[var(--fg)]">
+                    {t("pages.inbounds.fallbacksTitle", {
+                      defaultValue: "TCP/TLS fallbacks (Xray)",
+                    })}
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-[var(--fg-muted)]">
+                    {t("pages.inbounds.fallbacksHint", {
+                      defaultValue:
+                        "Non-VLESS/TCP+TLS traffic can be forwarded to another service (often nginx on port 80). Requires TCP transport with TLS. Rows without Dest are skipped when saving.",
+                    })}
+                  </p>
+                  <p className="mt-2 text-[10px] font-mono leading-relaxed text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.fallbacksFieldLegend", {
+                      defaultValue:
+                        "Fields map to Xray: name=SNI, alpn, path, dest, xver (PROXY protocol).",
+                    })}
+                  </p>
+                </div>
+                <div className="space-y-3">
+                  {form.vlessTrojanFallbacks.map((row, idx) => (
+                    <div
+                      key={idx}
+                      className="relative space-y-2 rounded-xl border border-[var(--border)] bg-[color-mix(in_oklab,var(--fg)_3%,transparent)] p-3"
+                    >
+                      <div className="absolute right-2 top-2">
+                        <IconButton
+                          type="button"
+                          label={t("pages.inbounds.fallbacksRemove", {
+                            defaultValue: "Remove fallback",
+                          })}
+                          onClick={() =>
+                            setForm((f) => ({
+                              ...f,
+                              vlessTrojanFallbacks: f.vlessTrojanFallbacks.filter(
+                                (_, i) => i !== idx,
+                              ),
+                            }))
+                          }
+                        >
+                          <Trash2 className="h-4 w-4" aria-hidden />
+                        </IconButton>
+                      </div>
+                      <div className="grid grid-cols-1 gap-2 pr-10 sm:grid-cols-2 lg:grid-cols-5">
+                        <div>
+                          <label
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-muted)]"
+                            htmlFor={`fb-name-${idx}`}
+                          >
+                            {t("pages.inbounds.fallbacksSni", { defaultValue: "SNI (name)" })}
+                          </label>
+                          <Input
+                            id={`fb-name-${idx}`}
+                            className="font-mono text-xs"
+                            value={row.name}
+                            placeholder="example.com"
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                vlessTrojanFallbacks: f.vlessTrojanFallbacks.map((r, i) =>
+                                  i === idx ? { ...r, name: e.target.value } : r,
+                                ),
+                              }))
+                            }
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-muted)]"
+                            htmlFor={`fb-alpn-${idx}`}
+                          >
+                            {t("pages.inbounds.fallbacksAlpn", { defaultValue: "ALPN" })}
+                          </label>
+                          <Input
+                            id={`fb-alpn-${idx}`}
+                            className="font-mono text-xs"
+                            value={row.alpn}
+                            placeholder="h2"
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                vlessTrojanFallbacks: f.vlessTrojanFallbacks.map((r, i) =>
+                                  i === idx ? { ...r, alpn: e.target.value } : r,
+                                ),
+                              }))
+                            }
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-muted)]"
+                            htmlFor={`fb-path-${idx}`}
+                          >
+                            {t("pages.inbounds.fallbacksPath", { defaultValue: "Path" })}
+                          </label>
+                          <Input
+                            id={`fb-path-${idx}`}
+                            className="font-mono text-xs"
+                            value={row.path}
+                            placeholder="/ws"
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                vlessTrojanFallbacks: f.vlessTrojanFallbacks.map((r, i) =>
+                                  i === idx ? { ...r, path: e.target.value } : r,
+                                ),
+                              }))
+                            }
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-muted)]"
+                            htmlFor={`fb-dest-${idx}`}
+                          >
+                            {t("pages.inbounds.fallbacksDest", { defaultValue: "Dest" })}
+                            <span className="normal-case text-[var(--fg-subtle)]"> *</span>
+                          </label>
+                          <Input
+                            id={`fb-dest-${idx}`}
+                            className="font-mono text-xs"
+                            value={row.dest}
+                            placeholder="80 / 127.0.0.1:8080"
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                vlessTrojanFallbacks: f.vlessTrojanFallbacks.map((r, i) =>
+                                  i === idx ? { ...r, dest: e.target.value } : r,
+                                ),
+                              }))
+                            }
+                            autoComplete="off"
+                          />
+                        </div>
+                        <div>
+                          <label
+                            className="mb-1 block text-[10px] font-medium uppercase tracking-wide text-[var(--fg-muted)]"
+                            htmlFor={`fb-xver-${idx}`}
+                          >
+                            {t("pages.inbounds.fallbacksXver", { defaultValue: "xVer" })}
+                          </label>
+                          <SelectNative
+                            id={`fb-xver-${idx}`}
+                            className="font-mono text-xs"
+                            value={row.xver}
+                            onChange={(e) =>
+                              setForm((f) => ({
+                                ...f,
+                                vlessTrojanFallbacks: f.vlessTrojanFallbacks.map((r, i) =>
+                                  i === idx ? { ...r, xver: e.target.value } : r,
+                                ),
+                              }))
+                            }
+                          >
+                            <option value="0">0</option>
+                            <option value="1">1</option>
+                            <option value="2">2</option>
+                          </SelectNative>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  className="gap-2"
+                  onClick={() =>
+                    setForm((f) => ({
+                      ...f,
+                      vlessTrojanFallbacks: [...f.vlessTrojanFallbacks, defaultVlessTrojanFallbackRow()],
+                    }))
+                  }
+                >
+                  <Plus className="h-4 w-4 shrink-0" aria-hidden />
+                  {t("pages.inbounds.fallbacksAddRow", { defaultValue: "Add fallback" })}
+                </Button>
+              </div>
+            ) : null}
+
             {form.protocol === "mixed" ? (
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <div>
@@ -4524,7 +4718,8 @@ export function InboundsPage() {
                   </p>
                   <SelectNative
                     id="in-tm-unknown-sni"
-                    className="!h-9 w-full min-w-0 !px-2 !text-xs font-mono"
+                    inputSize="sm"
+                    className="w-full min-w-0 font-mono shadow-none"
                     value={form.telemtForm.censorshipUnknownSniAction}
                     onChange={(e) =>
                       setForm((f) => ({

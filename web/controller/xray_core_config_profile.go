@@ -162,6 +162,11 @@ func (a *XrayCoreConfigProfileController) updateProfile(c *gin.Context) {
 		return
 	}
 
+	pushIDs, _ := a.profileService.GetNodesForProfile(id)
+	if err := a.xrayService.ApplyWorkerConfigToNodeIDs(pushIDs); err != nil {
+		logger.Warningf("Failed to push worker config after profile update: %v", err)
+	}
+
 	jsonMsgObj(c, "Profile updated successfully", profile, nil)
 }
 
@@ -214,17 +219,17 @@ func (a *XrayCoreConfigProfileController) assignNodes(c *gin.Context) {
 		}
 	}
 
+	prevNodes, _ := a.profileService.GetNodesForProfile(id)
 	err = a.profileService.AssignProfileToNodes(id, nodeIds)
 	if err != nil {
 		jsonMsg(c, "Failed to assign nodes to profile", err)
 		return
 	}
 
-	// Apply updated config to affected nodes
-	err = a.xrayService.RestartXray(false)
-	if err != nil {
-		logger.Warningf("Failed to apply config to nodes after profile assignment: %v", err)
-		// Don't fail the request, just log the warning
+	affected := service.MergeUniquePositiveInts(prevNodes, nodeIds)
+
+	if err := a.xrayService.ApplyWorkerConfigToNodeIDs(affected); err != nil {
+		logger.Warningf("Failed to push worker config after profile assignment: %v", err)
 	}
 
 	jsonMsg(c, "Nodes assigned successfully", nil)
@@ -245,6 +250,10 @@ func (a *XrayCoreConfigProfileController) setAsDefault(c *gin.Context) {
 		return
 	}
 
+	if err := a.xrayService.ApplyWorkerXrayConfigToAllMultiWorkerNodes(); err != nil {
+		logger.Warningf("Failed to push worker config after default profile change: %v", err)
+	}
+
 	jsonMsg(c, "Profile set as default successfully", nil)
 }
 
@@ -260,6 +269,11 @@ func (a *XrayCoreConfigProfileController) resetToDefault(c *gin.Context) {
 	if err != nil {
 		jsonMsg(c, "Failed to reset profile: "+err.Error(), err)
 		return
+	}
+
+	pushIDs, _ := a.profileService.GetNodesForProfile(id)
+	if err := a.xrayService.ApplyWorkerConfigToNodeIDs(pushIDs); err != nil {
+		logger.Warningf("Failed to push worker config after profile reset: %v", err)
 	}
 
 	jsonMsgObj(c, "Profile reset to default successfully", profile, nil)

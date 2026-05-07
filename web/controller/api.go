@@ -2,6 +2,8 @@ package controller
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -395,12 +397,14 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	}
 
 	xraySvc := service.NewXrayService()
-	configJSON, err := xraySvc.BuildWorkerXrayConfigForNode(node)
+	configJSON, coreHash, err := xraySvc.BuildWorkerXrayConfigForNodeWithMeta(node)
 	if err != nil {
 		logger.Errorf("pull-xray-config build for node %d: %v", node.Id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.buildFailed")})
 		return
 	}
+	sum := sha256.Sum256(configJSON)
+	cfgHex := hex.EncodeToString(sum[:])
 	ibs, err := xraySvc.InboundsForWorkerNode(node)
 	if err != nil {
 		logger.Errorf("pull-xray-config inbounds for node %d: %v", node.Id, err)
@@ -415,11 +419,13 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	}
 
 	type pullResp struct {
-		Config json.RawMessage            `json:"config"`
-		Telemt []service.TelemtNodePayload `json:"telemt"`
+		Config            json.RawMessage             `json:"config"`
+		Telemt            []service.TelemtNodePayload `json:"telemt"`
+		CoreProfileHash   string                      `json:"coreProfileHash,omitempty"`
+		ConfigSha256      string                      `json:"configSha256,omitempty"`
 	}
 	logger.Debugf("pull-xray-config: node %s (%d), %d bytes, telemt=%d", node.Name, node.Id, len(configJSON), len(telemtPayloads))
-	c.JSON(http.StatusOK, pullResp{Config: configJSON, Telemt: telemtPayloads})
+	c.JSON(http.StatusOK, pullResp{Config: configJSON, Telemt: telemtPayloads, CoreProfileHash: coreHash, ConfigSha256: cfgHex})
 }
 
 // getAPIDocsMarkdown returns the API documentation markdown file.

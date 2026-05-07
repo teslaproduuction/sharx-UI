@@ -89,6 +89,8 @@ type StatusData = {
   xray: { state: string; errorMsg: string; version: string };
   nodes?: { online: number; total: number };
   nodesXray?: { total: number; running: number; stopped: number; error: number; unknown: number };
+  telemt?: { state: string; count: number; errorMsg?: string };
+  nodesTelemt?: { total: number; running: number; stopped: number; unknown: number };
   database: {
     size: number;
     tables: number;
@@ -130,6 +132,35 @@ function xrayStateMsg(
   if (state === "error")
     return { msg: tr("pages.index.xrayStatusError"), color: "red" };
   return { msg: tr("pages.index.xrayStatusUnknown"), color: "default" };
+}
+
+function telemtLocalTag(
+  telemt: StatusData["telemt"],
+  multi: boolean,
+  tr: (k: string, o?: Record<string, unknown>) => string,
+): { msg: string; color: string } {
+  if (multi) {
+    return { msg: tr("pages.index.telemtLocalIdleMulti"), color: "info" };
+  }
+  if (!telemt) {
+    return { msg: tr("pages.index.telemtStatusUnknown"), color: "default" };
+  }
+  if (telemt.state === "running" && (telemt.count ?? 0) > 0) {
+    return {
+      msg: tr("pages.index.telemtRunningCount", { count: telemt.count }),
+      color: "green",
+    };
+  }
+  if (telemt.state === "running") {
+    return { msg: tr("pages.index.telemtStatusRunning"), color: "green" };
+  }
+  if (telemt.state === "error") {
+    return { msg: tr("pages.index.telemtStatusError"), color: "red" };
+  }
+  if (telemt.state === "stop") {
+    return { msg: tr("pages.index.telemtStatusStop"), color: "orange" };
+  }
+  return { msg: tr("pages.index.telemtStatusUnknown"), color: "default" };
 }
 
 function CountSize({ value }: { value: number }) {
@@ -908,6 +939,8 @@ export function DashboardPage() {
   const nP = nTot ? Number(toFixed((nOn / nTot) * 100, 2)) : 0;
   const xUi = xrayStateMsg(st.xray.state, t, { multiMode: multi });
   const nx = st.nodesXray;
+  const teleUi = telemtLocalTag(st.telemt, multi, t);
+  const nt = st.nodesTelemt;
   const trafficMax = Math.max(1, st.netIO.up, st.netIO.down, st.netTraffic.sent, st.netTraffic.recv);
   const ramSparkColor = dashboardRamStroke;
   const showResources = enabledWidgets.includes("resources");
@@ -930,6 +963,23 @@ export function DashboardPage() {
     const r = await postJson(panel("api/server/stopXrayService"));
     setSpin(false);
     if (r.success) toast.success(t("success"));
+  };
+  const stopTelemtLocal = async () => {
+    if (multi) return;
+    setSpin(true);
+    try {
+      const r = await postJson(panel("api/server/stopTelemtService"));
+      if (r.success) {
+        toast.success(
+          t("pages.index.telemtStopOk", { defaultValue: "Telemt stopped" }),
+        );
+        await pull();
+      } else {
+        toast.error((r as { msg?: string }).msg || t("fail"));
+      }
+    } finally {
+      setSpin(false);
+    }
   };
   const restartX = async () => {
     setSpin(true);
@@ -1256,6 +1306,14 @@ export function DashboardPage() {
                       </span>
                     )}
                   </p>
+                  {nt && nt.total > 0 ? (
+                    <p className="mt-1 text-[var(--fg-muted)]">
+                      {t("pages.index.nodesTelemtSummary", {
+                        running: nt.running,
+                        total: nt.total,
+                      })}
+                    </p>
+                  ) : null}
                   <Link
                     href={linkP("panel/nodes")}
                     className="mt-0.5 inline-block text-[10px] font-medium text-[var(--accent)] hover:underline sm:text-xs"
@@ -1275,13 +1333,47 @@ export function DashboardPage() {
                 })}
                 {st.xray?.errorMsg ? ` — ${st.xray.errorMsg}` : ""}
               </p>
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-[10px] font-medium text-[var(--fg-subtle)] sm:text-xs">
+                  {t("pages.index.telemtShort")}
+                </span>
+                <span
+                  className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(
+                    teleUi.color,
+                  )}`}
+                  title={teleUi.msg}
+                >
+                  {teleUi.msg}
+                </span>
+              </div>
+              {st.telemt?.errorMsg && !multi ? (
+                <p
+                  className="mt-1 line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs"
+                  title={st.telemt.errorMsg}
+                >
+                  {st.telemt.errorMsg}
+                </p>
+              ) : null}
               <div className="mt-2.5 flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
-                <IconButton label={t("pages.index.stopXray")} onClick={stopX}>
-                  <Power size={14} />
-                </IconButton>
-                <IconButton label={t("pages.index.restartXray")} onClick={restartX}>
-                  <RefreshCw size={14} />
-                </IconButton>
+                {!multi ? (
+                  <IconButton
+                    label={t("pages.index.stopTelemt")}
+                    disabled={st.telemt?.state !== "running"}
+                    onClick={stopTelemtLocal}
+                  >
+                    <Power size={14} />
+                  </IconButton>
+                ) : null}
+                {!multi ? (
+                  <>
+                    <IconButton label={t("pages.index.stopXray")} onClick={stopX}>
+                      <Power size={14} />
+                    </IconButton>
+                    <IconButton label={t("pages.index.restartXray")} onClick={restartX}>
+                      <RefreshCw size={14} />
+                    </IconButton>
+                  </>
+                ) : null}
                 <IconButton label={t("pages.index.xraySwitch")} onClick={openVer}>
                   <Wrench size={14} />
                 </IconButton>

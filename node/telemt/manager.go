@@ -29,6 +29,11 @@ type Manager struct {
 	running    map[string]*procState
 	workRootMu sync.RWMutex
 	workRoot   string // if empty: TELEMT_WORK_ROOT env, else /app/telemt
+
+	// Replay snapshot used by POST /restart-telemt after any successful Apply (including config pull).
+	replayMu sync.RWMutex
+	replayOK bool
+	replay   []Payload
 }
 
 type procState struct {
@@ -39,6 +44,31 @@ type procState struct {
 // NewManager creates a Telemt manager.
 func NewManager() *Manager {
 	return &Manager{running: make(map[string]*procState)}
+}
+
+func (m *Manager) commitReplaySnapshot(payloads []Payload) {
+	if m == nil {
+		return
+	}
+	cp := append([]Payload(nil), payloads...)
+	m.replayMu.Lock()
+	m.replay = cp
+	m.replayOK = true
+	m.replayMu.Unlock()
+}
+
+// ReplaySnapshotForRestart returns the last payloads successfully applied to this Manager, if any.
+// An empty-but-valid snapshot means Telemt was intentionally cleared via Apply([]Payload{}).
+func (m *Manager) ReplaySnapshotForRestart() ([]Payload, bool) {
+	if m == nil {
+		return nil, false
+	}
+	m.replayMu.RLock()
+	defer m.replayMu.RUnlock()
+	if !m.replayOK {
+		return nil, false
+	}
+	return append([]Payload(nil), m.replay...), true
 }
 
 // SetWorkRoot sets the per-manager state directory root (e.g.panel: $XUI_DATA_FOLDER/telemt).
@@ -106,6 +136,7 @@ func (m *Manager) Apply(payloads []Payload) error {
 			delete(m.running, tag)
 		}
 		m.mu.Unlock()
+		m.commitReplaySnapshot(nil)
 		return nil
 	}
 	m.mu.Unlock()
@@ -178,5 +209,7 @@ func (m *Manager) Apply(payloads []Payload) error {
 
 		m.running[tag] = &procState{cancel: cancel, hash: hhex}
 	}
+
+	m.commitReplaySnapshot(payloads)
 	return nil
 }

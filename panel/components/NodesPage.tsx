@@ -5,10 +5,14 @@ import {
   AlertCircle,
   AlertTriangle,
   CheckCircle2,
+  Circle,
+  CircleDot,
   Copy,
   HelpCircle,
   Network,
   Plus,
+  Power,
+  RefreshCw,
   Trash2,
   WifiOff,
   Zap,
@@ -78,6 +82,8 @@ type NodeRow = {
   xrayVersion?: string;
   /** Worker Xray: running | stopped | error | unknown */
   xrayState?: string;
+  /** Worker Telemt sidecars: running | stopped | unknown */
+  telemtState?: string;
   /** When false, panel skips health, stats, and config to this node */
   enable?: boolean;
 };
@@ -186,22 +192,22 @@ function NodeStatusBadge({ status, t }: NodeStatusBadgeProps) {
     online: {
       icon: CheckCircle2,
       tone: "success" as const,
-      label: t("pages.nodes.online", { defaultValue: "Online" }),
+      label: t("pages.nodes.online"),
     },
     offline: {
       icon: WifiOff,
       tone: "danger" as const,
-      label: t("pages.nodes.offline", { defaultValue: "Offline" }),
+      label: t("pages.nodes.offline"),
     },
     error: {
       icon: AlertCircle,
       tone: "danger" as const,
-      label: t("pages.nodes.error", { defaultValue: "Error" }),
+      label: t("pages.nodes.error"),
     },
     unknown: {
       icon: HelpCircle,
       tone: "neutral" as const,
-      label: t("pages.nodes.unknown", { defaultValue: "Unknown" }),
+      label: t("pages.nodes.unknown"),
     },
   } as const;
 
@@ -219,27 +225,50 @@ function XrayStateBadge({ state, t }: XrayStateBadgeProps) {
     running: {
       icon: Zap,
       tone: "success" as const,
-      label: t("pages.nodes.xrayStateRunning", { defaultValue: "Running" }),
+      label: t("pages.nodes.xrayStateRunning"),
     },
     stopped: {
       icon: ZapOff,
       tone: "warning" as const,
-      label: t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" }),
+      label: t("pages.nodes.xrayStateStopped"),
     },
     error: {
       icon: AlertTriangle,
       tone: "danger" as const,
-      label: t("pages.nodes.xrayStateError", { defaultValue: "Error" }),
+      label: t("pages.nodes.xrayStateError"),
     },
     unknown: {
       icon: Activity,
       tone: "neutral" as const,
-      label: t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" }),
+      label: t("pages.nodes.xrayStateUnknown"),
     },
   } as const;
 
   const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
 
+  return <TileWithTooltip icon={cfg.icon} tone={cfg.tone} label={cfg.label} />;
+}
+
+function TelemtStateBadge({ state, t }: { state: string | undefined; t: TFunction }) {
+  const s = (state || "unknown").toLowerCase();
+  const configs = {
+    running: {
+      icon: CircleDot,
+      tone: "success" as const,
+      label: t("pages.nodes.telemtStateRunning"),
+    },
+    stopped: {
+      icon: Circle,
+      tone: "warning" as const,
+      label: t("pages.nodes.telemtStateStopped"),
+    },
+    unknown: {
+      icon: HelpCircle,
+      tone: "neutral" as const,
+      label: t("pages.nodes.telemtStateUnknown"),
+    },
+  } as const;
+  const cfg = configs[s as keyof typeof configs] ?? configs.unknown;
   return <TileWithTooltip icon={cfg.icon} tone={cfg.tone} label={cfg.label} />;
 }
 
@@ -332,6 +361,10 @@ export function NodesPage() {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editId, setEditId] = useState<number | null>(null);
   const [togglingEnableId, setTogglingEnableId] = useState<number | null>(null);
+  const [telemtStoppingId, setTelemtStoppingId] = useState<number | null>(null);
+  const [xrayStoppingId, setXrayStoppingId] = useState<number | null>(null);
+  const [telemtRestartingId, setTelemtRestartingId] = useState<number | null>(null);
+  const [xrayRestartingId, setXrayRestartingId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState({
     name: "",
     nameFlag: "",
@@ -750,9 +783,7 @@ export function NodesPage() {
   const addModalTitle = useMemo(() => {
     if (addWizardStep === 2) return t("pages.nodes.wizardRegisterTitle");
     if (addWizardStep === 3) {
-      return t("pages.nodes.wizardProfileTitle", {
-        defaultValue: "Xray profile for this node",
-      });
+      return t("pages.nodes.wizardProfileTitle");
     }
     return t("pages.nodes.wizardFormTitle");
   }, [addWizardStep, t]);
@@ -760,7 +791,7 @@ export function NodesPage() {
   const submitProfileAssign = useCallback(async () => {
     if (selectedProfileId == null || profileAssignNodeId == null) {
       toast.error(
-        t("pages.nodes.selectProfileError", { defaultValue: "Select a profile" }),
+        t("pages.nodes.selectProfileError"),
       );
       return;
     }
@@ -859,6 +890,101 @@ export function NodesPage() {
       }
     },
     [t, toast],
+  );
+
+  const stopTelemtOnRow = useCallback(
+    async (row: NodeRow) => {
+      if (!row.enable || row.telemtState !== "running") return;
+      setTelemtStoppingId(row.id);
+      try {
+        const r = await postJson(panel(`node/stopTelemt/${row.id}`), {}, true);
+        if (r.success) {
+          toast.success(
+            t("pages.nodes.telemtStopSuccess"),
+          );
+          void load();
+        } else {
+          toast.error(
+            (r as { msg?: string }).msg ||
+              t("pages.nodes.telemtStopError"),
+          );
+        }
+      } catch {
+        toast.error(t("pages.nodes.telemtStopError"));
+      } finally {
+        setTelemtStoppingId(null);
+      }
+    },
+    [load, t, toast],
+  );
+
+  const stopXrayOnRow = useCallback(
+    async (row: NodeRow) => {
+      if (!row.enable || row.xrayState !== "running") return;
+      setXrayStoppingId(row.id);
+      try {
+        const r = await postJson(panel(`node/stopXray/${row.id}`), {}, true);
+        if (r.success) {
+          toast.success(t("pages.nodes.xrayStopSuccess"));
+          void load();
+        } else {
+          toast.error(
+            (r as { msg?: string }).msg || t("pages.nodes.xrayStopError"),
+          );
+        }
+      } catch {
+        toast.error(t("pages.nodes.xrayStopError"));
+      } finally {
+        setXrayStoppingId(null);
+      }
+    },
+    [load, t, toast],
+  );
+
+  const restartXrayOnRow = useCallback(
+    async (row: NodeRow) => {
+      if (!row.enable) return;
+      setXrayRestartingId(row.id);
+      try {
+        const r = await postJson(panel(`node/restartXray/${row.id}`), {}, true);
+        if (r.success) {
+          toast.success(t("pages.nodes.xrayRestartSuccess"));
+          void load();
+        } else {
+          toast.error(
+            (r as { msg?: string }).msg || t("pages.nodes.xrayRestartError"),
+          );
+        }
+      } catch {
+        toast.error(t("pages.nodes.xrayRestartError"));
+      } finally {
+        setXrayRestartingId(null);
+      }
+    },
+    [load, t, toast],
+  );
+
+  const restartTelemtOnRow = useCallback(
+    async (row: NodeRow) => {
+      if (!row.enable) return;
+      setTelemtRestartingId(row.id);
+      try {
+        const r = await postJson(panel(`node/restartTelemt/${row.id}`), {}, true);
+        if (r.success) {
+          toast.success(t("pages.nodes.telemtRestartSuccess"));
+          void load();
+        } else {
+          toast.error(
+            (r as { msg?: string }).msg || t("pages.nodes.telemtRestartError"),
+          );
+        }
+      } catch {
+        toast.error(t("pages.nodes.telemtRestartError"));
+      } finally {
+        setTelemtRestartingId(null);
+      }
+    },
+    [load, t, toast],
   );
 
   const openEdit = async (row: NodeRow) => {
@@ -1058,44 +1184,38 @@ export function NodesPage() {
               <Input
                 value={nameFilter}
                 onChange={(e) => setNameFilter(e.target.value)}
-                placeholder={t("pages.nodes.search", {
-                  defaultValue: "Search by name or address",
-                })}
+                placeholder={t("pages.nodes.search")}
               />
               <SelectNative
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
               >
                 <option value="all">
-                  {t("pages.nodes.filterAllStatuses", {
-                    defaultValue: "All statuses",
-                  })}
+                  {t("pages.nodes.filterAllStatuses")}
                 </option>
                 <option value="online">{t("pages.nodes.online")}</option>
                 <option value="offline">{t("pages.nodes.offline")}</option>
                 <option value="unknown">{t("pages.nodes.unknown")}</option>
-                <option value="error">{t("pages.nodes.error", { defaultValue: "Error" })}</option>
+                <option value="error">{t("pages.nodes.error")}</option>
               </SelectNative>
               <SelectNative
                 value={xrayStateFilter}
                 onChange={(e) => setXrayStateFilter(e.target.value)}
               >
                 <option value="all">
-                  {t("pages.nodes.filterAllXrayStates", {
-                    defaultValue: "All Xray states",
-                  })}
+                  {t("pages.nodes.filterAllXrayStates")}
                 </option>
                 <option value="running">
-                  {t("pages.nodes.xrayStateRunning", { defaultValue: "Running" })}
+                  {t("pages.nodes.xrayStateRunning")}
                 </option>
                 <option value="stopped">
-                  {t("pages.nodes.xrayStateStopped", { defaultValue: "Stopped" })}
+                  {t("pages.nodes.xrayStateStopped")}
                 </option>
                 <option value="error">
-                  {t("pages.nodes.xrayStateError", { defaultValue: "Error" })}
+                  {t("pages.nodes.xrayStateError")}
                 </option>
                 <option value="unknown">
-                  {t("pages.nodes.xrayStateUnknown", { defaultValue: "Unknown" })}
+                  {t("pages.nodes.xrayStateUnknown")}
                 </option>
               </SelectNative>
             </div>
@@ -1113,11 +1233,14 @@ export function NodesPage() {
                   <th className="p-3">{t("pages.nodes.authMode")}</th>
                   <th className="p-3">{t("pages.nodes.status")}</th>
                   <th className="p-3">
-                    {t("pages.nodes.onlineUsers", { defaultValue: "Online users" })}
+                    {t("pages.nodes.onlineUsers")}
                   </th>
                   <th className="p-3">{t("pages.nodes.responseTime")}</th>
                   <th className="p-3">{t("pages.nodes.xrayVersion")}</th>
                   <th className="p-3">{t("pages.nodes.xrayState")}</th>
+                  <th className="p-3">
+                    {t("pages.nodes.telemtState")}
+                  </th>
                   <th className="p-3">{t("pages.nodes.assignedInbounds")}</th>
                   <th className="p-3 w-20">{t("pages.nodes.operate")}</th>
                 </tr>
@@ -1126,10 +1249,10 @@ export function NodesPage() {
                 {sortedAndFilteredRows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={11}
+                      colSpan={12}
                       className="p-6 text-center text-sm text-[var(--fg-subtle)]"
                     >
-                      {t("pages.nodes.noMatches", { defaultValue: "No nodes match filters" })}
+                      {t("pages.nodes.noMatches")}
                     </td>
                   </tr>
                 ) : sortedAndFilteredRows.map((r) => (
@@ -1179,8 +1302,118 @@ export function NodesPage() {
                     <td className="p-3 font-mono text-xs">
                       {r.xrayVersion || "—"}
                     </td>
-                    <td className="p-3">
-                      <XrayStateBadge state={r.xrayState} t={t} />
+                    <td
+                      className="p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center gap-1">
+                        <XrayStateBadge state={r.xrayState} t={t} />
+                        {r.enable ? (
+                          <>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="!p-1.5 text-[var(--fg-muted)] hover:text-amber-300 disabled:opacity-40"
+                              loading={xrayStoppingId === r.id}
+                              disabled={
+                                (r.xrayState || "").toLowerCase() !== "running" ||
+                                xrayStoppingId === r.id ||
+                                xrayRestartingId === r.id
+                              }
+                              title={
+                                (r.xrayState || "").toLowerCase() === "running"
+                                  ? t("pages.nodes.stopXrayOnNode")
+                                  : t("pages.nodes.xrayStoppedPowerInactiveHint", {
+                                      defaultValue:
+                                        "Xray is stopped — use the curved arrow beside this button (restart / force reload) to start it again.",
+                                    })
+                              }
+                              aria-label={
+                                (r.xrayState || "").toLowerCase() === "running"
+                                  ? t("pages.nodes.stopXrayOnNode")
+                                  : t("pages.nodes.xrayStoppedPowerInactiveHint", {
+                                      defaultValue:
+                                        "Xray is stopped — use the curved arrow beside this button (restart / force reload) to start it again.",
+                                    })
+                              }
+                              onClick={() => void stopXrayOnRow(r)}
+                            >
+                              <Power size={16} />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="!p-1.5 text-[var(--fg-muted)] hover:text-sky-300 disabled:opacity-40"
+                              loading={xrayRestartingId === r.id}
+                              disabled={
+                                xrayRestartingId === r.id || xrayStoppingId === r.id
+                              }
+                              title={t("pages.nodes.restartXrayOnNode")}
+                              aria-label={t("pages.nodes.restartXrayOnNode")}
+                              onClick={() => void restartXrayOnRow(r)}
+                            >
+                              <RefreshCw size={16} />
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
+                    </td>
+                    <td
+                      className="p-3"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <div className="flex items-center gap-1">
+                        <TelemtStateBadge state={r.telemtState} t={t} />
+                        {r.enable ? (
+                          <>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="!p-1.5 text-[var(--fg-muted)] hover:text-amber-300 disabled:opacity-40"
+                              loading={telemtStoppingId === r.id}
+                              disabled={
+                                (r.telemtState || "").toLowerCase() !== "running" ||
+                                telemtStoppingId === r.id ||
+                                telemtRestartingId === r.id
+                              }
+                              title={
+                                (r.telemtState || "").toLowerCase() === "running"
+                                  ? t("pages.nodes.stopTelemtOnNode")
+                                  : t("pages.nodes.telemtStoppedPowerInactiveHint", {
+                                      defaultValue:
+                                        "Telemt is stopped — use the curved arrow beside this button (restart) to start it again.",
+                                    })
+                              }
+                              aria-label={
+                                (r.telemtState || "").toLowerCase() === "running"
+                                  ? t("pages.nodes.stopTelemtOnNode")
+                                  : t("pages.nodes.telemtStoppedPowerInactiveHint", {
+                                      defaultValue:
+                                        "Telemt is stopped — use the curved arrow beside this button (restart) to start it again.",
+                                    })
+                              }
+                              onClick={() => void stopTelemtOnRow(r)}
+                            >
+                              <Power size={16} />
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              className="!p-1.5 text-[var(--fg-muted)] hover:text-sky-300 disabled:opacity-40"
+                              loading={telemtRestartingId === r.id}
+                              disabled={
+                                telemtRestartingId === r.id ||
+                                telemtStoppingId === r.id
+                              }
+                              title={t("pages.nodes.restartTelemtOnNode")}
+                              aria-label={t("pages.nodes.restartTelemtOnNode")}
+                              onClick={() => void restartTelemtOnRow(r)}
+                            >
+                              <RefreshCw size={16} />
+                            </Button>
+                          </>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="p-3 max-w-[220px] text-xs">
                       {!r.inbounds?.length
@@ -1253,7 +1486,7 @@ export function NodesPage() {
                   disabled={profileAssignSubmitting}
                   onClick={skipProfileStep}
                 >
-                  {t("pages.nodes.skipProfile", { defaultValue: "Skip" })}
+                  {t("pages.nodes.skipProfile")}
                 </Button>
                 <Button
                   type="button"
@@ -1262,9 +1495,7 @@ export function NodesPage() {
                   disabled={profileAssignSubmitting}
                   onClick={() => void submitProfileAssign()}
                 >
-                  {t("pages.nodes.assignProfileDone", {
-                    defaultValue: "Assign and close",
-                  })}
+                  {t("pages.nodes.assignProfileDone")}
                 </Button>
               </div>
             );

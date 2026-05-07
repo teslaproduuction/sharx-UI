@@ -1232,6 +1232,77 @@ export function buildStreamSettingsFromForm(
   return JSON.stringify(out);
 }
 
+/** One row in VLESS/Trojan `settings.fallbacks` (TCP+TLS multiplexing → dest). */
+export type VlessTrojanFallbackFormRow = {
+  /** TLS SNI (Xray field `name`); empty = any */
+  name: string;
+  /** Negotiated ALPN; empty = any */
+  alpn: string;
+  /** First HTTP path; empty = any */
+  path: string;
+  /** `addr:port`, Unix socket path, or port only → localhost */
+  dest: string;
+  /** PROXY protocol: 0 off, 1 or 2 on */
+  xver: string;
+};
+
+export function defaultVlessTrojanFallbackRow(): VlessTrojanFallbackFormRow {
+  return { name: "", alpn: "", path: "", dest: "", xver: "0" };
+}
+
+export function fallbackRowsSettingsToJson(
+  rows: VlessTrojanFallbackFormRow[],
+): unknown[] {
+  const out: unknown[] = [];
+  for (const row of rows) {
+    const d = row.dest.trim();
+    if (!d) continue;
+    const rec: Record<string, unknown> = {};
+    if (row.name.trim()) rec.name = row.name.trim();
+    if (row.alpn.trim()) rec.alpn = row.alpn.trim();
+    if (row.path.trim()) rec.path = row.path.trim();
+    rec.dest = /^\d+$/.test(d) ? parseInt(d, 10) : d;
+    const xv = parseInt(String(row.xver).trim(), 10);
+    rec.xver = Number.isFinite(xv) && xv >= 0 ? xv : 0;
+    out.push(rec);
+  }
+  return out;
+}
+
+export function parseVlessTrojanFallbackRowsFromSettings(
+  settingsStr: string,
+  protocol: InboundFormProtocol,
+): VlessTrojanFallbackFormRow[] {
+  if (protocol !== "vless" && protocol !== "trojan") return [];
+  let root: Record<string, unknown> = {};
+  try {
+    root = JSON.parse(settingsStr || "{}") as Record<string, unknown>;
+  } catch {
+    return [];
+  }
+  const fb = root.fallbacks;
+  if (!Array.isArray(fb)) return [];
+  return fb.map((item): VlessTrojanFallbackFormRow => {
+    if (typeof item !== "object" || item === null) return defaultVlessTrojanFallbackRow();
+    const o = item as Record<string, unknown>;
+    let destStr = "";
+    const dest = o.dest;
+    if (typeof dest === "number" && Number.isFinite(dest)) destStr = String(dest);
+    else if (typeof dest === "string") destStr = dest;
+    const xv = o.xver;
+    let xverStr = "0";
+    if (typeof xv === "number" && Number.isFinite(xv)) xverStr = String(Math.trunc(xv));
+    else if (typeof xv === "string") xverStr = xv;
+    return {
+      name: typeof o.name === "string" ? o.name : "",
+      alpn: typeof o.alpn === "string" ? o.alpn : "",
+      path: typeof o.path === "string" ? o.path : "",
+      dest: destStr,
+      xver: xverStr,
+    };
+  });
+}
+
 export type FirstClientPatch = {
   clientEmail: string;
   vlessFlow: string;
@@ -1242,6 +1313,8 @@ export type FirstClientPatch = {
   /** Xray mixed inbound: SOCKS/HTTP account user (maps to accounts[].user). */
   mixedUser?: string;
   mixedPassword?: string;
+  /** VLESS/Trojan only; persisted as `settings.fallbacks`. */
+  vlessTrojanFallbacks?: VlessTrojanFallbackFormRow[];
 };
 
 export function buildSettingsJson(
@@ -1273,7 +1346,7 @@ export function buildSettingsJson(
           },
         ],
         decryption: "none",
-        fallbacks: [],
+        fallbacks: fallbackRowsSettingsToJson(opts.vlessTrojanFallbacks ?? []),
       };
       return JSON.stringify(o);
     }
@@ -1319,7 +1392,7 @@ export function buildSettingsJson(
             updated_at: now,
           },
         ],
-        fallbacks: [],
+        fallbacks: fallbackRowsSettingsToJson(opts.vlessTrojanFallbacks ?? []),
       };
       return JSON.stringify(o);
     }
@@ -1403,6 +1476,11 @@ export function parseFirstClientFromSettings(
     }
     const clients = root.clients;
     if (!Array.isArray(clients) || clients.length === 0) {
+      if (protocol === "vless" || protocol === "trojan") {
+        return {
+          vlessTrojanFallbacks: parseVlessTrojanFallbackRowsFromSettings(settingsStr, protocol),
+        };
+      }
       return {};
     }
     const c = clients[0] as Record<string, unknown>;
@@ -1415,6 +1493,9 @@ export function parseFirstClientFromSettings(
       out.hysteriaAuth = c.password;
     if (typeof root.method === "string") out.ssMethod = root.method;
     if (typeof root.password === "string") out.ssPassword = root.password;
+    if (protocol === "vless" || protocol === "trojan") {
+      out.vlessTrojanFallbacks = parseVlessTrojanFallbackRowsFromSettings(settingsStr, protocol);
+    }
     return out;
   } catch {
     return {};
@@ -1515,6 +1596,10 @@ export function mergeFirstClientIntoSettings(
     }
     default:
       break;
+  }
+
+  if (protocol === "vless" || protocol === "trojan") {
+    root.fallbacks = fallbackRowsSettingsToJson(patch.vlessTrojanFallbacks ?? []);
   }
 
   clients = [first, ...clients.slice(1)];

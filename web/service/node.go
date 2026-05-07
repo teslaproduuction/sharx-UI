@@ -4,6 +4,8 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -277,6 +279,17 @@ func (s *NodeService) SetNodeXrayVersion(id int, version string) error {
 	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("xray_version", version).Error
 }
 
+// SetNodeTelemtState persists worker Telemt sidecar state (running | stopped | unknown).
+func (s *NodeService) SetNodeTelemtState(id int, state string) error {
+	st := strings.TrimSpace(strings.ToLower(state))
+	switch st {
+	case model.NodeTelemtRunning, model.NodeTelemtStopped, model.NodeTelemtUnknown:
+	default:
+		st = model.NodeTelemtUnknown
+	}
+	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("telemt_state", st).Error
+}
+
 func statusMapRunning(v interface{}) bool {
 	switch x := v.(type) {
 	case bool:
@@ -286,6 +299,26 @@ func statusMapRunning(v interface{}) bool {
 	default:
 		return false
 	}
+}
+
+func statusMapTelemtRunning(st map[string]interface{}) bool {
+	if st == nil {
+		return false
+	}
+	if v, ok := st["telemtRunning"]; ok {
+		return statusMapRunning(v)
+	}
+	if v, ok := st["telemtCount"]; ok {
+		switch x := v.(type) {
+		case float64:
+			return x > 0
+		case int:
+			return x > 0
+		case int64:
+			return x > 0
+		}
+	}
+	return false
 }
 
 func extractNodeXrayVersion(status map[string]interface{}) string {
@@ -348,7 +381,30 @@ func (s *NodeService) RefreshNodeXrayStateFromWorker(node *model.Node) error {
 	return s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
 }
 
-// StopXrayOnNode stops the Xray core on the worker (panel disables node).
+// RefreshNodeTelemtStateFromWorker sets telemt_state from GET /api/v1/status (or unknown on old workers / errors).
+func (s *NodeService) RefreshNodeTelemtStateFromWorker(node *model.Node) error {
+	if node == nil {
+		return nil
+	}
+	if !node.Enable {
+		return s.SetNodeTelemtState(node.Id, model.NodeTelemtStopped)
+	}
+	st, err := s.GetNodeStatus(node)
+	if err != nil {
+		return s.SetNodeTelemtState(node.Id, model.NodeTelemtUnknown)
+	}
+	_, hasTR := st["telemtRunning"]
+	_, hasTC := st["telemtCount"]
+	if !hasTR && !hasTC {
+		return s.SetNodeTelemtState(node.Id, model.NodeTelemtUnknown)
+	}
+	if statusMapTelemtRunning(st) {
+		return s.SetNodeTelemtState(node.Id, model.NodeTelemtRunning)
+	}
+	return s.SetNodeTelemtState(node.Id, model.NodeTelemtStopped)
+}
+
+// StopXrayOnNode stops the Xray core on the worker via stop-xray. Telemt status is refreshed from the node (Telemt keeps running unless stopped separately).
 func (s *NodeService) StopXrayOnNode(node *model.Node) error {
 	if node == nil {
 		return fmt.Errorf("node is nil")
@@ -374,6 +430,80 @@ func (s *NodeService) StopXrayOnNode(node *model.Node) error {
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("stop-xray: HTTP %d: %s", resp.StatusCode, string(body))
 	}
+	_ = s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
+	_ = s.RefreshNodeTelemtStateFromWorker(node)
+	return nil
+}
+
+// StopTelemtOnNode stops Telemt sidecars on the worker without stopping Xray.
+func (s *NodeService) StopTelemtOnNode(node *model.Node) error {
+	if node == nil {
+		return fmt.Errorf("node is nil")
+	}
+	client, err := s.createHTTPClient(node, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v1/stop-telemt", nodeRequestBaseURL(node))
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("stop-telemt: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	_ = s.SetNodeTelemtState(node.Id, model.NodeTelemtStopped)
+	return nil
+}
+
+// RestartTelemtOnNode restarts Telemt sidecars on the worker (last applied payloads).
+func (s *NodeService) RestartTelemtOnNode(node *model.Node) error {
+	if node == nil {
+		return fmt.Errorf("node is nil")
+	}
+	client, err := s.createHTTPClient(node, 60*time.Second)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/v1/restart-telemt", nodeRequestBaseURL(node))
+	req, err := http.NewRequest("POST", url, nil)
+	if err != nil {
+		return err
+	}
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("restart-telemt: HTTP %d: %s", resp.StatusCode, string(body))
+	}
+	_ = s.RefreshNodeTelemtStateFromWorker(node)
+	return nil
+}
+
+// RestartXrayOnNode force-reloads Xray on the worker (same as panel “restart” for local core).
+func (s *NodeService) RestartXrayOnNode(node *model.Node) error {
+	if node == nil {
+		return fmt.Errorf("node is nil")
+	}
+	if err := s.ForceReloadNode(node); err != nil {
+		return err
+	}
+	_ = s.RefreshNodeXrayStateFromWorker(node)
 	return nil
 }
 
@@ -383,6 +513,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 		resetNodeHealthTgHysteresis(node.Id)
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
 		_ = s.SetNodeXrayVersion(node.Id, "")
+		_ = s.SetNodeTelemtState(node.Id, model.NodeTelemtStopped)
 		return nil
 	}
 	// Get previous status before checking (to detect status changes)
@@ -398,6 +529,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 		}
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayError)
 		_ = s.SetNodeXrayVersion(node.Id, "")
+		_ = s.SetNodeTelemtState(node.Id, model.NodeTelemtUnknown)
 		sendDown, _, downFrom := nodeHealthTgHysteresisAfterCheck(node.Id, true, previousStatus)
 		if sendDown {
 			if downFrom == "" {
@@ -423,6 +555,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 	}
 	if fresh, gErr := s.GetNode(node.Id); gErr == nil && fresh.Enable {
 		_ = s.RefreshNodeXrayStateFromWorker(fresh)
+		_ = s.RefreshNodeTelemtStateFromWorker(fresh)
 	}
 	return nil
 }
@@ -626,11 +759,13 @@ type NodeClientTraffic struct {
 
 // NodePublicHealth is a subset of the node worker's GET /health (no auth).
 type NodePublicHealth struct {
-	Status      string `json:"status"`
-	Service     string `json:"service"`
-	XrayRunning bool   `json:"xrayRunning"`
-	XrayVersion string `json:"xrayVersion"`
-	XrayUptime  int64  `json:"xrayUptime"`
+	Status        string `json:"status"`
+	Service       string `json:"service"`
+	XrayRunning   bool   `json:"xrayRunning"`
+	XrayVersion   string `json:"xrayVersion"`
+	XrayUptime    int64  `json:"xrayUptime"`
+	TelemtRunning bool   `json:"telemtRunning"`
+	TelemtCount   int    `json:"telemtCount"`
 }
 
 // isExpectedNodeStatsFailure returns true for errors that are normal when Xray is not up yet.
@@ -2033,14 +2168,15 @@ func (s *NodeService) syncInboundAssignmentToNodes(inboundId int, oldNodeIds, ne
 					// If worker Xray is not running yet, fallback to full apply-config once to start it.
 					if strings.Contains(strings.ToLower(err.Error()), "xray is not running") {
 						xs := NewXrayService()
-						cfgJSON, cfgErr := xs.BuildWorkerXrayConfigForNode(node)
+						cfgJSON, coreH, cfgErr := xs.BuildWorkerXrayConfigForNodeWithMeta(node)
 						if cfgErr != nil {
 							recordErr(fmt.Errorf("build full worker config for node %s fallback: %w", node.Name, cfgErr))
 							return
 						}
 						ibs, _ := xs.InboundsForWorkerNode(node)
 						telm, _ := BuildTelemtPayloadsForNode(node, ibs)
-						if apErr := s.ApplyConfigToNode(node, cfgJSON, &telm); apErr != nil {
+						meta := NewApplyWorkerConfigMeta(cfgJSON, coreH)
+						if apErr := s.ApplyConfigToNode(node, cfgJSON, &telm, meta); apErr != nil {
 							recordErr(fmt.Errorf("fallback apply-config to node %s: %w", node.Name, apErr))
 							return
 						}
@@ -2150,9 +2286,30 @@ func (s *NodeService) UnassignOutboundFromNode(outboundId int) error {
 	return db.Where("outbound_id = ?", outboundId).Delete(&model.OutboundNodeMapping{}).Error
 }
 
+// ApplyWorkerConfigMeta is optional metadata sent with worker apply-config (hashes for tracing and integrity).
+type ApplyWorkerConfigMeta struct {
+	// CoreProfileHash is SHA-256 hex of the panel core profile ConfigJson when this build used a profile (optional).
+	CoreProfileHash string
+	// ExpectedPayloadSha256 is SHA-256 hex of the exact Xray JSON bytes in the request "config" field (optional).
+	ExpectedPayloadSha256 string
+}
+
+// NewApplyWorkerConfigMeta builds metadata for apply-config: payload hash always set; core profile hash may be empty.
+func NewApplyWorkerConfigMeta(workerJSON []byte, coreProfileHashHex string) *ApplyWorkerConfigMeta {
+	if len(workerJSON) == 0 {
+		return nil
+	}
+	sum := sha256.Sum256(workerJSON)
+	return &ApplyWorkerConfigMeta{
+		CoreProfileHash:       coreProfileHashHex,
+		ExpectedPayloadSha256: hex.EncodeToString(sum[:]),
+	}
+}
+
 // ApplyConfigToNode sends XRAY JSON and optional Telemt TOML payloads to a node.
 // When telemt is non-nil, the array is always sent (empty slice stops all Telemt sidecars on the worker).
-func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, telemt *[]TelemtNodePayload) error {
+// meta may be nil; when set, coreProfileHash and expectedConfigSha256 are included in the apply-config body.
+func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, telemt *[]TelemtNodePayload, meta *ApplyWorkerConfigMeta) error {
 	// Use reasonable timeout for apply-config (30 seconds should be enough for most cases)
 	// If config is very large or node is slow, this can be increased
 	client, err := s.createHTTPClient(node, 30*time.Second)
@@ -2170,6 +2327,14 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 	}
 	if telemt != nil {
 		requestBody["telemt"] = *telemt
+	}
+	if meta != nil {
+		if meta.CoreProfileHash != "" {
+			requestBody["coreProfileHash"] = meta.CoreProfileHash
+		}
+		if meta.ExpectedPayloadSha256 != "" {
+			requestBody["expectedConfigSha256"] = meta.ExpectedPayloadSha256
+		}
 	}
 
 	requestJSON, err := json.Marshal(requestBody)
@@ -2203,20 +2368,26 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 		return fmt.Errorf("node returned status %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	var meta struct {
-		AppliedAt    int64  `json:"appliedAt"`
-		ConfigSha256 string `json:"configSha256"`
-		XrayVersion  string `json:"xrayVersion"`
-		XrayRunning  bool   `json:"xrayRunning"`
-		Message      string `json:"message"`
+	var applyResp struct {
+		AppliedAt         int64  `json:"appliedAt"`
+		ConfigSha256      string `json:"configSha256"`
+		CoreProfileHash   string `json:"coreProfileHash,omitempty"`
+		ConfigSha256Match *bool  `json:"configSha256Match,omitempty"`
+		XrayVersion       string `json:"xrayVersion"`
+		XrayRunning       bool   `json:"xrayRunning"`
+		Message           string `json:"message"`
 	}
-	parseOK := json.Unmarshal(respBody, &meta) == nil
-	if parseOK && (meta.AppliedAt != 0 || meta.ConfigSha256 != "") {
-		logger.Infof("[Node: %s] apply-config ok: appliedAt=%d configSha256=%s xrayVersion=%q xrayRunning=%v",
-			node.Name, meta.AppliedAt, meta.ConfigSha256, meta.XrayVersion, meta.XrayRunning)
+	parseOK := json.Unmarshal(respBody, &applyResp) == nil
+	if parseOK && (applyResp.AppliedAt != 0 || applyResp.ConfigSha256 != "") {
+		var matchStr string
+		if applyResp.ConfigSha256Match != nil {
+			matchStr = fmt.Sprintf(" configSha256Match=%v", *applyResp.ConfigSha256Match)
+		}
+		logger.Infof("[Node: %s] apply-config ok: appliedAt=%d configSha256=%s coreProfileHash=%s%s xrayVersion=%q xrayRunning=%v",
+			node.Name, applyResp.AppliedAt, applyResp.ConfigSha256, applyResp.CoreProfileHash, matchStr, applyResp.XrayVersion, applyResp.XrayRunning)
 	}
 	if parseOK {
-		if meta.XrayRunning {
+		if applyResp.XrayRunning {
 			_ = s.SetNodeXrayState(node.Id, model.NodeXrayRunning)
 		} else {
 			_ = s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
@@ -2224,6 +2395,7 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 	} else {
 		_ = s.RefreshNodeXrayStateFromWorker(node)
 	}
+	_ = s.RefreshNodeTelemtStateFromWorker(node)
 
 	return nil
 }

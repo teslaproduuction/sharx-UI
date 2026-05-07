@@ -1,6 +1,8 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
@@ -16,6 +18,21 @@ import (
 // XrayCoreConfigProfileService provides business logic for managing Xray core configuration profiles.
 type XrayCoreConfigProfileService struct{}
 
+func coreConfigContentHash(configJSON string) string {
+	if configJSON == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(configJSON))
+	return hex.EncodeToString(sum[:])
+}
+
+func attachCoreProfileHash(p *model.XrayCoreConfigProfile) {
+	if p == nil {
+		return
+	}
+	p.ConfigHash = coreConfigContentHash(p.ConfigJson)
+}
+
 // GetProfile retrieves a profile by ID.
 func (s *XrayCoreConfigProfileService) GetProfile(id int) (*model.XrayCoreConfigProfile, error) {
 	db := database.GetDB()
@@ -29,6 +46,7 @@ func (s *XrayCoreConfigProfileService) GetProfile(id int) (*model.XrayCoreConfig
 	if err == nil {
 		profile.NodeIds = nodeIds
 	}
+	attachCoreProfileHash(&profile)
 	return &profile, nil
 }
 
@@ -71,6 +89,9 @@ func (s *XrayCoreConfigProfileService) GetProfilesForNode(nodeId int) ([]*model.
 		return nil, err
 	}
 
+	for i := range profiles {
+		attachCoreProfileHash(profiles[i])
+	}
 	return profiles, nil
 }
 
@@ -88,6 +109,7 @@ func (s *XrayCoreConfigProfileService) GetAllProfiles(userId int) ([]*model.Xray
 		if err == nil {
 			profile.NodeIds = nodeIds
 		}
+		attachCoreProfileHash(profile)
 	}
 	return profiles, nil
 }
@@ -131,6 +153,7 @@ func (s *XrayCoreConfigProfileService) AddProfile(profile *model.XrayCoreConfigP
 	}
 
 	logger.Infof("Xray core config profile %d created for user %d", profile.Id, profile.UserId)
+	attachCoreProfileHash(profile)
 	return profile, nil
 }
 
@@ -299,7 +322,8 @@ func (s *XrayCoreConfigProfileService) EnsureDefaultProfile(userId int) (*model.
 }
 
 // AssignProfileToNodes assigns a profile to multiple nodes.
-// Validates that nodes are not already assigned to other profiles.
+// Nodes that were bound to another profile are unbound first, then this profile's
+// node list is replaced by nodeIds (same as before: clears previous assignments for the profile).
 func (s *XrayCoreConfigProfileService) AssignProfileToNodes(profileId int, nodeIds []int) error {
 	if len(nodeIds) == 0 {
 		// Remove all assignments if no nodes provided
@@ -307,26 +331,12 @@ func (s *XrayCoreConfigProfileService) AssignProfileToNodes(profileId int, nodeI
 		return db.Where("profile_id = ?", profileId).Delete(&model.ProfileNodeMapping{}).Error
 	}
 
-	// Check if any nodes are already assigned to other profiles
-	conflictingNodes, err := s.checkNodeAssignedToOtherProfile(nodeIds, profileId)
-	if err != nil {
-		return fmt.Errorf("failed to check node assignments: %w", err)
-	}
-
-	if len(conflictingNodes) > 0 {
-		// Get node names for error message
-		db := database.GetDB()
-		var nodes []model.Node
-		db.Where("id IN ?", conflictingNodes).Find(&nodes)
-		nodeNames := make([]string, len(nodes))
-		for i, node := range nodes {
-			nodeNames[i] = node.Name
-		}
-		return fmt.Errorf("nodes already assigned to other profile: %v", nodeNames)
-	}
-
 	db := database.GetDB()
-	// First, remove all existing assignments for this profile
+	// One node maps to at most one profile: remove these nodes from whichever profile they had.
+	if err := db.Where("node_id IN ?", nodeIds).Delete(&model.ProfileNodeMapping{}).Error; err != nil {
+		return err
+	}
+	// Remove all existing assignments for this profile, then add the new set.
 	if err := db.Where("profile_id = ?", profileId).Delete(&model.ProfileNodeMapping{}).Error; err != nil {
 		return err
 	}
@@ -344,28 +354,17 @@ func (s *XrayCoreConfigProfileService) AssignProfileToNodes(profileId int, nodeI
 	return nil
 }
 
-// checkNodeAssignedToOtherProfile checks if any of the given nodes are already assigned to a different profile.
-func (s *XrayCoreConfigProfileService) checkNodeAssignedToOtherProfile(nodeIds []int, excludeProfileId int) ([]int, error) {
-	if len(nodeIds) == 0 {
-		return nil, nil
-	}
-
+// GetNodeIDsWithProfileAssignment returns node IDs that have at least one core config profile mapping.
+func (s *XrayCoreConfigProfileService) GetNodeIDsWithProfileAssignment() (map[int]struct{}, error) {
 	db := database.GetDB()
-	var conflictingMappings []model.ProfileNodeMapping
-	err := db.Where("node_id IN ? AND profile_id != ?", nodeIds, excludeProfileId).Find(&conflictingMappings).Error
+	var nodeIds []int
+	err := db.Model(&model.ProfileNodeMapping{}).Distinct("node_id").Pluck("node_id", &nodeIds).Error
 	if err != nil {
 		return nil, err
 	}
-
-	conflictingNodeIds := make(map[int]bool)
-	for _, mapping := range conflictingMappings {
-		conflictingNodeIds[mapping.NodeId] = true
+	out := make(map[int]struct{}, len(nodeIds))
+	for _, id := range nodeIds {
+		out[id] = struct{}{}
 	}
-
-	result := make([]int, 0, len(conflictingNodeIds))
-	for nodeId := range conflictingNodeIds {
-		result = append(result, nodeId)
-	}
-
-	return result, nil
+	return out, nil
 }

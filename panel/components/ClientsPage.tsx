@@ -45,6 +45,7 @@ import { CompareModeFilterField, type CompareOp } from "@/components/CompareMode
 import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
 import {
   Button,
+  Checkbox,
   CheckboxField,
   ConfirmDialog,
   HelpTooltip,
@@ -3583,9 +3584,7 @@ export function ClientsPage() {
                         key={colId}
                         className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_8%,transparent)]"
                       >
-                        <input
-                          type="checkbox"
-                          className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)]"
+                        <Checkbox
                           checked={columnVisibility[colId]}
                           disabled={colId === "email"}
                           onChange={(e) => {
@@ -3708,10 +3707,8 @@ export function ClientsPage() {
                   <tr className="sticky top-0 z-[1] border-b border-[var(--border)] bg-[var(--surface)]">
                     {bulkMode ? (
                       <th className="w-10 p-3">
-                        <input
+                        <Checkbox
                           ref={headerSelectRef}
-                          type="checkbox"
-                          className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)] focus:ring-[var(--accent)]"
                           checked={allPageSelected}
                           onChange={(e) => {
                             e.stopPropagation();
@@ -4057,9 +4054,7 @@ export function ClientsPage() {
                               className="p-3 align-middle"
                               onClick={(e) => e.stopPropagation()}
                             >
-                              <input
-                                type="checkbox"
-                                className="size-4 rounded border-[var(--border)] bg-[var(--bg-elevated)] text-[var(--accent)] focus:ring-[var(--accent)]"
+                              <Checkbox
                                 checked={selectedIds.has(r.id)}
                                 onChange={(e) => {
                                   e.stopPropagation();

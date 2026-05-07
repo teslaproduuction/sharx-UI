@@ -28,6 +28,16 @@ func (m *Manager) HasRunning() bool {
 	return len(m.running) > 0
 }
 
+// RunningCount returns how many Telemt sidecar tags are supervised.
+func (m *Manager) RunningCount() int {
+	if m == nil {
+		return 0
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.running)
+}
+
 type telemtUserDetail struct {
 	Username             string   `json:"username"`
 	CurrentConnections   uint64   `json:"current_connections"`

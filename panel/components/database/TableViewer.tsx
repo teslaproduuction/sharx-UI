@@ -22,6 +22,7 @@ import type { UseTableDataResult } from "@/lib/useTableData";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { Modal } from "@/components/ui/modal";
+import { SelectNative } from "@/components/ui/select-native";
 import { Spinner } from "@/components/ui/spinner";
 import { Switch } from "@/components/ui/switch";
 import { CellDisplay, EditableCell } from "./EditableCell";
@@ -236,17 +237,19 @@ function Pagination({ page, pageSize, total, onPage, onPageSize }: PaginationPro
       {/* Rows per page — hidden on very small screens */}
       <div className="hidden items-center gap-2 sm:flex">
         <span>{t("pages.dbInspector.rowsPerPage")}</span>
-        <select
+        <SelectNative
+          inputSize="sm"
           value={pageSize}
           onChange={(e) => onPageSize(Number(e.target.value))}
-          className="h-7 rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] px-1.5 text-xs text-[var(--fg)] outline-none"
+          className="!w-auto min-w-[3.25rem] shadow-none"
+          aria-label={t("pages.dbInspector.rowsPerPage")}
         >
           {[10, 25, 50, 100].map((s) => (
             <option key={s} value={s}>
               {s}
             </option>
           ))}
-        </select>
+        </SelectNative>
       </div>
 
       {/* Count */}

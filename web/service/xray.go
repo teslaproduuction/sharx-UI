@@ -539,14 +539,15 @@ func (s *XrayService) ApplySessionIPBlockHotAfterDB(clientId int, email, normali
 				return
 			}
 			for _, n := range failed {
-				cfgJSON, err := s.BuildWorkerXrayConfigForNode(n)
+				cfgJSON, coreH, err := s.BuildWorkerXrayConfigForNodeWithMeta(n)
 				if err != nil {
 					logger.Warningf("session IP block: build config for node %q: %v", n.Name, err)
 					continue
 				}
 				ibs, _ := s.InboundsForWorkerNode(n)
 				telm, _ := BuildTelemtPayloadsForNode(n, ibs)
-				if err := ns.ApplyConfigToNode(n, cfgJSON, &telm); err != nil {
+				meta := NewApplyWorkerConfigMeta(cfgJSON, coreH)
+				if err := ns.ApplyConfigToNode(n, cfgJSON, &telm, meta); err != nil {
 					logger.Warningf("session IP block: apply-config fallback node %q: %v", n.Name, err)
 				}
 			}
@@ -593,7 +594,8 @@ func (s *XrayService) ApplySessionIPBlockHotAfterDB(clientId int, email, normali
 }
 
 // buildNodeWorkerConfigJSON builds the same Xray JSON that ApplyConfigToNode sends for one node.
-func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*model.Inbound, baseConfig *xray.Config, hyCert, hyKey string) ([]byte, error) {
+// The returned core profile hash is SHA-256 hex of the selected profile's ConfigJson (DB), or "" if none.
+func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*model.Inbound, baseConfig *xray.Config, hyCert, hyKey string) ([]byte, string, error) {
 	// Determine which core config profile to use
 	var coreConfigProfile *model.XrayCoreConfigProfile
 	profileService := XrayCoreConfigProfileService{}
@@ -613,12 +615,20 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 				}
 			}
 		}
+	}
 
-		if coreConfigProfile == nil {
-			profile, err := profileService.EnsureDefaultProfile(inbounds[0].UserId)
-			if err == nil && profile != nil {
-				coreConfigProfile = profile
-			}
+	// Explicit profile_node_mappings win (e.g. no inbounds on the node yet, or inbound user != profile owner).
+	if coreConfigProfile == nil && node != nil {
+		assigned, err := profileService.GetProfilesForNode(node.Id)
+		if err == nil && len(assigned) > 0 {
+			coreConfigProfile = assigned[0]
+		}
+	}
+
+	if coreConfigProfile == nil && len(inbounds) > 0 {
+		profile, err := profileService.EnsureDefaultProfile(inbounds[0].UserId)
+		if err == nil && profile != nil {
+			coreConfigProfile = profile
 		}
 	}
 
@@ -739,7 +749,15 @@ func (s *XrayService) buildNodeWorkerConfigJSON(node *model.Node, inbounds []*mo
 		logger.Warningf("session IP block routing merge (node worker): %v", err)
 	}
 
-	return json.MarshalIndent(&nodeConfig, "", "  ")
+	out, err := json.MarshalIndent(&nodeConfig, "", "  ")
+	if err != nil {
+		return nil, "", err
+	}
+	coreHash := ""
+	if coreConfigProfile != nil {
+		coreHash = coreConfigContentHash(coreConfigProfile.ConfigJson)
+	}
+	return out, coreHash, nil
 }
 
 // InboundsForWorkerNode returns enabled inbounds assigned to the node (same set as worker Xray/Telemt sync).
@@ -783,30 +801,37 @@ func (s *XrayService) InboundsForWorkerNode(node *model.Node) ([]*model.Inbound,
 
 // BuildWorkerXrayConfigForNode returns the Xray config JSON for a worker node (same as apply-config payload).
 func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, error) {
+	b, _, err := s.BuildWorkerXrayConfigForNodeWithMeta(node)
+	return b, err
+}
+
+// BuildWorkerXrayConfigForNodeWithMeta returns worker Xray JSON and SHA-256 hex of the panel core profile ConfigJson
+// when the build selected a profile (empty string when using template-only base).
+func (s *XrayService) BuildWorkerXrayConfigForNodeWithMeta(node *model.Node) ([]byte, string, error) {
 	if node == nil {
-		return nil, fmt.Errorf("node is nil")
+		return nil, "", fmt.Errorf("node is nil")
 	}
 	if s.settingService == (SettingService{}) {
 		s.settingService = SettingService{}
 	}
 
 	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
-		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in BuildWorkerXrayConfigForNode: %v", err)
+		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in BuildWorkerXrayConfigForNodeWithMeta: %v", err)
 	}
 
 	templateConfig, err := s.settingService.GetXrayConfigTemplate()
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	baseConfig := &xray.Config{}
 	if err := json.Unmarshal([]byte(templateConfig), baseConfig); err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	ibs, err := s.InboundsForWorkerNode(node)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	hyCert, _ := s.settingService.GetCertFile()
@@ -814,83 +839,123 @@ func (s *XrayService) BuildWorkerXrayConfigForNode(node *model.Node) ([]byte, er
 	return s.buildNodeWorkerConfigJSON(node, ibs, baseConfig, hyCert, hyKey)
 }
 
-// restartXrayMultiMode handles Xray restart in multi-node mode by sending configs to nodes.
-func (s *XrayService) restartXrayMultiMode(isForce bool) error {
-	// Initialize nodeService if not already initialized
+// MergeUniquePositiveInts returns ids > 0, each once, preserving first-seen order.
+func MergeUniquePositiveInts(lists ...[]int) []int {
+	seen := make(map[int]struct{})
+	var out []int
+	for _, list := range lists {
+		for _, id := range list {
+			if id <= 0 {
+				continue
+			}
+			if _, ok := seen[id]; ok {
+				continue
+			}
+			seen[id] = struct{}{}
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// multiWorkerNodeIDsNeedingPush returns enabled node IDs that should receive worker Xray config
+// (have inbounds and/or a core config profile mapping).
+func (s *XrayService) multiWorkerNodeIDsNeedingPush() ([]int, error) {
 	if s.nodeService == (NodeService{}) {
 		s.nodeService = NodeService{}
 	}
 
-	// Get all nodes
 	nodes, err := s.nodeService.GetAllNodes()
 	if err != nil {
-		return fmt.Errorf("failed to get nodes: %w", err)
+		return nil, fmt.Errorf("failed to get nodes: %w", err)
 	}
 
-	// Group inbounds by node
 	nodeInbounds := make(map[int][]*model.Inbound)
 	allInbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
-		return fmt.Errorf("failed to get inbounds: %w", err)
+		return nil, fmt.Errorf("failed to get inbounds: %w", err)
 	}
 
-	// Get template config (ensure it's valid first)
-	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
-		logger.Warningf("Failed to ensure xrayTemplateConfig is valid in restartXrayMultiMode: %v", err)
-		// Continue anyway; we'll still try to use what we have.
-	}
-
-	templateConfig, err := s.settingService.GetXrayConfigTemplate()
-	if err != nil {
-		return err
-	}
-
-	baseConfig := &xray.Config{}
-	if err := json.Unmarshal([]byte(templateConfig), baseConfig); err != nil {
-		return err
-	}
-
-	// Group inbounds by their assigned nodes
 	for _, inbound := range allInbounds {
 		if !inbound.Enable {
 			continue
 		}
-
 		nodesForIB, err := s.nodeService.GetNodesForInbound(inbound.Id)
 		if err != nil || len(nodesForIB) == 0 {
 			logger.Debugf("Inbound %d is not assigned to any node, skipping", inbound.Id)
 			continue
 		}
-
 		for _, n := range nodesForIB {
 			nodeInbounds[n.Id] = append(nodeInbounds[n.Id], inbound)
 		}
 	}
 
-	hyCert, _ := s.settingService.GetCertFile()
-	hyKey, _ := s.settingService.GetKeyFile()
+	profileSvc := &XrayCoreConfigProfileService{}
+	nodesWithProfile, err := profileSvc.GetNodeIDsWithProfileAssignment()
+	if err != nil {
+		logger.Warningf("multiWorkerNodeIDsNeedingPush: list profile node mappings: %v", err)
+		nodesWithProfile = nil
+	}
 
-	// Send config to each node in parallel for better performance
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	var errors []error
-
-	// Send configs to all nodes in parallel
+	var ids []int
 	for _, node := range nodes {
 		if !node.Enable {
 			continue
 		}
-		inbounds, ok := nodeInbounds[node.Id]
-		if !ok {
-			// No inbounds assigned to this node, skip
+		inbounds := nodeInbounds[node.Id]
+		_, hasProfile := nodesWithProfile[node.Id]
+		if len(inbounds) == 0 && !hasProfile {
 			continue
 		}
+		ids = append(ids, node.Id)
+	}
+	return ids, nil
+}
 
+// applyWorkerConfigToNodeIDsMulti pushes built Xray JSON (+ Telemt) to the given worker node IDs via node API.
+// Caller must ensure multi-node mode; does not stop local Telemt or touch local Xray.
+func (s *XrayService) applyWorkerConfigToNodeIDsMulti(nodeIDs []int) error {
+	nodeIDs = MergeUniquePositiveInts(nodeIDs)
+	if len(nodeIDs) == 0 {
+		return nil
+	}
+
+	if s.nodeService == (NodeService{}) {
+		s.nodeService = NodeService{}
+	}
+
+	if err := s.settingService.EnsureXrayTemplateConfigValid(); err != nil {
+		logger.Warningf("applyWorkerConfigToNodeIDsMulti: ensure xrayTemplateConfig: %v", err)
+	}
+
+	var nodes []*model.Node
+	for _, nid := range nodeIDs {
+		node, err := s.nodeService.GetNode(nid)
+		if err != nil {
+			logger.Warningf("applyWorkerConfigToNodeIDsMulti: skip node %d: %v", nid, err)
+			continue
+		}
+		if !node.Enable {
+			continue
+		}
+		nodes = append(nodes, node)
+	}
+
+	attempted := len(nodes)
+	if attempted == 0 {
+		return nil
+	}
+
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var errors []error
+
+	for _, node := range nodes {
+		n := node
 		wg.Add(1)
-		go func(n *model.Node, ibs []*model.Inbound) {
+		go func() {
 			defer wg.Done()
-
-			configJSON, err := s.buildNodeWorkerConfigJSON(n, ibs, baseConfig, hyCert, hyKey)
+			configJSON, coreH, err := s.BuildWorkerXrayConfigForNodeWithMeta(n)
 			if err != nil {
 				logger.Errorf("[Node: %s] Failed to marshal config: %v", n.Name, err)
 				mu.Lock()
@@ -898,12 +963,13 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 				mu.Unlock()
 				return
 			}
-
+			ibs, _ := s.InboundsForWorkerNode(n)
 			telm, terr := BuildTelemtPayloadsForNode(n, ibs)
 			if terr != nil {
 				logger.Warningf("[Node: %s] Telemt payload build: %v", n.Name, terr)
 			}
-			if err := s.nodeService.ApplyConfigToNode(n, configJSON, &telm); err != nil {
+			meta := NewApplyWorkerConfigMeta(configJSON, coreH)
+			if err := s.nodeService.ApplyConfigToNode(n, configJSON, &telm, meta); err != nil {
 				logger.Errorf("[Node: %s] Failed to apply config: %v", n.Name, err)
 				mu.Lock()
 				errors = append(errors, fmt.Errorf("node %s: %w", n.Name, err))
@@ -911,27 +977,63 @@ func (s *XrayService) restartXrayMultiMode(isForce bool) error {
 			} else {
 				logger.Infof("[Node: %s] Successfully applied config", n.Name)
 			}
-		}(node, inbounds)
+		}()
 	}
 
-	// Wait for all goroutines to complete
 	wg.Wait()
 
-	// Log summary
 	if len(errors) > 0 {
-		logger.Warningf("Failed to apply config to %d node(s) out of %d", len(errors), len(nodes))
+		logger.Warningf("Failed to apply config to %d node(s) out of %d", len(errors), attempted)
 		for _, err := range errors {
 			logger.Warningf("  - %v", err)
 		}
-		// Return error only if all nodes failed
-		if len(errors) == len(nodes) {
-			return fmt.Errorf("failed to apply config to all nodes: %d errors", len(errors))
+		if len(errors) == attempted {
+			return fmt.Errorf("failed to apply config to all targeted nodes: %d errors", len(errors))
 		}
 	} else {
-		logger.Infof("Successfully applied config to all %d node(s)", len(nodes))
+		logger.Infof("Successfully applied config to %d node(s)", attempted)
 	}
 
 	return nil
+}
+
+// ApplyWorkerConfigToNodeIDs sends worker Xray config to the listed nodes via node API (multi-node).
+// In single-node mode, falls back to RestartXray (local core).
+func (s *XrayService) ApplyWorkerConfigToNodeIDs(nodeIDs []int) error {
+	multiMode, err := s.settingService.GetMultiNodeMode()
+	if err != nil {
+		multiMode = false
+	}
+	if !multiMode {
+		return s.RestartXray(false)
+	}
+	return s.applyWorkerConfigToNodeIDsMulti(nodeIDs)
+}
+
+// ApplyWorkerXrayConfigToAllMultiWorkerNodes pushes config to every worker that normally receives sync
+// (same set as a full multi-node RestartXray, without stopping local Telemt).
+func (s *XrayService) ApplyWorkerXrayConfigToAllMultiWorkerNodes() error {
+	multiMode, err := s.settingService.GetMultiNodeMode()
+	if err != nil {
+		multiMode = false
+	}
+	if !multiMode {
+		return s.RestartXray(false)
+	}
+	ids, err := s.multiWorkerNodeIDsNeedingPush()
+	if err != nil {
+		return err
+	}
+	return s.applyWorkerConfigToNodeIDsMulti(ids)
+}
+
+// restartXrayMultiMode handles Xray restart in multi-node mode by sending configs to nodes.
+func (s *XrayService) restartXrayMultiMode(isForce bool) error {
+	ids, err := s.multiWorkerNodeIDsNeedingPush()
+	if err != nil {
+		return err
+	}
+	return s.applyWorkerConfigToNodeIDsMulti(ids)
 }
 
 // EnsureXrayConfigFile generates and saves the Xray configuration file from database.
