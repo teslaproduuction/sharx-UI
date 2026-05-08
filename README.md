@@ -1,7 +1,7 @@
 <div align="center">
 
 <!-- SharX Hero Section -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=3XUI%20Fork%20%7C%20Grafana%20Integration%20%7C%20Multi-Node%20Management&descSize=25&descAlignY=60" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=3XUI%20Fork%20%7C%20Multi-Node%20%7C%20Subscription%20Builder%20%7C%20Observability&descSize=25&descAlignY=60" width="100%"/>
 
 </div>
 
@@ -17,9 +17,9 @@
 
 **SharX** — это форк оригинальной панели **3XUI** с расширенными возможностями и функциями мониторинга.
 
-This version brings significant improvements, a modern architecture, streamlined installation process using Docker containers, and **Grafana integration** for advanced monitoring with Prometheus and Loki.
+This version brings a modern, Docker-first architecture, **multi-node** workers, a **visual subscription page builder**, **encrypted cookie-based web sessions**, and **optional observability** hooks (Prometheus text metrics, optional Loki / VictoriaMetrics in settings, Grafana dashboard JSON export).
 
-Эта версия приносит значительные улучшения, современную архитектуру, упрощенный процесс установки с использованием Docker-контейнеров и **интеграцию с Grafana** для продвинутого мониторинга с Prometheus и Loki.
+Эта версия даёт современную Docker-сборку, **multi-node** worker-узлы, **визуальный конструктор страницы подписки**, **веб-сессии в зашифрованных cookie** и **опциональную наблюдаемость** (метрики в формате Prometheus, опционально Loki/VictoriaMetrics в настройках, JSON дашборда для Grafana).
 
 ## Quick Start / Быстрый старт
 
@@ -96,7 +96,7 @@ sudo ./install.sh
 
 **Panel updates / Обновление панели:** **Watchtower** in the same stack + `XUI_DOCKER_UPDATER_*` (in-UI update), or `docker compose pull` + `up -d`, or the SharX script **Update Panel** (pulls `sharx` + `watchtower`). / **Watchtower** в стеке и UI, либо `docker compose pull`, либо **2)** в `install_*.sh`. Set `WATCHTOWER_HTTP_API_TOKEN` in production. / `WATCHTOWER_HTTP_API_TOKEN` в `.env` для production. If you used `build:` in compose, the image name (e.g. `sharx-code-sharx`) is not pullable; use a Harbor `image:` and `docker login` — see README_RU/EN.
 
-**Remote nodes / Удалённые узлы:** add and manage in the web UI (Nodes / Geography / Ноды). The install script only deploys the panel stack. / Добавляйте и ведите узлы в веб-интерфейсе. Скрипт ставит только панель. For a separate node worker, see [node/README.md](node/README.md). / Для отдельного worker см. [node/README.md](node/README.md).
+**Remote nodes / Удалённые узлы:** enable **multi-node**, **add node** and copy **`docker-compose.yml`** from the modal (`PANEL_URL` + `SECRET_KEY` pairing), then on the worker `docker compose up -d --build`. Manage in **Nodes** / **Geography**. Install script only deploys the panel. / Включите **multi-node**, в **Нодах** скопируйте compose из модалки, на узле — `docker compose up -d --build`. Подробно: [node/README.md](node/README.md).
 
 </details>
 
@@ -142,7 +142,7 @@ sudo ./install.sh
    - Certificate: `/app/cert/fullchain.pem`
    - Private Key: `/app/cert/privkey.pem`
 
-7. **Remote nodes (optional) / Удалённые узлы (по желанию):** use the web panel to register and manage nodes. For running a **separate** node container elsewhere, see [node/README.md](node/README.md). / Узлы настраиваются в веб-панели. Отдельный worker — [node/README.md](node/README.md).
+7. **Remote nodes (optional) / Удалённые узлы (по желанию):** multi-node + compose from the **add node** modal; see [node/README.md](node/README.md). / Multi-node и docker-compose из модалки добавления узла — [node/README.md](node/README.md).
 
 </details>
 
@@ -150,23 +150,55 @@ sudo ./install.sh
 
 ## Key Features / Основные возможности
 
-- **Node Mode**: One panel manages multiple nodes
-- **PostgreSQL**: Full migration from SQLite
-- **Redis Integration**: Enhanced performance with caching
-- **Grafana Integration**: Advanced monitoring with Prometheus metrics and Loki logs
-- **Docker-Based**: Easy deployment with pre-built images
-- **HWID Protection**: Device identification (Beta, Happ & V2RayTun)
-- **Auto SSL**: Let's Encrypt certificates with auto-renewal
-- **Environment-Based Configuration**: Flexible domain, port, and certificate management via environment variables
+- **Multi-node**: One panel controls many worker nodes (REST node API, geography / host overrides)
+- **PostgreSQL**: Primary database with in-repo migrations; optional **SQLite → PostgreSQL** import for legacy 3XUI backups
+- **Encrypted cookie sessions**: Standard stack uses signed/encrypted browser cookies (Gin session store)
+- **Observability (optional)**: `GET {basePath}panel/metrics` (Prometheus text); optional Loki log push and VictoriaMetrics URL in panel settings; downloadable Grafana dashboard JSON for **your** stack (Grafana itself is not bundled by default)
+- **Docker + Watchtower**: Pre-built images; in-stack or manual updates
+- **Subscription page builder**: Block-based public subscription page (`/panel/api/public/subscription`) — see below
+- **Xray core config profiles**: Reusable core JSON merged into worker configs in multi-node mode
+- **Telemt (MTProto)**: Sidecars on panel (standalone) and workers (multi-node), separate lifecycle from Xray where applicable
+- **HWID (beta)**: Per-client device limits (Happ, V2RayTun)
+- **Auto SSL**: Let's Encrypt via install scripts / acme workflow
+- **Environment-based config**: Panel, sub, and DB settings via env (see full docs)
 
-- **Режим узлов**: Одна панель управляет несколькими узлами
-- **PostgreSQL**: Полная миграция с SQLite
-- **Интеграция Redis**: Повышенная производительность с кэшированием
-- **Интеграция Grafana**: Продвинутый мониторинг с метриками Prometheus и логами Loki
-- **На основе Docker**: Легкое развертывание с предварительно собранными образами
-- **Защита HWID**: Идентификация устройств (Бета, Happ & V2RayTun)
-- **Авто SSL**: Let's Encrypt сертификаты с автопродлением
-- **Настройка через переменные окружения**: Гибкое управление доменами, портами и сертификатами через env переменные
+- **Multi-node**: одна панель и множество worker-узлов (REST API узла, география / host overrides)
+- **PostgreSQL**: основная БД и миграции в репозитории; опциональный **импорт SQLite → PostgreSQL** со старых бэкапов 3XUI
+- **Сессии в cookie**: веб-сессии в подписанных/зашифрованных cookie (Gin session store)
+- **Наблюдаемость (опционально)**: `GET {basePath}panel/metrics` (текст Prometheus); опционально Loki и VictoriaMetrics в настройках панели; JSON дашборда для импорта в **ваш** Grafana (сам Grafana по умолчанию не входит в compose)
+- **Docker + Watchtower**: готовые образы; обновления из стека или вручную
+- **Конструктор страницы подписки**: блоковая публичная страница (`/panel/api/public/subscription`) — см. ниже
+- **Профили конфига Xray (core)**: общий core JSON, мердж в конфиг worker в multi-node
+- **Telemt (MTProto)**: sidecar на панели (single-node) и на worker; жизненный цикл отделён от Xray где задумано
+- **HWID (бета)**: лимит устройств на клиента (Happ, V2RayTun)
+- **Авто SSL**: Let's Encrypt через скрипты установки / acme
+- **Конфиг через env**: панель, подписка, БД — см. полные README_EN/RU
+
+## Supported Protocols / Поддерживаемые протоколы
+
+- **VMESS**
+- **VLESS**
+- **Trojan**
+- **Shadowsocks**
+- **Hysteria / Hysteria2**
+- **Mixed (SOCKS/HTTP)**
+- **WireGuard**
+- **HTTP/Tunnel (for specific transport and routing scenarios)**
+- **Telemt (MTProto sidecar integration for Telegram proxy flows)**
+
+## Subscription Page Builder / Конструктор страницы подписки
+
+SharX includes a built-in visual constructor for the public subscription page (`/panel/api/public/subscription`) with block-based layout and per-brand customization.
+
+В SharX есть встроенный визуальный конструктор публичной страницы подписки (`/panel/api/public/subscription`) с блочной структурой и кастомизацией под бренд.
+
+**What you can configure / Что можно настраивать:**
+- Branding and theme (title, logo, colors, locale)
+- Installation guides and app catalog (including Telegram MTProto flow when enabled)
+- Add-to-app buttons and deep links
+- Response rules (headers, profile metadata, announce/support links)
+- Custom HTML/content blocks and ordering
+- JSON templates and preview before publishing
 
 ## Documentation / Документация
 
