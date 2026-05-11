@@ -1,9 +1,12 @@
-# Pre-built image; named volumes. Edit PANEL_URL / SECRET_KEY (paste from panel) — no .env.
+# Pre-built image; named volumes. Edit PANEL_URL / SECRET_KEY (paste from panel) — no .env for dev defaults.
+# Watchtower on bridge; node uses host network and calls 127.0.0.1:8081 (panel “update” also triggers workers when multi-node is on).
 services:
   node:
     image: registry.konstpic.ru/sharx/sharxnode:latest
     container_name: sharx-node
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     network_mode: host
     volumes:
       - sharx-node-bin:/app/bin
@@ -13,6 +16,31 @@ services:
     environment:
       PANEL_URL: "http://127.0.0.1:2053"
       SECRET_KEY: ""
+      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8081/v1/update
+      XUI_DOCKER_UPDATER_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+
+  watchtower:
+    image: beatkind/watchtower:2.3.2
+    container_name: sharx_node_watchtower
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --http-api-update
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    networks:
+      - sharx_node_net
+
+networks:
+  sharx_node_net:
+    driver: bridge
 
 volumes:
   sharx-node-bin:
