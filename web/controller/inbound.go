@@ -120,6 +120,7 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/update/:id", a.updateInbound)
 	g.POST("/previewXray", a.previewInboundXray)
 	g.POST("/previewTelemt", a.previewInboundTelemt)
+	g.POST("/previewSingbox", a.previewInboundSingbox)
 	g.POST("/clientIps/:email", a.getClientIps)
 	g.POST("/clearClientIps/:email", a.clearClientIps)
 	g.POST("/addClient", a.addInboundClient)
@@ -226,6 +227,50 @@ func (a *InboundController) previewInboundTelemt(c *gin.Context) {
 		return
 	}
 	jsonObj(c, gin.H{"toml": tomlStr}, nil)
+}
+
+// previewInboundSingbox returns the single sing-box inbound JSON fragment that
+// would be merged into the aggregated /app/data/singbox/config.json blob the
+// panel pushes to the singleton sidecar. Mirrors previewInboundTelemt for the
+// hiddify-sing-box family (mieru/AnyTLS/Naive/TUIC).
+func (a *InboundController) previewInboundSingbox(c *gin.Context) {
+	var bindBody inboundBindBody
+	if err := c.ShouldBind(&bindBody); err != nil {
+		logger.Errorf("previewInboundSingbox bind: %v", err)
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	inbound := &bindBody.Inbound
+	user := session.GetLoginUser(c)
+	inbound.UserId = user.Id
+
+	if !model.IsSingboxInboundProtocol(inbound.Protocol) {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("not a sing-box managed inbound"))
+		return
+	}
+
+	if inbound.Id > 0 {
+		existing, err := a.inboundService.GetInbound(inbound.Id)
+		if err != nil {
+			jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+			return
+		}
+		if existing.UserId != user.Id {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), fmt.Errorf("access denied"))
+			return
+		}
+	}
+
+	settingService := service.SettingService{}
+	multiMode, _ := settingService.GetMultiNodeMode()
+	inbound.Tag = a.inboundService.GenerateInboundTag(inbound, multiMode)
+
+	frag, err := service.PreviewSingboxInbound(inbound)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
+		return
+	}
+	jsonObj(c, frag, nil)
 }
 
 // generateSelfSignedTls returns a PEM certificate and key for development / Hysteria testing.
