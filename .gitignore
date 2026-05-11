@@ -14,6 +14,9 @@ push-harbor.sh
 tmp/
 *.tar.gz
 
+# Local agent workspace (notes, plans, scratch)
+.agent/
+
 # # Ignore build and distribution directories
 # backup/
 # bin/
@@ -36,8 +39,8 @@ tmp/
 # *.exe
 # x-ui.db
 
-# # Ignore Docker specific files
-# docker-compose.override.yml
+# Local-only docker overrides
+docker-compose.override.yml
 
 # # Ignore .env (Environment Variables) file
 # .env
