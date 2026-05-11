@@ -522,6 +522,8 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 			}
 		}
 		return ""
+	case model.Mieru:
+		return s.genMieruLink(&in, email)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLink(&in, email)
@@ -561,12 +563,142 @@ func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.Cli
 		return s.genMixedLinkWithClient(&in, client)
 	case model.Telemt:
 		return s.genTelemtLinkWithClient(&in, client)
+	case model.Mieru:
+		return s.genMieruLinkWithClient(&in, client)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLinkWithClient(&in, client)
 		}
 	}
 	return ""
+}
+
+// genMieruLink resolves the inbound's inline clients[] (settings JSON) to find a
+// matching email and emits a `mieru://username:password@host:port?…` URI.
+// Used by the legacy/email-based subscription path before client entities exist.
+func (s *SubService) genMieruLink(inbound *model.Inbound, email string) string {
+	if inbound == nil {
+		return ""
+	}
+	if email == "" {
+		return ""
+	}
+	type mieruInlineClient struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+	}
+	var raw struct {
+		Transport    string              `json:"transport"`
+		Multiplexing string              `json:"multiplexing"`
+		MTU          int                 `json:"mtu"`
+		Clients      []mieruInlineClient `json:"clients"`
+	}
+	_ = json.Unmarshal([]byte(inbound.Settings), &raw)
+	em := strings.ToLower(strings.TrimSpace(email))
+	for _, c := range raw.Clients {
+		if strings.ToLower(strings.TrimSpace(c.Email)) == em {
+			return s.buildMieruURI(inbound, c.Email, c.Password, raw.Transport, raw.Multiplexing, raw.MTU)
+		}
+	}
+	return ""
+}
+
+// genMieruLinkWithClient is the ClientEntity-based variant. Picks transport/mux/mtu
+// from the inbound settings, password from the client's password field
+// (mieru does not have a per-protocol secret on the client entity yet —
+// follow-up commit will add a dedicated field).
+func (s *SubService) genMieruLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || client == nil {
+		return ""
+	}
+	var raw struct {
+		Transport    string `json:"transport"`
+		Multiplexing string `json:"multiplexing"`
+		MTU          int    `json:"mtu"`
+	}
+	_ = json.Unmarshal([]byte(inbound.Settings), &raw)
+	pwd := strings.TrimSpace(client.Password)
+	if pwd == "" {
+		// Fall back to inline clients[] for the password (current MVP path —
+		// inbounds API still puts users in settings, not in ClientEntity).
+		type mieruInlineClient struct {
+			Email    string `json:"email"`
+			Password string `json:"password"`
+		}
+		var inline struct {
+			Clients []mieruInlineClient `json:"clients"`
+		}
+		_ = json.Unmarshal([]byte(inbound.Settings), &inline)
+		em := strings.ToLower(strings.TrimSpace(client.Email))
+		for _, c := range inline.Clients {
+			if strings.ToLower(strings.TrimSpace(c.Email)) == em {
+				pwd = c.Password
+				break
+			}
+		}
+	}
+	if pwd == "" {
+		return ""
+	}
+	return s.buildMieruURI(inbound, client.Email, pwd, raw.Transport, raw.Multiplexing, raw.MTU)
+}
+
+// buildMieruURI emits the SharX mieru:// URI scheme. Mieru has no official URI
+// standard; we use a sing-box-friendly shape that mihomo, NekoBox and Karing all
+// accept by parsing user:pass@host:port + query params.
+//
+//	mieru://<username>:<password>@<host>:<port>
+//	  ?protocol=tcp|udp|tcp+udp&mtu=1400&mux=off|low|middle|high
+//	  #<remark>
+func (s *SubService) buildMieruURI(inbound *model.Inbound, username, password, transport, mux string, mtu int) string {
+	if inbound == nil {
+		return ""
+	}
+	// Pick host the same way the other gen*Link functions do: prefer the per-request
+	// address (subscription host the client is on right now), fall back to inbound.Listen
+	// when standalone, finally to a placeholder. Wildcard binds get rewritten to a real
+	// addr by AddressPort upstream — for mieru we just need a routable host.
+	host := strings.TrimSpace(s.address)
+	if host == "" {
+		host = strings.TrimSpace(inbound.Listen)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "::0" {
+		host = "127.0.0.1"
+	}
+	tr := strings.ToLower(strings.TrimSpace(transport))
+	if tr == "" {
+		tr = "tcp"
+	}
+	tr = strings.ReplaceAll(tr, "tcp+udp", "tcp+udp")
+	muxShort := "low"
+	switch strings.ToUpper(strings.TrimSpace(mux)) {
+	case "MULTIPLEXING_OFF":
+		muxShort = "off"
+	case "MULTIPLEXING_MIDDLE":
+		muxShort = "middle"
+	case "MULTIPLEXING_HIGH":
+		muxShort = "high"
+	}
+	if mtu <= 0 {
+		mtu = 1400
+	}
+	q := url.Values{}
+	q.Set("protocol", tr)
+	q.Set("mtu", fmt.Sprintf("%d", mtu))
+	q.Set("mux", muxShort)
+	remark := strings.TrimSpace(inbound.Remark)
+	if remark == "" {
+		remark = "mieru"
+	}
+	return fmt.Sprintf(
+		"mieru://%s:%s@%s:%d?%s#%s",
+		url.QueryEscape(username),
+		url.QueryEscape(password),
+		host,
+		inbound.Port,
+		q.Encode(),
+		url.QueryEscape(remark),
+	)
 }
 
 func (s *SubService) genTelemtLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {

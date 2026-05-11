@@ -12,7 +12,9 @@ export type InboundFormProtocol =
   | "hysteria"
   | "hysteria2"
   | "wireguard"
-  | "telemt";
+  | "telemt"
+  // Phase 2 — sing-box managed (hiddify-sing-box singleton sidecar).
+  | "mieru";
 
 function randomId(length: number): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -158,6 +160,98 @@ export function buildWireguardInboundApiPayload(
     out.workers = wu;
   }
   return out;
+}
+
+/**
+ * Mieru inbound — Phase 2, served by the hiddify-sing-box singleton sidecar.
+ * Wire format consumed by web/service/singbox_config.go buildMieruInboundJSON:
+ *   { transport: 'TCP'|'UDP'|'TCP+UDP', multiplexing, mtu, clients: [{email, password}] }
+ *
+ * `multiplexing` and `mtu` are MIERU CLIENT options — the server ignores them but
+ * we keep them in the panel form so they can be embedded in the subscription
+ * bundle / client config download (sub-page work in a follow-up commit).
+ */
+export type MieruClientRow = {
+  email: string;
+  password: string;
+};
+
+export type MieruFormState = {
+  transport: "TCP" | "UDP" | "TCP+UDP";
+  multiplexing: "MULTIPLEXING_OFF" | "MULTIPLEXING_LOW" | "MULTIPLEXING_MIDDLE" | "MULTIPLEXING_HIGH";
+  mtu: number;
+  clients: MieruClientRow[];
+};
+
+const MIERU_TRANSPORTS: ReadonlyArray<MieruFormState["transport"]> = ["TCP", "UDP", "TCP+UDP"];
+const MIERU_MUX_LEVELS: ReadonlyArray<MieruFormState["multiplexing"]> = [
+  "MULTIPLEXING_OFF",
+  "MULTIPLEXING_LOW",
+  "MULTIPLEXING_MIDDLE",
+  "MULTIPLEXING_HIGH",
+];
+
+export function defaultMieruForm(): MieruFormState {
+  return {
+    transport: "TCP",
+    multiplexing: "MULTIPLEXING_LOW",
+    mtu: 1400,
+    clients: [{ email: `mieru-${randomId(6)}`, password: randomPassword(16) }],
+  };
+}
+
+export function defaultMieruClientRow(): MieruClientRow {
+  return { email: `mieru-${randomId(6)}`, password: randomPassword(16) };
+}
+
+export function parseMieruSettingsToForm(settingsStr: string): MieruFormState {
+  const base = defaultMieruForm();
+  try {
+    const root = JSON.parse(settingsStr || "{}") as Record<string, unknown>;
+    if (typeof root.transport === "string") {
+      const t = root.transport.toUpperCase().trim();
+      if ((MIERU_TRANSPORTS as readonly string[]).includes(t)) {
+        base.transport = t as MieruFormState["transport"];
+      }
+    }
+    if (typeof root.multiplexing === "string") {
+      const m = root.multiplexing.trim();
+      if ((MIERU_MUX_LEVELS as readonly string[]).includes(m)) {
+        base.multiplexing = m as MieruFormState["multiplexing"];
+      }
+    }
+    if (typeof root.mtu === "number" && root.mtu >= 576 && root.mtu <= 1500) {
+      base.mtu = Math.floor(root.mtu);
+    }
+    if (Array.isArray(root.clients)) {
+      const rows: MieruClientRow[] = [];
+      for (const c of root.clients) {
+        if (c && typeof c === "object") {
+          const cm = c as Record<string, unknown>;
+          const email = typeof cm.email === "string" ? cm.email.trim() : "";
+          const password = typeof cm.password === "string" ? cm.password : "";
+          if (email && password) rows.push({ email, password });
+        }
+      }
+      if (rows.length > 0) base.clients = rows;
+    }
+  } catch {
+    /* keep defaults */
+  }
+  return base;
+}
+
+export function buildMieruSettingsJson(form: MieruFormState): string {
+  const clients = form.clients
+    .map((c) => ({ email: c.email.trim(), password: c.password }))
+    .filter((c) => c.email.length > 0 && c.password.length > 0);
+  const out = {
+    transport: form.transport,
+    multiplexing: form.multiplexing,
+    mtu: Number.isFinite(form.mtu) && form.mtu > 0 ? Math.floor(form.mtu) : 1400,
+    clients,
+  };
+  return JSON.stringify(out);
 }
 
 /** Telemt (MTProto) inbound: stored under `settings` as `{ "telemt": { ... } }`. */
@@ -860,6 +954,7 @@ export type InboundStreamTransportMode =
   | "shadowsocks"
   | "wireguard"
   | "telemt"
+  | "mieru"
   | "full";
 
 export function getInboundStreamTransportMode(
@@ -873,6 +968,8 @@ export function getInboundStreamTransportMode(
   if (protocol === "wireguard") return "wireguard";
   /** Telemt runs outside Xray — no Xray streamSettings. */
   if (protocol === "telemt") return "telemt";
+  /** Mieru runs in sing-box — no Xray streamSettings (it has its own packet format). */
+  if (protocol === "mieru") return "mieru";
   return "full";
 }
 
@@ -1315,6 +1412,8 @@ export type FirstClientPatch = {
   mixedPassword?: string;
   /** VLESS/Trojan only; persisted as `settings.fallbacks`. */
   vlessTrojanFallbacks?: VlessTrojanFallbackFormRow[];
+  /** Mieru (Phase 2). Full form passed verbatim — buildMieruSettingsJson serializes it. */
+  mieruForm?: MieruFormState;
 };
 
 export function buildSettingsJson(
@@ -1442,6 +1541,10 @@ export function buildSettingsJson(
     }
     case "telemt":
       return buildTelemtSettingsJson(defaultTelemtForm());
+    case "mieru": {
+      const form = opts.mieruForm ?? defaultMieruForm();
+      return buildMieruSettingsJson(form);
+    }
     default:
       return "{}";
   }

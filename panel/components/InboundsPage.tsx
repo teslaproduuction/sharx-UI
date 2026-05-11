@@ -25,8 +25,11 @@ import {
   buildSettingsJson,
   buildSniffingFromForm,
   buildStreamSettingsFromForm,
+  buildMieruSettingsJson,
   buildTelemtSettingsJson,
   buildWireguardInboundApiPayload,
+  defaultMieruClientRow,
+  defaultMieruForm,
   defaultTelemtForm,
   defaultWireguardForm,
   defaultSniffingForm,
@@ -41,6 +44,7 @@ import {
   newWireGuardSecretKeyBase64,
   parseFirstClientFromSettings,
   parseWireguardSettingsToForm,
+  parseMieruSettingsToForm,
   parseSniffingToForm,
   parseStreamSettingsToForm,
   parseTelemtSettingsToForm,
@@ -55,6 +59,8 @@ import {
   totalBytesToGbInput,
   XHTTP_MODES,
   type InboundFormProtocol,
+  type MieruClientRow,
+  type MieruFormState,
   type SniffingFormState,
   type VlessTrojanFallbackFormRow,
   type StreamFormState,
@@ -394,6 +400,8 @@ const PROTOCOLS: { value: InboundFormProtocol; label: string }[] = [
   { value: "hysteria2", label: "Hysteria 2" },
   { value: "wireguard", label: "WireGuard" },
   { value: "telemt", label: "Telemt (MTProto)" },
+  // Phase 2 — sing-box managed
+  { value: "mieru", label: "Mieru" },
 ];
 
 const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
@@ -406,6 +414,7 @@ const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
   "hysteria2",
   "wireguard",
   "telemt",
+  "mieru",
 ]);
 
 const TRAFFIC_RESET: { value: string; labelKey: string }[] = [
@@ -515,6 +524,8 @@ const PROTOCOL_TONE: Record<string, "accent" | "info" | "warning" | "success" | 
   hysteria: "accent",
   wireguard: "success",
   telemt: "info",
+  // Phase 2 sing-box protocols (purple/pink palette to set them apart)
+  mieru: "warning",
 };
 
 const defaultForm = () => ({
@@ -533,6 +544,7 @@ const defaultForm = () => ({
   mixedPassword: randomPassword(12),
   wireguardForm: defaultWireguardForm(),
   telemtForm: defaultTelemtForm(),
+  mieruForm: defaultMieruForm(),
   totalGb: "0",
   trafficReset: "never",
   streamForm: defaultStreamForm(),
@@ -721,16 +733,20 @@ export function InboundsPage() {
           proto === "telemt"
             ? parseTelemtSettingsToForm(ib.settings || "{}")
             : defaultTelemtForm(),
+        mieruForm:
+          proto === "mieru"
+            ? parseMieruSettingsToForm(ib.settings || "{}")
+            : defaultMieruForm(),
         totalGb: totalBytesToGbInput(ib.total ?? 0),
         trafficReset: ib.trafficReset || "never",
         streamForm: parseStreamSettingsToForm(
-          proto === "telemt"
+          proto === "telemt" || proto === "mieru"
             ? "{}"
             : (ib.streamSettings || defaultStreamSettingsString()),
           proto,
         ),
         sniffingForm: parseSniffingToForm(
-          proto === "telemt"
+          proto === "telemt" || proto === "mieru"
             ? '{"enabled":false,"destOverride":[],"metadataOnly":false,"routeOnly":false}'
             : (ib.sniffing || defaultSniffingString()),
         ),
@@ -769,6 +785,7 @@ export function InboundsPage() {
     setForm((f) => {
       const isSwitchingToWg = protocol === "wireguard" && f.protocol !== "wireguard";
       const isSwitchingToTelemt = protocol === "telemt" && f.protocol !== "telemt";
+      const isSwitchingToMieru = protocol === "mieru" && f.protocol !== "mieru";
       const streamForm =
         protocol === "hysteria" || protocol === "hysteria2"
           ? defaultStreamFormHysteria()
@@ -779,7 +796,19 @@ export function InboundsPage() {
         streamForm,
         wireguardForm: isSwitchingToWg ? defaultWireguardForm() : f.wireguardForm,
         telemtForm: isSwitchingToTelemt ? defaultTelemtForm() : f.telemtForm,
+        mieruForm: isSwitchingToMieru ? defaultMieruForm() : f.mieruForm,
       };
+      if (isSwitchingToMieru) {
+        out.port = 2999;
+        if (!f.remark.trim()) {
+          out.remark = t("pages.inbounds.mieruDefaultRemark", {
+            defaultValue: "Mieru",
+          });
+        }
+        if (!f.listen.trim()) {
+          out.listen = "::";
+        }
+      }
       if (isSwitchingToTelemt) {
         out.port = 443;
         if (!f.remark.trim()) {
@@ -947,7 +976,11 @@ export function InboundsPage() {
       return { ok: false, message: t("pages.inbounds.port") + ": 1–65535" };
     }
     const isTelemt = form.protocol === "telemt";
-    const streamSettingsStr = isTelemt
+    const isMieru = form.protocol === "mieru";
+    // Sing-box-managed protocols (mieru, future: anytls/naive/tuic) have no Xray
+    // streamSettings/sniffing — sing-box reads its own JSON.
+    const skipStream = isTelemt || isMieru;
+    const streamSettingsStr = skipStream
       ? "{}"
       : buildStreamSettingsFromForm(form.streamForm, form.protocol);
     let streamObj: unknown;
@@ -957,7 +990,7 @@ export function InboundsPage() {
     } catch {
       return { ok: false, message: t("pages.inbounds.invalidStreamJson") };
     }
-    const sniffingStr = isTelemt
+    const sniffingStr = skipStream
       ? JSON.stringify({
           enabled: false,
           destOverride: [],
@@ -997,6 +1030,8 @@ export function InboundsPage() {
       settings = "{}";
     } else if (form.protocol === "telemt") {
       settings = buildTelemtSettingsJson(form.telemtForm);
+    } else if (form.protocol === "mieru") {
+      settings = buildMieruSettingsJson(form.mieruForm);
     } else if (form.protocol === "mixed") {
       // For mixed, accounts are managed entirely via client assignments.
       // Preserve existing settings from DB on edit; use noauth skeleton on create.
@@ -1258,7 +1293,10 @@ export function InboundsPage() {
     return INBOUND_STEP_ORDER.filter((id) => {
       if (id === "nodes" && multiNodeMode !== true) return false;
       if (id === "auth" && !hasAuth) return false;
-      if (id === "sniffing" && form.protocol === "telemt") return false;
+      // Sing-box-managed protocols (mieru) and Telemt run outside Xray —
+      // no Xray sniffing/streamSettings UI steps.
+      if (id === "sniffing" && (form.protocol === "telemt" || form.protocol === "mieru")) return false;
+      if (id === "transport" && form.protocol === "mieru") return false;
       return true;
     });
   }, [multiNodeMode, form.protocol]);
@@ -4803,6 +4841,184 @@ export function InboundsPage() {
                     }
                     spellCheck={false}
                   />
+                </div>
+              </div>
+            ) : null}
+            {form.protocol === "mieru" ? (
+              <div className="space-y-4">
+                <p className="text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.mieruSettingsHint", {
+                    defaultValue:
+                      "Mieru runs in the SharX sing-box sidecar. The server protocol is anti-DPI by design — no TLS, no SNI. Each user authenticates with name + password; the password also seeds the obfuscation key, so use long random values.",
+                  })}
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-transport">
+                      {t("pages.inbounds.mieruTransport", { defaultValue: "Transport" })}
+                    </label>
+                    <SelectNative
+                      id="in-mieru-transport"
+                      value={form.mieruForm.transport}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          mieruForm: {
+                            ...f.mieruForm,
+                            transport: e.target.value as MieruFormState["transport"],
+                          },
+                        }))
+                      }
+                    >
+                      <option value="TCP">TCP</option>
+                      <option value="UDP">UDP</option>
+                      <option value="TCP+UDP">TCP + UDP</option>
+                    </SelectNative>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-mux">
+                      {t("pages.inbounds.mieruMultiplexing", { defaultValue: "Multiplexing" })}
+                    </label>
+                    <SelectNative
+                      id="in-mieru-mux"
+                      value={form.mieruForm.multiplexing}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          mieruForm: {
+                            ...f.mieruForm,
+                            multiplexing: e.target.value as MieruFormState["multiplexing"],
+                          },
+                        }))
+                      }
+                    >
+                      <option value="MULTIPLEXING_OFF">Off</option>
+                      <option value="MULTIPLEXING_LOW">Low (recommended)</option>
+                      <option value="MULTIPLEXING_MIDDLE">Middle</option>
+                      <option value="MULTIPLEXING_HIGH">High</option>
+                    </SelectNative>
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-mtu">
+                      MTU
+                    </label>
+                    <Input
+                      id="in-mieru-mtu"
+                      type="number"
+                      min={576}
+                      max={1500}
+                      className="font-mono text-xs"
+                      value={form.mieruForm.mtu}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          mieruForm: { ...f.mieruForm, mtu: parseInt(e.target.value, 10) || 1400 },
+                        }))
+                      }
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <h4 className="text-xs font-semibold text-[var(--fg-muted)] uppercase tracking-wider">
+                      {t("pages.inbounds.mieruClients", { defaultValue: "Mieru users" })}
+                      <span className="ml-2 text-[var(--fg-subtle)] normal-case font-normal">
+                        ({form.mieruForm.clients.length})
+                      </span>
+                    </h4>
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      onClick={() =>
+                        setForm((f) => ({
+                          ...f,
+                          mieruForm: {
+                            ...f.mieruForm,
+                            clients: [...f.mieruForm.clients, defaultMieruClientRow()],
+                          },
+                        }))
+                      }
+                    >
+                      + {t("add", { defaultValue: "Add" })}
+                    </Button>
+                  </div>
+                  <div className="space-y-2">
+                    {form.mieruForm.clients.map((c, idx) => (
+                      <div
+                        key={idx}
+                        className="grid grid-cols-1 sm:grid-cols-[1fr_2fr_auto_auto] gap-2 items-end p-2 rounded-lg bg-[var(--surface)]/50 border border-[var(--border)]"
+                      >
+                        <div>
+                          <label className="mb-1 block text-[10px] font-medium text-[var(--fg-subtle)] uppercase">
+                            {t("pages.inbounds.mieruClientName", { defaultValue: "Username" })}
+                          </label>
+                          <Input
+                            value={c.email}
+                            placeholder="alice"
+                            className="font-mono text-xs"
+                            onChange={(e) =>
+                              setForm((f) => {
+                                const cs = [...f.mieruForm.clients];
+                                cs[idx] = { ...cs[idx], email: e.target.value };
+                                return { ...f, mieruForm: { ...f.mieruForm, clients: cs } };
+                              })
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1 block text-[10px] font-medium text-[var(--fg-subtle)] uppercase">
+                            {t("password", { defaultValue: "Password" })}
+                          </label>
+                          <Input
+                            value={c.password}
+                            placeholder="long-random-password"
+                            className="font-mono text-xs"
+                            onChange={(e) =>
+                              setForm((f) => {
+                                const cs = [...f.mieruForm.clients];
+                                cs[idx] = { ...cs[idx], password: e.target.value };
+                                return { ...f, mieruForm: { ...f.mieruForm, clients: cs } };
+                              })
+                            }
+                          />
+                        </div>
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          onClick={() =>
+                            setForm((f) => {
+                              const cs = [...f.mieruForm.clients];
+                              cs[idx] = { ...cs[idx], password: randomPassword(16) };
+                              return { ...f, mieruForm: { ...f.mieruForm, clients: cs } };
+                            })
+                          }
+                        >
+                          {t("pages.inbounds.addInboundTrojanRegen", { defaultValue: "Regen" })}
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="danger"
+                          disabled={form.mieruForm.clients.length <= 1}
+                          onClick={() =>
+                            setForm((f) => {
+                              const cs = f.mieruForm.clients.filter((_, i) => i !== idx);
+                              return { ...f, mieruForm: { ...f.mieruForm, clients: cs } };
+                            })
+                          }
+                        >
+                          {t("delete", { defaultValue: "Del" })}
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[10px] text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.mieruClientsHint", {
+                      defaultValue:
+                        "Username doubles as the v2ray_api stats subject (matches Xray pattern). Password seeds the mieru obfuscation cipher — keep ≥ 16 chars random.",
+                    })}
+                  </p>
                 </div>
               </div>
             ) : null}
