@@ -143,6 +143,15 @@ var defaultValueMap = map[string]string{
 	"panelMascaraedAfterHours": "1",                     // delay before root '/' also routes to decoy
 	"panelInstallTime":         "",                      // unix epoch seconds; set lazily by panel on first boot
 	"caddyAdminURL":            "http://127.0.0.1:2019", // endpoint to push Caddy admin reload requests
+
+	// Phase 2 — sing-box (hiddify fork) singleton sidecar
+	// See .agent/plans/phase-2-singbox-inbound.md.
+	"singboxBin":                    "/app/bin/sing-box", // hiddify-sing-box binary path on the node container
+	"singboxV2RayAPIPort":           "62788",             // gRPC v2ray_api port on 127.0.0.1 (per-user stats, same format as Xray puller)
+	"singboxClashAPIPort":           "9090",              // Clash external_controller port (live config inspection)
+	"singboxLogLevel":               "warn",              // valid: trace|debug|info|warn|error|fatal|panic
+	"singboxApplyIntervalHours":     "4",                 // batch reload cron interval — SIGHUP kills active connections so changes are batched
+	"singboxApplyImmediateOnDisable": "true",             // when admin disables a user, override the batch and SIGHUP now
 }
 
 var allowedUIPreferenceKeys = map[string]bool{
