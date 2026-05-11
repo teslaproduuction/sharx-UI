@@ -2,6 +2,7 @@
 package api
 
 import (
+	"context"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/tls"
@@ -23,6 +24,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/konstpic/sharx-code/v2/conndrop"
+	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/auth"
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
@@ -30,6 +32,7 @@ import (
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
 	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/node/xray"
+	"github.com/konstpic/sharx-code/v2/util/dockerupdater"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 )
 
@@ -162,6 +165,8 @@ func (s *Server) Start() error {
 		api.POST("/session-ip-block-routing", s.sessionIPBlockRouting)
 		api.POST("/geofile/upload/:fileName", s.uploadGeofile)
 		api.POST("/geofile/rollback/:fileName", s.rollbackGeofile)
+		api.GET("/docker-updater", s.dockerUpdaterStatus)
+		api.POST("/docker-updater/trigger", s.dockerUpdaterTrigger)
 	}
 
 	s.httpServer = &http.Server{
@@ -297,6 +302,7 @@ func (s *Server) health(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"status":        "ok",
 		"service":       "sharx-node",
+		"sharxVersion":  config.GetVersion(),
 		"xrayRunning":   st["running"],
 		"xrayVersion":   st["version"],
 		"xrayUptime":    st["uptime"],
@@ -493,10 +499,29 @@ func (s *Server) status(c *gin.Context) {
 	}
 	status["telemtRunning"] = tCount > 0
 	status["telemtCount"] = tCount
+	status["sharxVersion"] = config.GetVersion()
 	for k, v := range hostMetricsForStatusJSON() {
 		status[k] = v
 	}
 	c.JSON(http.StatusOK, status)
+}
+
+func (s *Server) dockerUpdaterStatus(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"enabled": dockerupdater.Configured()})
+}
+
+func (s *Server) dockerUpdaterTrigger(c *gin.Context) {
+	ctx := c.Request.Context()
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) > 2*time.Minute {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Minute)
+		defer cancel()
+	}
+	if err := dockerupdater.Trigger(ctx); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"message": "Docker updater triggered"})
 }
 
 // stats returns traffic and online clients statistics from XRAY.
