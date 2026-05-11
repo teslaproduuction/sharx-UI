@@ -1120,17 +1120,19 @@ export function InboundsPage() {
       body.id = editId;
     }
     const isTelemt = form.protocol === "telemt";
+    const isMieru = form.protocol === "mieru";
     const fail = (msg: string) => {
       if (!alive) return;
       setXrayPreviewText(null);
       setXrayPreviewError(msg);
       setXrayPreviewLoading(false);
     };
-    void (
-      isTelemt
-        ? postJson<{ toml: string }>(panel("api/inbounds/previewTelemt"), body, true)
-        : postJson<unknown>(panel("api/inbounds/previewXray"), body, true)
-    ).then(
+    const endpoint = isTelemt
+      ? panel("api/inbounds/previewTelemt")
+      : isMieru
+        ? panel("api/inbounds/previewSingbox")
+        : panel("api/inbounds/previewXray");
+    void postJson<unknown>(endpoint, body, true).then(
       (r) => {
         if (!alive) return;
         if (r.success && r.obj != null) {
@@ -1990,9 +1992,13 @@ export function InboundsPage() {
                         ? t("pages.inbounds.viewTelemtTomlPreview", {
                             defaultValue: "Telemt config",
                           })
-                        : t("pages.inbounds.viewXrayCorePreview", {
-                            defaultValue: "Xray config",
-                          })}
+                        : form.protocol === "mieru"
+                          ? t("pages.inbounds.viewSingboxConfigPreview", {
+                              defaultValue: "Sing-box config",
+                            })
+                          : t("pages.inbounds.viewXrayCorePreview", {
+                              defaultValue: "Xray config",
+                            })}
                     </button>
                   </div>
                 ) : null}
@@ -2014,10 +2020,15 @@ export function InboundsPage() {
                         defaultValue:
                           "Generated Telemt config.toml (same as deployed to the node or local data/telemt on standalone). [access.users] is empty until you save the inbound and assign clients; after that it reflects the database.",
                       })
-                    : t("pages.inbounds.xrayCorePreviewHint", {
-                        defaultValue:
-                          "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here.",
-                      })}
+                    : form.protocol === "mieru"
+                      ? t("pages.inbounds.singboxConfigPreviewHint", {
+                          defaultValue:
+                            "Single sing-box inbound object as it will be merged into the aggregated /app/data/singbox/config.json blob the panel SIGHUPs to the singleton sidecar. portBindings, users and tcp_fast_open / sniff defaults reflect the form below.",
+                        })
+                      : t("pages.inbounds.xrayCorePreviewHint", {
+                          defaultValue:
+                            "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here.",
+                        })}
                 </p>
                 <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-[var(--bg-subtle)] p-3">
                   {!inboundApiPayloadPreview.ok ? (
@@ -4853,10 +4864,57 @@ export function InboundsPage() {
                   })}
                 </p>
 
+                <div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-tcpports">
+                        {t("pages.inbounds.mieruTcpPorts", { defaultValue: "TCP ports" })}
+                      </label>
+                      <Input
+                        id="in-mieru-tcpports"
+                        className="font-mono text-xs"
+                        placeholder="e.g. 443,2999,3001-3010"
+                        value={form.mieruForm.tcpPorts}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            mieruForm: { ...f.mieruForm, tcpPorts: e.target.value },
+                          }))
+                        }
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-udpports">
+                        {t("pages.inbounds.mieruUdpPorts", { defaultValue: "UDP ports" })}
+                      </label>
+                      <Input
+                        id="in-mieru-udpports"
+                        className="font-mono text-xs"
+                        placeholder="e.g. 12000-12100"
+                        value={form.mieruForm.udpPorts}
+                        onChange={(e) =>
+                          setForm((f) => ({
+                            ...f,
+                            mieruForm: { ...f.mieruForm, udpPorts: e.target.value },
+                          }))
+                        }
+                        spellCheck={false}
+                      />
+                    </div>
+                  </div>
+                  <p className="mt-1 text-[10px] text-[var(--fg-subtle)]">
+                    {t("pages.inbounds.mieruPortsHint", {
+                      defaultValue:
+                        "Hiddify-style port list — comma-separated, ranges with dash. Empty = use the primary port + transport selector below.",
+                    })}
+                  </p>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   <div>
                     <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-mieru-transport">
-                      {t("pages.inbounds.mieruTransport", { defaultValue: "Transport" })}
+                      {t("pages.inbounds.mieruTransport", { defaultValue: "Transport (default)" })}
                     </label>
                     <SelectNative
                       id="in-mieru-transport"
