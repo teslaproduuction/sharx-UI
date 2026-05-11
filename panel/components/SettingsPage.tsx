@@ -19,6 +19,7 @@ import {
   Server,
   Settings as SettingsGearIcon,
   Shield,
+  ShieldCheck,
   SlidersHorizontal,
   Tags,
   ToggleLeft,
@@ -49,6 +50,7 @@ import {
 import { parseSettingsTab, type SettingsTabId } from "@/lib/settingsTabs";
 import { getUiPref, setUiPref } from "@/lib/uiPrefs";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
+import { PanelSecurityTab } from "@/components/settings/PanelSecurityTab";
 import { RemarkModelConstructor } from "@/components/settings/RemarkModelConstructor";
 import { SubscriptionBuilder } from "@/components/settings/subscription/SubscriptionBuilder";
 import { TgRunTimeField } from "@/components/settings/TgRunTimeField";
@@ -313,6 +315,7 @@ export function SettingsPage() {
     () => [
       { id: "general", label: t("pages.settings.tabs.general"), icon: SlidersHorizontal },
       { id: "security", label: t("pages.settings.tabs.security"), icon: Shield },
+      { id: "panelSecurity", label: t("pages.settings.tabs.panelSecurity"), icon: ShieldCheck },
       { id: "telegram", label: t("pages.settings.tabs.telegram"), icon: Send },
       { id: "subscription", label: t("pages.settings.tabs.subscription"), icon: Link2 },
       { id: "ldap", label: t("pages.settings.tabs.ldap"), icon: Building2 },
@@ -870,6 +873,8 @@ export function SettingsPage() {
         </SettingsSection>
         </SettingsGrid>
       ) : null}
+
+      {activeTab === "panelSecurity" ? <PanelSecurityTab /> : null}
 
       {activeTab === "telegram" ? (
         <SettingsGrid>
