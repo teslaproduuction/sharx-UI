@@ -76,13 +76,19 @@ func NewInboundController(g *gin.RouterGroup) *InboundController {
 	return a
 }
 
-// syncWorkerAfterInboundMutation schedules multi-node pushes: Telemt inbounds restart workers immediately so
-// sidecars refresh without waiting on the cron need-restart ticker.
+// syncWorkerAfterInboundMutation schedules multi-node pushes: Telemt and sing-box-managed
+// inbounds (mieru/AnyTLS/Naive/TUIC — Phase 2) restart workers immediately so sidecars refresh
+// without waiting on the cron need-restart ticker. Native Xray protocols just flip the flag
+// and let the existing periodic check pick up the change.
 func (a *InboundController) syncWorkerAfterInboundMutation(needRestart bool, inboundProtocol model.Protocol) {
 	if !needRestart {
 		return
 	}
-	if model.NormalizeProtocol(inboundProtocol) == model.Telemt {
+	switch {
+	case model.NormalizeProtocol(inboundProtocol) == model.Telemt:
+		a.xrayService.RestartXrayAsync(false)
+		return
+	case model.IsSingboxInboundProtocol(inboundProtocol):
 		a.xrayService.RestartXrayAsync(false)
 		return
 	}
