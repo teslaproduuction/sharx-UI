@@ -91,6 +91,8 @@ type StatusData = {
   nodesXray?: { total: number; running: number; stopped: number; error: number; unknown: number };
   telemt?: { state: string; count: number; errorMsg?: string };
   nodesTelemt?: { total: number; running: number; stopped: number; unknown: number };
+  singbox?: { state: string; configHash?: string; errorMsg?: string };
+  nodesSingbox?: { total: number; running: number; stopped: number; unknown: number };
   database: {
     size: number;
     tables: number;
@@ -132,6 +134,56 @@ function xrayStateMsg(
   if (state === "error")
     return { msg: tr("pages.index.xrayStatusError"), color: "red" };
   return { msg: tr("pages.index.xrayStatusUnknown"), color: "default" };
+}
+
+function singboxLocalTag(
+  singbox: StatusData["singbox"],
+  multi: boolean,
+  tr: (k: string, o?: Record<string, unknown>) => string,
+): { msg: string; color: string; hash: string } {
+  if (multi) {
+    return {
+      msg: tr("pages.index.singboxLocalIdleMulti", {
+        defaultValue: "Local sing-box not used in multi-node",
+      }),
+      color: "info",
+      hash: "",
+    };
+  }
+  const hash = (singbox?.configHash || "").slice(0, 8);
+  if (!singbox) {
+    return {
+      msg: tr("pages.index.singboxStatusUnknown", { defaultValue: "Status unknown" }),
+      color: "default",
+      hash,
+    };
+  }
+  if (singbox.state === "running") {
+    return {
+      msg: tr("pages.index.singboxStatusRunning", { defaultValue: "Running" }),
+      color: "green",
+      hash,
+    };
+  }
+  if (singbox.state === "error") {
+    return {
+      msg: tr("pages.index.singboxStatusError", { defaultValue: "Error" }),
+      color: "red",
+      hash,
+    };
+  }
+  if (singbox.state === "stop") {
+    return {
+      msg: tr("pages.index.singboxStatusStop", { defaultValue: "Stopped" }),
+      color: "orange",
+      hash,
+    };
+  }
+  return {
+    msg: tr("pages.index.singboxStatusUnknown", { defaultValue: "Status unknown" }),
+    color: "default",
+    hash,
+  };
 }
 
 function telemtLocalTag(
@@ -940,6 +992,7 @@ export function DashboardPage() {
   const xUi = xrayStateMsg(st.xray.state, t, { multiMode: multi });
   const nx = st.nodesXray;
   const teleUi = telemtLocalTag(st.telemt, multi, t);
+  const sbxUi = singboxLocalTag(st.singbox, multi, t);
   const nt = st.nodesTelemt;
   const trafficMax = Math.max(1, st.netIO.up, st.netIO.down, st.netTraffic.sent, st.netTraffic.recv);
   const ramSparkColor = dashboardRamStroke;
@@ -1352,6 +1405,28 @@ export function DashboardPage() {
                   title={st.telemt.errorMsg}
                 >
                   {st.telemt.errorMsg}
+                </p>
+              ) : null}
+              <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5">
+                <span className="text-[10px] font-medium text-[var(--fg-subtle)] sm:text-xs">
+                  {t("pages.index.singboxShort", { defaultValue: "Sing-box" })}
+                </span>
+                <span
+                  className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(
+                    sbxUi.color,
+                  )}`}
+                  title={st.singbox?.configHash ? `cfg ${st.singbox.configHash}` : sbxUi.msg}
+                >
+                  {sbxUi.msg}
+                  {sbxUi.hash ? ` · ${sbxUi.hash}` : ""}
+                </span>
+              </div>
+              {st.singbox?.errorMsg && !multi ? (
+                <p
+                  className="mt-1 line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs"
+                  title={st.singbox.errorMsg}
+                >
+                  {st.singbox.errorMsg}
                 </p>
               ) : null}
               <div className="mt-2.5 flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
