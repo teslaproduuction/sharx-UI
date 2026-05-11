@@ -99,6 +99,16 @@ func runWebServer() {
 		logger.Warningf("Failed to ensure panel pairing bundle: %v", err)
 	}
 
+	// Phase 1 — Caddy panel masking. Stamp install time so the mascaraed-mode
+	// countdown begins on first boot, and generate a panel secret prefix on first run.
+	panelSec := &service.PanelSecurityService{}
+	if err := panelSec.EnsureInstallTime(); err != nil {
+		logger.Warningf("Failed to ensure panel install time: %v", err)
+	}
+	if _, err := panelSec.EnsureSecretPrefix(); err != nil {
+		logger.Warningf("Failed to ensure panel secret prefix: %v", err)
+	}
+
 	service.StartPanelGeographyRefresh()
 
 	// Pre-generate Xray configuration file from database at startup.
