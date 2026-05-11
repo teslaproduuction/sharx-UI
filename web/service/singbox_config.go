@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -144,7 +145,16 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 		},
 		"inbounds":  inboundsJSON,
 		"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}},
-		"route":     map[string]any{"final": "direct"},
+		// sing-box 1.13+ rule-actions: enable sniffing globally + prefer IPv4 for
+		// resolution. Equivalent to the legacy inbound-level sniff defaults that
+		// got removed in 1.13.
+		"route": map[string]any{
+			"rules": []map[string]any{
+				{"action": "sniff"},
+				{"action": "resolve", "strategy": "prefer_ipv4"},
+			},
+			"final": "direct",
+		},
 	}
 
 	out, err := json.MarshalIndent(cfg, "", "  ")
@@ -156,6 +166,82 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 		Cfg:        string(out),
 		ConfigHash: hex.EncodeToString(sum[:]),
 	}, nil
+}
+
+// parsePortList accepts a Hiddify-style port specification "443,2999,3001-3010"
+// and returns a flattened, sorted, de-duplicated [int] of valid ports. Empty
+// or malformed entries are silently skipped.
+func parsePortList(s string) []int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil
+	}
+	seen := make(map[int]struct{})
+	for _, chunk := range strings.Split(s, ",") {
+		chunk = strings.TrimSpace(chunk)
+		if chunk == "" {
+			continue
+		}
+		if strings.Contains(chunk, "-") {
+			parts := strings.SplitN(chunk, "-", 2)
+			lo, e1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+			hi, e2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if e1 != nil || e2 != nil || lo < 1 || hi < lo || hi > 65535 {
+				continue
+			}
+			// Cap at 256 ports per range — guard against typos like "443-65535".
+			if hi-lo > 256 {
+				hi = lo + 256
+			}
+			for p := lo; p <= hi; p++ {
+				seen[p] = struct{}{}
+			}
+		} else {
+			p, err := strconv.Atoi(chunk)
+			if err == nil && p >= 1 && p <= 65535 {
+				seen[p] = struct{}{}
+			}
+		}
+	}
+	out := make([]int, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Ints(out)
+	return out
+}
+
+// getStringField is a small helper for the loosely-typed map[string]any
+// returned by JSON unmarshal of inbound.Settings.
+func getStringField(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+// PreviewSingboxInbound returns the single sing-box inbound JSON object as it
+// would appear in the aggregated config blob. Used by the panel UI's
+// "Sing-box config" preview button to show admins exactly what the sidecar
+// will see before they save the inbound.
+func PreviewSingboxInbound(inb *model.Inbound) (any, error) {
+	if inb == nil {
+		return nil, errors.New("nil inbound")
+	}
+	switch model.NormalizeProtocol(inb.Protocol) {
+	case model.Mieru:
+		raw, _, err := buildMieruInboundJSON(inb)
+		if err != nil {
+			return nil, err
+		}
+		var out any
+		if err := json.Unmarshal(raw, &out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	default:
+		return nil, fmt.Errorf("preview not implemented for protocol %s", inb.Protocol)
+	}
 }
 
 func firstUser(users []sbxUser) string {
@@ -267,22 +353,57 @@ func buildMieruInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, erro
 
 	// mieru requires explicit portBindings with the protocol per port; just listen_port
 	// + network is rejected at validation time ("Transport of Server Port is not defined").
-	portBindings := make([]map[string]any, 0, len(network))
-	for _, n := range network {
-		portBindings = append(portBindings, map[string]any{
-			"port":     inb.Port,
-			"protocol": strings.ToUpper(n),
-		})
+	//
+	// Hiddify-Manager pattern (singbox/configs/05_inbounds_mieru.json.j2): one inbound
+	// per protocol (TCP or UDP), portBindings is an array of {port, protocol} pairs.
+	// We accept settings.tcpPorts / settings.udpPorts as comma-separated lists ("2999,3001-3005")
+	// in addition to the primary inbound.Port. Each entry becomes one portBinding.
+	tcpPorts := parsePortList(getStringField(raw, "tcpPorts"))
+	udpPorts := parsePortList(getStringField(raw, "udpPorts"))
+	if len(tcpPorts) == 0 && len(udpPorts) == 0 {
+		// Fall back to the primary inbound.Port + the network selector.
+		for _, n := range network {
+			switch n {
+			case "tcp":
+				tcpPorts = append(tcpPorts, inb.Port)
+			case "udp":
+				udpPorts = append(udpPorts, inb.Port)
+			}
+		}
+	}
+	if len(tcpPorts) == 0 && len(udpPorts) == 0 {
+		// Still nothing — at least bind the primary port as TCP so the inbound is reachable.
+		tcpPorts = []int{inb.Port}
 	}
 
+	portBindings := make([]map[string]any, 0, len(tcpPorts)+len(udpPorts))
+	for _, p := range tcpPorts {
+		portBindings = append(portBindings, map[string]any{"port": p, "protocol": "TCP"})
+	}
+	for _, p := range udpPorts {
+		portBindings = append(portBindings, map[string]any{"port": p, "protocol": "UDP"})
+	}
+
+	// Sing-box ≥1.13 removed inbound-level `sniff`/`sniff_override_destination`/
+	// `domain_strategy`/`tcp_fast_open` — they belong in route.rules[] now.
+	// We emit ONLY the protocol fields here; the surrounding aggregator wraps the
+	// inbounds list with a route block that injects sniff actions globally.
+	// hiddify-sing-box mieru validation rejects (ListenPort != 0 && len(portBindings) != 1).
+	// When the operator gave us a multi-port spec we MUST omit listen_port and let
+	// portBindings carry every binding (Hiddify-Manager pattern: one inbound per
+	// protocol/family, no listen_port). When portBindings is exactly the primary
+	// port we keep listen_port for clarity.
 	frag := map[string]any{
 		"type":         "mieru",
 		"tag":          tag,
 		"listen":       listen,
-		"listen_port":  inb.Port,
-		"network":      network,
 		"portBindings": portBindings,
 		"users":        mieruUsers,
+	}
+	if len(portBindings) == 1 {
+		if firstPort, ok := portBindings[0]["port"].(int); ok {
+			frag["listen_port"] = firstPort
+		}
 	}
 	out, err := json.Marshal(frag)
 	if err != nil {
