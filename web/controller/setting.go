@@ -76,6 +76,9 @@ func (a *SettingController) initRouter(g *gin.RouterGroup) {
 	g.POST("/ui/get", a.getUIPreference)
 	g.POST("/ui/set", a.setUIPreference)
 
+	// Phase 1 — Caddy front-door masking endpoints (/setting/security/*).
+	NewPanelSecurityController(g)
+
 	// Initialize migration controller
 	NewMigrationController(g)
 }

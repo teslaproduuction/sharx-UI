@@ -72,6 +72,35 @@ services:
 #    network_mode: host
     restart: unless-stopped
 
+  # Caddy front-door — Hiddify-style transparent decoy reverse-proxy.
+  # Hides the SharX panel behind a secret URL prefix; everything else is mirrored
+  # to PANEL_DECOY_URL (a real third-party site). See .agent/plans/phase-1-caddy-masking.md.
+  # Uses host network so it can listen on :443 alongside the host-mode panel container.
+  # Customize via environment block or .env (PANEL_DOMAIN, PANEL_SECRET_PREFIX, PANEL_DECOY_URL).
+  caddy:
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    container_name: sharx_caddy
+    network_mode: host
+    cap_add: [NET_BIND_SERVICE]
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+      - caddy_logs:/var/log/caddy
+    environment:
+      PANEL_DOMAIN: ${PANEL_DOMAIN:-}
+      PANEL_SECRET_PREFIX: ${PANEL_SECRET_PREFIX:-}
+      PANEL_DECOY_URL: ${PANEL_DECOY_URL:-https://example.com}
+      PANEL_BACKEND_HOST: 127.0.0.1
+      PANEL_BACKEND_PORT: 2053
+      SUB_BACKEND_PORT: 2096
+    depends_on:
+      - sharx
+    restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
   watchtower:
     image: beatkind/watchtower:2.3.2
     container_name: sharx_watchtower
@@ -119,3 +148,6 @@ networks:
 
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:
+  caddy_logs:

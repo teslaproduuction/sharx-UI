@@ -136,6 +136,13 @@ var defaultValueMap = map[string]string{
 	"dashboardWidgets":  `["resources","xray","quick_actions","uptime","users_online","user_agent","database","network","panel_runtime"]`,
 	"hideSecAlert":      "false",
 	"clientsTablePrefs": "",
+	// Panel security (Phase 1 — Caddy front-door + Hiddify-style decoy)
+	// See .agent/plans/phase-1-caddy-masking.md.
+	"panelSecretPrefix":        "",                      // generated on first install_script run, b64url 16 bytes
+	"panelDecoyURL":            "https://example.com",   // upstream the Caddy reverse-proxies all unrecognized paths to
+	"panelMascaraedAfterHours": "1",                     // delay before root '/' also routes to decoy
+	"panelInstallTime":         "",                      // unix epoch seconds; set lazily by panel on first boot
+	"caddyAdminURL":            "http://127.0.0.1:2019", // endpoint to push Caddy admin reload requests
 }
 
 var allowedUIPreferenceKeys = map[string]bool{

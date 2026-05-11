@@ -1,0 +1,71 @@
+# SharX panel front-door — Hiddify-style transparent decoy reverse-proxy.
+# Rendered from this template by render-caddyfile.sh on container start.
+#
+# Substituted env vars:
+#   ${PANEL_DOMAIN}         e.g. panel.example.com
+#   ${PANEL_SECRET_PREFIX}  e.g. sx7k2j9 (random 16-byte b64url)
+#   ${PANEL_DECOY_URL}      e.g. https://news.ycombinator.com
+#   ${PANEL_BACKEND_HOST}   default 127.0.0.1 (host network)
+#   ${PANEL_BACKEND_PORT}   default 2053
+#   ${SUB_BACKEND_PORT}     default 2096
+
+{
+    email admin@${PANEL_DOMAIN}
+    servers {
+        protocols h1 h2 h3
+    }
+    # Caddy admin API binds to 127.0.0.1:2019 by default — for panel to send config reload requests.
+    admin 127.0.0.1:2019
+}
+
+${PANEL_DOMAIN} {
+    tls {
+        issuer acme
+    }
+
+    encode zstd gzip
+
+    # Panel — secret-prefix path → reverse_proxy to backend (Gin) on host loopback.
+    # handle_path strips the prefix so panel's webBasePath stays "/" internally.
+    handle_path /${PANEL_SECRET_PREFIX}/* {
+        reverse_proxy ${PANEL_BACKEND_HOST}:${PANEL_BACKEND_PORT} {
+            header_up X-Real-IP {remote_host}
+            header_up X-Forwarded-Proto {scheme}
+            header_up X-Forwarded-Host {host}
+        }
+    }
+
+    # Subscription endpoint — same secret-prefix scheme but pointing to the sub server (port 2096).
+    handle_path /${PANEL_SECRET_PREFIX}-sub/* {
+        reverse_proxy ${PANEL_BACKEND_HOST}:${SUB_BACKEND_PORT}
+    }
+
+    # Decoy = transparent reverse-proxy to a real third-party site (Hiddify pattern).
+    # Any request that does not match the secret prefix is mirrored to PANEL_DECOY_URL.
+    # Headers are stripped so user cookies/auth do not leak to the decoy upstream.
+    handle {
+        reverse_proxy ${PANEL_DECOY_URL} {
+            header_up Host {upstream_hostport}
+            header_up X-Forwarded-Proto https
+            header_up -Cookie
+            header_up -Authorization
+            header_down -Set-Cookie
+        }
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 50mb
+            roll_keep 5
+        }
+        format filter {
+            wrap json
+            fields {
+                request>uri delete
+                request>headers>Cookie delete
+                request>headers>Authorization delete
+            }
+        }
+        level INFO
+    }
+}
