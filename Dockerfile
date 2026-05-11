@@ -17,6 +17,32 @@ COPY panel/ ./
 RUN npm run build && cp -R out /webpanel
 
 # SharX Telemt fork: ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
+
+# ========================================================
+# Stage: hiddify-sing-box (Phase 2 — singleton sidecar for mieru/AnyTLS/Naive/TUIC)
+#
+# Pinned hiddify fork v1.13.0.h5 (Feb 2026 release). Patched per-user v2ray_api
+# stats — see .agent/protocols/singbox.md and stats.go in the fork.
+# Prebuilt linux-amd64-glibc.tar.gz from upstream releases — no Go build step
+# (panel/node hosts may have only 1 GB RAM; we never build sing-box on the node).
+# ========================================================
+FROM alpine:3.20 AS singbox-fetch
+ARG TARGETARCH
+ARG SINGBOX_VER=1.13.0.h5
+RUN apk add --no-cache curl tar gzip && \
+    case "${TARGETARCH}" in \
+      amd64) SBARCH=amd64 ;; \
+      arm64) SBARCH=arm64 ;; \
+      *)     echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    URL="https://github.com/hiddify/hiddify-sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${SBARCH}-glibc.tar.gz" && \
+    echo "Downloading ${URL}" && \
+    curl -fsSL "${URL}" -o /tmp/singbox.tgz && \
+    mkdir -p /out && \
+    tar xzf /tmp/singbox.tgz --strip-components=1 -C /out && \
+    chmod +x /out/sing-box && \
+    /out/sing-box version
+
 # ========================================================
 # Stage: Builder
 # ========================================================
@@ -83,6 +109,9 @@ RUN ARCH="" && case "${TARGETARCH}" in amd64) ARCH=linux-amd64 ;; arm64) ARCH=li
     else \
       echo "telemt: no SharX prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
     fi
+
+# Phase 2 — embed hiddify-sing-box binary alongside Xray/Telemt for the singleton sidecar.
+COPY --from=singbox-fetch /out/sing-box /app/build/bin/sing-box
 
 # ========================================================
 # Stage: Final Image of SharX
