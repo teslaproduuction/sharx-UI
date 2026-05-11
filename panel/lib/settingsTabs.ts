@@ -3,6 +3,7 @@ import type { TFunction } from "i18next";
 export const SETTINGS_TAB_IDS = [
   "general",
   "security",
+  "panelSecurity",
   "telegram",
   "subscription",
   "ldap",
@@ -22,6 +23,8 @@ export function tSettingsTabLabel(t: TFunction, id: SettingsTabId): string {
       return t("pages.settings.tabs.general");
     case "security":
       return t("pages.settings.tabs.security");
+    case "panelSecurity":
+      return t("pages.settings.tabs.panelSecurity");
     case "telegram":
       return t("pages.settings.tabs.telegram");
     case "subscription":
