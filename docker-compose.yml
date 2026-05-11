@@ -54,8 +54,12 @@ services:
       # Backend stays at root — Caddy `handle_path` strips the secret prefix before forwarding.
       # The Next.js bundle is built with NEXT_PUBLIC_BASE_PATH=/<prefix>/ so asset URLs
       # in the served HTML carry the prefix; the browser then re-fetches them through Caddy
-      # which strips the prefix again. Backend never sees the prefix.
+      # which strips the prefix again. Backend never sees the prefix in URL paths.
       XUI_WEB_BASE_PATH: "/"
+      # Source-of-truth prefix for the panel security UI (rotate / display in the Settings tab).
+      # Backend reconciles its DB-mirrored copy against this value on every boot
+      # (see web/service/panel_security.go EnsureSecretPrefix).
+      PANEL_SECRET_PREFIX: ${PANEL_SECRET_PREFIX:-}
       # XUI_WEB_CERT_FILE:  /cert/fullchain.pem
       # XUI_WEB_KEY_FILE: /cert/privkey.pem
       # XUI_WEB_DOMAIN: panel.example.com

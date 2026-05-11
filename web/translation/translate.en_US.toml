@@ -864,6 +864,7 @@ remarkModelDragHint = "Drag to reorder"
 [pages.settings.tabs]
 general = "Panel & general"
 security = "Security"
+panelSecurity = "Panel masking"
 telegram = "Telegram"
 subscription = "Subscription & JSON"
 ldap = "LDAP"
