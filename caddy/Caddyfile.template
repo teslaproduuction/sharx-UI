@@ -24,7 +24,9 @@ ${SITE_ADDRESS} {
     encode zstd gzip
 
     # Panel — secret-prefix path → reverse_proxy to backend (Gin) on host loopback.
-    # handle_path strips the prefix so panel's webBasePath stays "/" internally.
+    # `handle_path` strips the prefix so backend stays on webBasePath="/" while the
+    # Next.js bundle (built with NEXT_PUBLIC_BASE_PATH=/<prefix>/) emits asset URLs
+    # like /<prefix>/_next/static/*.css — strip restores them to /_next/* on backend.
     handle_path /${PANEL_SECRET_PREFIX}/* {
         reverse_proxy ${PANEL_BACKEND_HOST}:${PANEL_BACKEND_PORT} {
             header_up X-Real-IP {remote_host}
@@ -33,7 +35,7 @@ ${SITE_ADDRESS} {
         }
     }
 
-    # Subscription endpoint — same secret-prefix scheme but pointing to the sub server (port 2096).
+    # Subscription endpoint — same scheme, different upstream port (sub server).
     handle_path /${PANEL_SECRET_PREFIX}-sub/* {
         reverse_proxy ${PANEL_BACKEND_HOST}:${SUB_BACKEND_PORT}
     }

@@ -18,6 +18,14 @@ services:
     build:
       context: .
       dockerfile: ./Dockerfile
+      args:
+        # Bake the panel secret prefix into the Next.js bundle so all asset
+        # URLs (/<prefix>/_next/static/...) are absolute with the prefix.
+        # Caddy then forwards /<prefix>/* to backend without strip; both UI
+        # routes and asset requests carry the prefix end-to-end.
+        # On rotate, image must be rebuilt + reshipped (acceptable for VPN
+        # nodes — this prefix is stable for the lifetime of the install).
+        NEXT_PUBLIC_BASE_PATH: /${PANEL_SECRET_PREFIX:-}/
     container_name: sharx_app
     labels:
       com.centurylinklabs.watchtower.enable: "true"
@@ -43,7 +51,10 @@ services:
       # Paths
       XUI_DATA_FOLDER: "/app/data"
       XUI_BIN_FOLDER: "/app/bin"
-      # Панель на корне сайта (см. GetBasePath); без подпути не будет 302/404 на GET http://host:2053/
+      # Backend stays at root — Caddy `handle_path` strips the secret prefix before forwarding.
+      # The Next.js bundle is built with NEXT_PUBLIC_BASE_PATH=/<prefix>/ so asset URLs
+      # in the served HTML carry the prefix; the browser then re-fetches them through Caddy
+      # which strips the prefix again. Backend never sees the prefix.
       XUI_WEB_BASE_PATH: "/"
       # XUI_WEB_CERT_FILE:  /cert/fullchain.pem
       # XUI_WEB_KEY_FILE: /cert/privkey.pem
