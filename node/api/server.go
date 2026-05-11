@@ -536,7 +536,13 @@ func (s *Server) stats(c *gin.Context) {
 	if err != nil {
 		if errors.Is(err, xray.ErrXrayNotReady) {
 			logXrayNotReadyThrottled("stats")
-			c.JSON(http.StatusServiceUnavailable, gin.H{"error": err.Error(), "code": errCodeXrayNotReady})
+			// Telemt runs outside Xray. Returning 503 here hid all MTProto counters/online in the panel
+			// whenever the core was stopped or not ready, even though Telegram still worked.
+			stats = &xray.NodeStats{}
+			if s.telemtManager != nil {
+				s.telemtManager.MergeTelemtIntoNodeStats(&stats.Traffic, &stats.ClientTraffic, &stats.OnlineClients)
+			}
+			c.JSON(http.StatusOK, stats)
 			return
 		}
 		logger.Errorf("Failed to get stats: %v", err)
@@ -563,11 +569,11 @@ func (s *Server) userOnlineSessions(c *gin.Context) {
 	sessions, err := s.xrayManager.GetUserOnlineSessions(email, reset)
 	xrayNotReady := errors.Is(err, xray.ErrXrayNotReady)
 	if err != nil && !xrayNotReady {
-		logger.Errorf("Failed to get user online sessions: %v", err)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
-		return
-	}
-	if xrayNotReady {
+		// Do not fail the whole handler: Telemt session IPs come from the sidecar API, not Xray.
+		// Missing statsUserOnline / gRPC errors would otherwise hide MTProto sessions in multi-node.
+		logger.Warningf("user-online-sessions: xray query failed (continuing with telemt): %v", err)
+		sessions = nil
+	} else if xrayNotReady {
 		sessions = nil
 	}
 	if s.telemtManager != nil {
