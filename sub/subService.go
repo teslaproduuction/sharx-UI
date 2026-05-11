@@ -390,6 +390,10 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 			model.Mixed:       {},
 			model.Hysteria:    {},
 			model.Hysteria2:   {},
+			model.Mieru:       {},
+			model.AnyTLS:      {},
+			model.NaiveServer: {},
+			model.TUIC:        {},
 		}
 		inboundById := make(map[int]*model.Inbound, len(all))
 		for _, inb := range all {
