@@ -14,6 +14,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -150,13 +151,36 @@ func (p *PanelSecurityService) ActivateMascaraedNow() error {
 	return p.settings.setString(panelInstallTimeKey, strconv.FormatInt(backdate, 10))
 }
 
-// EnsureSecretPrefix generates one if it is empty (used once at install/migration time).
-// Idempotent — does nothing if a prefix already exists.
+// EnsureSecretPrefix reconciles the panelSecretPrefix setting with the env-provided value.
+//
+// PANEL_SECRET_PREFIX is the source of truth — it lives in .env, gets baked into the
+// Next.js bundle via NEXT_PUBLIC_BASE_PATH, and drives Caddy's handle_path matcher.
+// The DB row is a UI mirror so the panel can display + rotate it. They MUST stay in sync,
+// otherwise the UI shows a prefix that does not match the URL the browser is using.
+//
+// Behaviour:
+//   - If env is set: write env value to DB (overrides any drift).
+//   - If env is empty AND DB is empty: generate a fresh prefix (single-machine dev fallback).
+//   - If env is empty AND DB has a value: keep DB value (legacy/manual install).
 func (p *PanelSecurityService) EnsureSecretPrefix() (string, error) {
-	cur, err := p.settings.getString(panelSecretPrefixKey)
-	if err == nil && strings.TrimSpace(cur) != "" {
+	envPrefix := strings.TrimSpace(os.Getenv("PANEL_SECRET_PREFIX"))
+	cur, _ := p.settings.getString(panelSecretPrefixKey)
+	cur = strings.TrimSpace(cur)
+
+	if envPrefix != "" {
+		if cur != envPrefix {
+			if err := p.settings.setString(panelSecretPrefixKey, envPrefix); err != nil {
+				return "", err
+			}
+			logger.Infof("panel_security: synced panelSecretPrefix from env (%s***)", envPrefix[:min(4, len(envPrefix))])
+		}
+		return envPrefix, nil
+	}
+
+	if cur != "" {
 		return cur, nil
 	}
+
 	prefix, err := generateSecretPrefix()
 	if err != nil {
 		return "", err
