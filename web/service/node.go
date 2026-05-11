@@ -1687,9 +1687,13 @@ func (s *NodeService) CollectNodeStats() error {
 	for _, node := range nodesWithInbounds {
 		go func(n *model.Node) {
 			if h, hErr := s.GetNodePublicHealth(n); hErr == nil && !h.XrayRunning {
-				logger.Debugf("[Node: %s] Skipping stats: xray not running (GET /health)", n.Name)
-				results <- nodeStatsResult{node: n, skip: true}
-				return
+				telemtActive := h.TelemtRunning || h.TelemtCount > 0
+				if !telemtActive {
+					logger.Debugf("[Node: %s] Skipping stats: xray not running and telemt inactive (GET /health)", n.Name)
+					results <- nodeStatsResult{node: n, skip: true}
+					return
+				}
+				logger.Debugf("[Node: %s] Xray not running but telemt active — still collecting stats (GET /health)", n.Name)
 			}
 			// Use reset=true to get delta traffic (incremental values) instead of cumulative
 			// This prevents double-counting when adding to database
