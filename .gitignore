@@ -42,5 +42,8 @@ tmp/
 # Local-only docker overrides
 docker-compose.override.yml
 
-# # Ignore .env (Environment Variables) file
-# .env
+# Environment files — MUST NOT be committed (contain secrets: domain, prefixes, tokens)
+.env
+.env.local
+.env.*.local
+!.env.example
