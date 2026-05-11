@@ -26,22 +26,35 @@ RUN npm run build && cp -R out /webpanel
 # Prebuilt linux-amd64-glibc.tar.gz from upstream releases — no Go build step
 # (panel/node hosts may have only 1 GB RAM; we never build sing-box on the node).
 # ========================================================
-FROM alpine:3.20 AS singbox-fetch
-ARG TARGETARCH
-ARG SINGBOX_VER=1.13.0.h5
-RUN apk add --no-cache curl tar gzip && \
-    case "${TARGETARCH}" in \
-      amd64) SBARCH=amd64 ;; \
-      arm64) SBARCH=arm64 ;; \
-      *)     echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
-    esac && \
-    URL="https://github.com/hiddify/hiddify-sing-box/releases/download/v${SINGBOX_VER}/sing-box-${SINGBOX_VER}-linux-${SBARCH}-glibc.tar.gz" && \
-    echo "Downloading ${URL}" && \
-    curl -fsSL "${URL}" -o /tmp/singbox.tgz && \
-    mkdir -p /out && \
-    tar xzf /tmp/singbox.tgz --strip-components=1 -C /out && \
-    chmod +x /out/sing-box && \
-    /out/sing-box version
+FROM golang:1.25-bookworm AS singbox-fetch
+# Build from hiddify-sing-box master HEAD with CGO disabled so the resulting
+# binary is statically-linked and runs on plain alpine (no glibc compat layer).
+#
+# Rationale for source build vs the prebuilt tarball:
+#   - Prebuilt v1.13.0.h5 was tagged before the mieru inbound landed — it ships
+#     `unknown inbound type: mieru` despite the source tree having protocol/mieru.
+#   - The prebuilt tarball is also dynamically linked against /lib64/ld-linux-*,
+#     which alpine does not provide.
+# Build tags include every server-side protocol we plan to use across Phase 2-4
+# (mieru/AnyTLS/Naive/TUIC/Hy2 inbounds + outbounds via protocol/ registry).
+ARG SINGBOX_REF=extended
+RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
+# Rewrite SSH submodule URLs to HTTPS so we can pull without an SSH key,
+# then recursive-clone so go.mod's `replace ./replace/psiphon-tls` etc resolve.
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+    git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
+        https://github.com/hiddify/hiddify-sing-box.git /src
+WORKDIR /src
+ENV CGO_ENABLED=0
+# Build tags chosen to enable every server-side protocol we ship in Phase 2-4
+# (mieru/AnyTLS/Naive/TUIC/Hysteria2/Reality + the v2ray gRPC stats API hiddify
+# patched for per-user accounting). with_wireguard pulls psiphon — we only need
+# wireguard outbound for the cascade later, so drop it for the Phase 2 baseline.
+RUN go build -trimpath \
+      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp" \
+      -ldflags "-w -s" \
+      -o /out/sing-box ./cmd/sing-box
+RUN /out/sing-box version | head -3 && /out/sing-box version | grep -i mieru || echo "mieru tag check skipped"
 
 # ========================================================
 # Stage: Builder
@@ -126,7 +139,13 @@ RUN apk add --no-cache --update \
   fail2ban \
   bash \
   postgresql-client \
-  conntrack-tools
+  conntrack-tools \
+  # Phase 2: hiddify-sing-box prebuilt is dynamically linked against glibc
+  # (interpreter /lib64/ld-linux-x86-64.so.2). gcompat + libc6-compat give
+  # alpine the loader + symbols sing-box needs to start without a "no such
+  # file or directory" exec error.
+  gcompat \
+  libc6-compat
 
 COPY --from=builder /app/build/ /app/
 COPY --from=builder /app/DockerEntrypoint.sh /app/

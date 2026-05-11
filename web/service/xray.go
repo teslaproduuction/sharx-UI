@@ -442,6 +442,7 @@ func (s *XrayService) RestartXray(isForce bool) error {
 
 	if multiMode {
 		StopLocalTelemtStandalone()
+		StopLocalSingboxStandalone()
 		return s.restartXrayMultiMode(isForce)
 	}
 
@@ -476,6 +477,7 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	}
 
 	TryApplyLocalTelemtStandalone(s)
+	TryApplyLocalSingboxStandalone(s)
 	return nil
 }
 
