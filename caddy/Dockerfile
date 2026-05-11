@@ -7,6 +7,10 @@ RUN xcaddy build \
 
 FROM caddy:2-alpine
 
+# envsubst lives in `gettext` on alpine. render-caddyfile.sh uses it to
+# substitute env vars into Caddyfile.template at container start.
+RUN apk add --no-cache gettext
+
 COPY --from=builder /usr/bin/caddy /usr/bin/caddy
 COPY render-caddyfile.sh /usr/local/bin/render-caddyfile.sh
 COPY Caddyfile.template /etc/caddy/Caddyfile.template

@@ -18,7 +18,8 @@ fi
 # With domain → ACME Let's Encrypt; without → :443 listen + Caddy internal CA self-signed.
 if [ -n "$PANEL_DOMAIN" ]; then
     SITE_ADDRESS="$PANEL_DOMAIN"
-    TLS_BLOCK="tls { issuer acme }"
+    # Multi-line block; Caddyfile rejects `tls { issuer acme }` on one line.
+    TLS_BLOCK="$(printf 'tls {\n        issuer acme\n    }')"
     GLOBAL_EMAIL="email admin@${PANEL_DOMAIN}"
 else
     SITE_ADDRESS=":443"
