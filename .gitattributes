@@ -1,0 +1,12 @@
+# Force LF for files that run inside Linux containers / shells.
+# Without this, Windows checkouts get CRLF and shell scripts fail with
+# "/bin/sh^M: bad interpreter" inside the panel/Caddy/node containers.
+*.sh        text eol=lf
+*.bash      text eol=lf
+Dockerfile  text eol=lf
+Caddyfile*  text eol=lf
+*.template  text eol=lf
+*.go        text eol=lf
+*.sql       text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
