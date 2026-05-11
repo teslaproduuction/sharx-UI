@@ -6,6 +6,9 @@ WORKDIR /app/panel
 # Must match XUI / SharX `webBasePath` (e.g. / or /prefix). `next.config` `basePath` + client `linkP()`.
 ARG NEXT_PUBLIC_BASE_PATH=/
 ENV NEXT_PUBLIC_BASE_PATH=$NEXT_PUBLIC_BASE_PATH
+# Bump Node heap so the Next.js production build (compile + tsc lint) does not OOM.
+# Default is ~512MB; tsc on this panel needs ~1.2GB. 2048 leaves headroom on a 4GB build host.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 COPY panel/package.json panel/package-lock.json ./
 # react-simple-maps declares peer react@18; panel uses react@19 — same as panel/.npmrc locally.
 RUN --mount=type=cache,target=/root/.npm \
