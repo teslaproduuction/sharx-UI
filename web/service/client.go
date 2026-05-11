@@ -3,6 +3,7 @@ package service
 
 import (
 	"encoding/json"
+	"errors"
 	"sort"
 	"strings"
 	"time"
@@ -625,28 +626,17 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	// We'll always update if InboundIds is not nil (even if empty array means remove all)
 	if client.InboundIds != nil {
 		logger.Debugf("UpdateClient: updating inbound assignments for client %d, inboundIds=%v (len=%d)", client.Id, client.InboundIds, len(client.InboundIds))
-		// Remove existing assignments
-		err = tx.Where("client_id = ?", client.Id).Delete(&model.ClientInboundMapping{}).Error
-		if err != nil {
-			logger.Errorf("UpdateClient: failed to delete existing inbound mappings for client %d: %v", client.Id, err)
+		// Sync by diff so Telemt (and other) mapping rows stay stable — same idea as WireGuard keys:
+		// do not delete+recreate everything (that regenerated telemt_secret on every save).
+		if err = s.SyncClientInboundAssignments(tx, client.Id, client.InboundIds); err != nil {
+			logger.Errorf("UpdateClient: failed to sync inbound mappings for client %d: %v", client.Id, err)
 			return false, err
 		}
-		logger.Debugf("UpdateClient: deleted existing inbound mappings for client %d", client.Id)
-
-		// Add new assignments (if any)
-		if len(client.InboundIds) > 0 {
-			err = s.AssignClientToInbounds(tx, client.Id, client.InboundIds)
-			if err != nil {
-				logger.Errorf("UpdateClient: failed to assign client %d to inbounds: %v", client.Id, err)
-				return false, err
-			}
-			logger.Debugf("UpdateClient: assigned client %d to inbounds: %v", client.Id, client.InboundIds)
-			// Track new inbound IDs for settings update
-			for _, inboundId := range client.InboundIds {
+		logger.Debugf("UpdateClient: synced inbound mappings for client %d to: %v", client.Id, client.InboundIds)
+		for _, inboundId := range client.InboundIds {
+			if inboundId > 0 {
 				affectedInboundIds[inboundId] = true
 			}
-		} else {
-			logger.Debugf("UpdateClient: client %d has empty inboundIds array, all connections removed", client.Id)
 		}
 	} else {
 		logger.Debugf("UpdateClient: inboundIds is nil for client %d, keeping existing assignments", client.Id)
@@ -1091,6 +1081,78 @@ func (s *ClientService) AssignClientToInbounds(tx *gorm.DB, clientId int, inboun
 		}
 		if err := tx.Create(mapping).Error; err != nil {
 			logger.Warningf("Failed to assign client %d to inbound %d: %v", clientId, inboundId, err)
+			return err
+		}
+	}
+	return nil
+}
+
+// SyncClientInboundAssignments updates client↔inbound rows to match wantInboundIds order without
+// replacing existing mapping rows (preserves Telemt secrets and DB ids). New inbounds get a new
+// row; removed inbounds are deleted; sort_order follows the slice order.
+func (s *ClientService) SyncClientInboundAssignments(tx *gorm.DB, clientId int, wantInboundIds []int) error {
+	if clientId <= 0 {
+		return nil
+	}
+	want := make([]int, 0, len(wantInboundIds))
+	seen := make(map[int]struct{}, len(wantInboundIds))
+	for _, id := range wantInboundIds {
+		if id <= 0 {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		want = append(want, id)
+	}
+
+	var current []model.ClientInboundMapping
+	if err := tx.Where("client_id = ?", clientId).Find(&current).Error; err != nil {
+		return err
+	}
+
+	for _, m := range current {
+		if _, ok := seen[m.InboundId]; !ok {
+			if err := tx.Where("id = ?", m.Id).Delete(&model.ClientInboundMapping{}).Error; err != nil {
+				return err
+			}
+		}
+	}
+
+	for i, inboundId := range want {
+		sortOrder := i * 10
+		var row model.ClientInboundMapping
+		err := tx.Where("client_id = ? AND inbound_id = ?", clientId, inboundId).First(&row).Error
+		if err == nil {
+			if row.SortOrder != sortOrder {
+				if err := tx.Model(&model.ClientInboundMapping{}).Where("id = ?", row.Id).Update("sort_order", sortOrder).Error; err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		var ib model.Inbound
+		if err := tx.Select("protocol").First(&ib, inboundId).Error; err != nil {
+			return err
+		}
+		mapping := &model.ClientInboundMapping{
+			ClientId:  clientId,
+			InboundId: inboundId,
+			SortOrder: sortOrder,
+		}
+		if model.NormalizeProtocol(ib.Protocol) == model.Telemt {
+			sec, genErr := GenerateTelemtSecretHex()
+			if genErr != nil {
+				return genErr
+			}
+			mapping.TelemtSecret = sec
+		}
+		if err := tx.Create(mapping).Error; err != nil {
 			return err
 		}
 	}
