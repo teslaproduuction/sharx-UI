@@ -28,6 +28,7 @@ import (
 	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
 	"github.com/konstpic/sharx-code/v2/node/geopush"
 	nodeLogs "github.com/konstpic/sharx-code/v2/node/logs"
+	"github.com/konstpic/sharx-code/v2/node/singbox"
 	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
@@ -45,10 +46,11 @@ func try(fn func()) {
 
 // Server provides REST API for managing the node.
 type Server struct {
-	port          int
-	xrayManager   *xray.Manager
-	telemtManager *telemt.Manager
-	httpServer    *http.Server
+	port           int
+	xrayManager    *xray.Manager
+	telemtManager  *telemt.Manager
+	singboxManager *singbox.Manager
+	httpServer     *http.Server
 	certFile           string
 	keyFile            string
 	// clientCAFile, if set with cert/key, enables mTLS (panel must present a cert signed by this CA).
@@ -88,11 +90,12 @@ func logXrayNotReadyThrottled(endpoint string) {
 }
 
 // NewServer creates a new API server instance. Call SetPairing before Start (pairing-only).
-func NewServer(port int, xrayManager *xray.Manager, telemtManager *telemt.Manager) *Server {
+func NewServer(port int, xrayManager *xray.Manager, telemtManager *telemt.Manager, singboxManager *singbox.Manager) *Server {
 	return &Server{
-		port:          port,
-		xrayManager:   xrayManager,
-		telemtManager: telemtManager,
+		port:           port,
+		xrayManager:    xrayManager,
+		telemtManager:  telemtManager,
+		singboxManager: singboxManager,
 	}
 }
 
@@ -145,6 +148,8 @@ func (s *Server) Start() error {
 		api.POST("/stop-xray", s.stopXray)
 		api.POST("/stop-telemt", s.stopTelemt)
 		api.POST("/restart-telemt", s.restartTelemt)
+		api.POST("/stop-singbox", s.stopSingbox)
+		api.POST("/restart-singbox", s.restartSingbox)
 		api.POST("/reload", s.reload)
 		api.POST("/force-reload", s.forceReload)
 		api.POST("/install-xray/:version", s.installXray)
@@ -294,14 +299,22 @@ func (s *Server) health(c *gin.Context) {
 	if s.telemtManager != nil {
 		tCount = s.telemtManager.RunningCount()
 	}
+	sbxRunning := false
+	sbxHash := ""
+	if s.singboxManager != nil {
+		sbxRunning = s.singboxManager.RunningCount() > 0
+		sbxHash = s.singboxManager.ConfigHash()
+	}
 	c.JSON(http.StatusOK, gin.H{
-		"status":        "ok",
-		"service":       "sharx-node",
-		"xrayRunning":   st["running"],
-		"xrayVersion":   st["version"],
-		"xrayUptime":    st["uptime"],
-		"telemtRunning": tCount > 0,
-		"telemtCount":   tCount,
+		"status":            "ok",
+		"service":           "sharx-node",
+		"xrayRunning":       st["running"],
+		"xrayVersion":       st["version"],
+		"xrayUptime":        st["uptime"],
+		"telemtRunning":     tCount > 0,
+		"telemtCount":       tCount,
+		"singboxRunning":    sbxRunning,
+		"singboxConfigHash": sbxHash,
 	})
 }
 
@@ -319,6 +332,7 @@ func (s *Server) applyConfig(c *gin.Context) {
 	logger.Infof("Request body read, size: %d bytes", len(body))
 
 	var telemtRaw json.RawMessage
+	var singboxRaw json.RawMessage
 	reqCoreProfileHash := ""
 	reqExpectedSHA := ""
 
@@ -326,15 +340,17 @@ func (s *Server) applyConfig(c *gin.Context) {
 		Config               json.RawMessage `json:"config"`
 		PanelURL             string          `json:"panelUrl,omitempty"`
 		Telemt               json.RawMessage `json:"telemt"`
+		Singbox              json.RawMessage `json:"singbox"`
 		CoreProfileHash      string          `json:"coreProfileHash,omitempty"`
 		ExpectedConfigSha256 string          `json:"expectedConfigSha256,omitempty"`
 	}
 
 	configBytes := body
-	// Envelope: { "config": {...}, "panelUrl", "telemt": [...] }
+	// Envelope: { "config": {...}, "panelUrl", "telemt": [...], "singbox": {...} }
 	if err := json.Unmarshal(body, &requestData); err == nil && len(requestData.Config) > 0 {
 		configBytes = requestData.Config
 		telemtRaw = requestData.Telemt
+		singboxRaw = requestData.Singbox
 		reqCoreProfileHash = strings.TrimSpace(requestData.CoreProfileHash)
 		reqExpectedSHA = strings.TrimSpace(requestData.ExpectedConfigSha256)
 		if requestData.PanelURL != "" {
@@ -394,6 +410,17 @@ func (s *Server) applyConfig(c *gin.Context) {
 			logger.Warningf("telemt: invalid JSON: %v", err)
 		} else if err := s.telemtManager.Apply(telemtPayloads); err != nil {
 			logger.Warningf("telemt: apply: %v", err)
+		}
+	}
+
+	if s.singboxManager != nil && len(singboxRaw) > 0 && string(singboxRaw) != "null" {
+		var singboxPayload singbox.Payload
+		if err := json.Unmarshal(singboxRaw, &singboxPayload); err != nil {
+			logger.Warningf("singbox: invalid JSON: %v", err)
+		} else if err := s.singboxManager.Apply(singboxPayload); err != nil {
+			logger.Warningf("singbox: apply: %v", err)
+		} else {
+			logger.Infof("singbox: applied configHash=%s***", singboxPayload.ConfigHash[:min(8, len(singboxPayload.ConfigHash))])
 		}
 	}
 
@@ -460,6 +487,42 @@ func (s *Server) restartTelemt(c *gin.Context) {
 	}
 	tCount := s.telemtManager.RunningCount()
 	c.JSON(http.StatusOK, gin.H{"message": "Telemt restarted", "telemtRunning": tCount > 0, "telemtCount": tCount})
+}
+
+// stopSingbox stops the hiddify-sing-box singleton sidecar (Phase 2).
+// Xray and Telemt keep running.
+func (s *Server) stopSingbox(c *gin.Context) {
+	logger.Infof("stop-singbox: stopping hiddify-sing-box on worker")
+	if s.singboxManager == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "sing-box not configured", "singboxRunning": false})
+		return
+	}
+	s.singboxManager.Stop()
+	c.JSON(http.StatusOK, gin.H{"message": "sing-box stopped", "singboxRunning": false})
+}
+
+// restartSingbox stops sing-box and reapplies the last successful payload pushed by the panel.
+// SIGHUP would be enough for routine config changes; this endpoint exists for the rare case
+// where SIGHUP wedged the process or the operator wants a clean restart.
+func (s *Server) restartSingbox(c *gin.Context) {
+	logger.Infof("restart-singbox: restarting hiddify-sing-box on worker")
+	if s.singboxManager == nil {
+		c.JSON(http.StatusOK, gin.H{"message": "sing-box not configured", "singboxRunning": false})
+		return
+	}
+	payload, ok := s.singboxManager.ReplaySnapshotForRestart()
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "no sing-box config applied yet; push config from the panel first"})
+		return
+	}
+	s.singboxManager.Stop()
+	if err := s.singboxManager.Apply(payload); err != nil {
+		logger.Errorf("restart-singbox: %v", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+	running := s.singboxManager.RunningCount() > 0
+	c.JSON(http.StatusOK, gin.H{"message": "sing-box restarted", "singboxRunning": running, "singboxConfigHash": s.singboxManager.ConfigHash()})
 }
 
 // reload reloads XRAY configuration.
