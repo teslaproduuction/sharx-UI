@@ -10,7 +10,7 @@
 #   ${SUB_BACKEND_PORT}     default 2096
 
 {
-    email admin@${PANEL_DOMAIN}
+    ${GLOBAL_EMAIL}
     servers {
         protocols h1 h2 h3
     }
@@ -18,10 +18,8 @@
     admin 127.0.0.1:2019
 }
 
-${PANEL_DOMAIN} {
-    tls {
-        issuer acme
-    }
+${SITE_ADDRESS} {
+    ${TLS_BLOCK}
 
     encode zstd gzip
 
