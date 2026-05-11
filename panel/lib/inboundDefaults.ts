@@ -180,6 +180,14 @@ export type MieruFormState = {
   transport: "TCP" | "UDP" | "TCP+UDP";
   multiplexing: "MULTIPLEXING_OFF" | "MULTIPLEXING_LOW" | "MULTIPLEXING_MIDDLE" | "MULTIPLEXING_HIGH";
   mtu: number;
+  /**
+   * Hiddify-style port lists: comma-separated values, ranges allowed
+   * ("443,2999,3001-3010"). Each entry becomes one sing-box `portBindings`
+   * row with the matching protocol; primary `port` (the inbound's own field)
+   * is still announced but the port-list is what mieru actually binds.
+   */
+  tcpPorts: string;
+  udpPorts: string;
   clients: MieruClientRow[];
 };
 
@@ -196,6 +204,8 @@ export function defaultMieruForm(): MieruFormState {
     transport: "TCP",
     multiplexing: "MULTIPLEXING_LOW",
     mtu: 1400,
+    tcpPorts: "",
+    udpPorts: "",
     clients: [{ email: `mieru-${randomId(6)}`, password: randomPassword(16) }],
   };
 }
@@ -223,6 +233,8 @@ export function parseMieruSettingsToForm(settingsStr: string): MieruFormState {
     if (typeof root.mtu === "number" && root.mtu >= 576 && root.mtu <= 1500) {
       base.mtu = Math.floor(root.mtu);
     }
+    if (typeof root.tcpPorts === "string") base.tcpPorts = root.tcpPorts.trim();
+    if (typeof root.udpPorts === "string") base.udpPorts = root.udpPorts.trim();
     if (Array.isArray(root.clients)) {
       const rows: MieruClientRow[] = [];
       for (const c of root.clients) {
@@ -245,12 +257,14 @@ export function buildMieruSettingsJson(form: MieruFormState): string {
   const clients = form.clients
     .map((c) => ({ email: c.email.trim(), password: c.password }))
     .filter((c) => c.email.length > 0 && c.password.length > 0);
-  const out = {
+  const out: Record<string, unknown> = {
     transport: form.transport,
     multiplexing: form.multiplexing,
     mtu: Number.isFinite(form.mtu) && form.mtu > 0 ? Math.floor(form.mtu) : 1400,
     clients,
   };
+  if (form.tcpPorts.trim()) out.tcpPorts = form.tcpPorts.trim();
+  if (form.udpPorts.trim()) out.udpPorts = form.udpPorts.trim();
   return JSON.stringify(out);
 }
 

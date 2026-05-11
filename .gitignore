@@ -46,4 +46,5 @@ docker-compose.override.yml
 .env
 .env.local
 .env.*.local
-!.env.example
+!.env.example.agent.zip
+data/geofile-assets/
