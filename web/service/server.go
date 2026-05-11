@@ -84,6 +84,13 @@ type Status struct {
 		Count    int          `json:"count"`
 		ErrorMsg string       `json:"errorMsg"`
 	} `json:"telemt"`
+	// Singbox is the local hiddify-sing-box singleton sidecar (Phase 2). Carries the
+	// aggregated config hash so the dashboard can show "stale config" / "applied X ago".
+	Singbox struct {
+		State      ProcessState `json:"state"`
+		ConfigHash string       `json:"configHash"`
+		ErrorMsg   string       `json:"errorMsg"`
+	} `json:"singbox"`
 	// PanelVersion is the SharX panel release (embedded at build from config/version).
 	PanelVersion string `json:"panelVersion"`
 	// PanelUptime is seconds since the panel process started (not local Xray).
@@ -128,6 +135,13 @@ type Status struct {
 		Stopped int `json:"stopped"`
 		Unknown int `json:"unknown"`
 	} `json:"nodesTelemt"`
+	// NodesSingbox counts singbox_state on worker nodes (enable=true only).
+	NodesSingbox struct {
+		Total   int `json:"total"`
+		Running int `json:"running"`
+		Stopped int `json:"stopped"`
+		Unknown int `json:"unknown"`
+	} `json:"nodesSingbox"`
 	// UsersOnline is the number of distinct client emails currently considered online (local Xray or worker nodes).
 	UsersOnline int `json:"usersOnline"`
 	Database    struct {
@@ -716,6 +730,7 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 	if multiModeTelemt {
 		status.Telemt.State = Stop
 		status.Telemt.Count = 0
+		status.Singbox.State = Stop
 	} else {
 		tc := LocalTelemtSidecarCount()
 		status.Telemt.Count = tc
@@ -723,6 +738,13 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 			status.Telemt.State = Running
 		} else {
 			status.Telemt.State = Stop
+		}
+		// Phase 2 — sing-box singleton sidecar (mieru/AnyTLS/Naive/TUIC).
+		if LocalSingboxRunning() {
+			status.Singbox.State = Running
+			status.Singbox.ConfigHash = LocalSingboxConfigHash()
+		} else {
+			status.Singbox.State = Stop
 		}
 	}
 
@@ -775,6 +797,15 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 					status.NodesTelemt.Stopped++
 				default:
 					status.NodesTelemt.Unknown++
+				}
+				status.NodesSingbox.Total++
+				switch node.SingboxState {
+				case "running":
+					status.NodesSingbox.Running++
+				case "stopped":
+					status.NodesSingbox.Stopped++
+				default:
+					status.NodesSingbox.Unknown++
 				}
 			}
 		} else {

@@ -309,6 +309,11 @@ type Node struct {
 	XrayState    string `json:"xrayState" gorm:"column:xray_state;default:unknown"`                      // running | stopped | error | unknown (worker Xray)
 	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`                       // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
 	TelemtState  string `json:"telemtState" gorm:"column:telemt_state;default:unknown"`                  // running | stopped | unknown (worker Telemt sidecars)
+	// SingboxState mirrors the Phase 2 hiddify-sing-box singleton sidecar status
+	// (running | stopped | unknown). Reported by the node /status endpoint and
+	// refreshed by web/service/node.go RefreshNodeSingboxStateFromWorker (TODO).
+	SingboxState      string `json:"singboxState" gorm:"column:singbox_state;default:unknown"`
+	SingboxConfigHash string `json:"singboxConfigHash" gorm:"column:singbox_config_hash;default:''"`
 
 	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy values accepted; see IsPairingMode.
 	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing
