@@ -27,11 +27,35 @@ const (
 	Hysteria2 Protocol = "hysteria2"
 	// Telemt is an MTProto proxy (external binary), not an Xray inbound protocol.
 	Telemt Protocol = "telemt"
+
+	// Phase 2 — sing-box managed inbounds (hiddify-sing-box fork singleton sidecar).
+	// All four are NOT Xray inbounds; they live in the aggregated sing-box config.
+	// See .agent/plans/phase-2-singbox-inbound.md and .agent/protocols/singbox.md.
+	Mieru       Protocol = "mieru"
+	AnyTLS      Protocol = "anytls"
+	NaiveServer Protocol = "naive_server"
+	TUIC        Protocol = "tuic"
 )
 
 // IsXrayInboundProtocol reports whether the panel should emit this inbound into Xray JSON.
+// Returns false for sidecar-managed protocols (Telemt + sing-box family).
 func IsXrayInboundProtocol(p Protocol) bool {
-	return NormalizeProtocol(p) != Telemt
+	switch NormalizeProtocol(p) {
+	case Telemt, Mieru, AnyTLS, NaiveServer, TUIC:
+		return false
+	}
+	return true
+}
+
+// IsSingboxInboundProtocol reports whether this protocol is served by the
+// hiddify-sing-box singleton sidecar (Phase 2). Used by the singbox config
+// aggregator and stats collector to filter relevant inbounds.
+func IsSingboxInboundProtocol(p Protocol) bool {
+	switch NormalizeProtocol(p) {
+	case Mieru, AnyTLS, NaiveServer, TUIC:
+		return true
+	}
+	return false
 }
 
 // IsHysteria returns true for both "hysteria" and "hysteria2" (imports may use the v2 literal).
