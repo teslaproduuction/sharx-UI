@@ -471,13 +471,13 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		return false, common.NewError("Client not found or access denied")
 	}
 
-	// Check email uniqueness if email changed
-	if client.Email != "" && strings.ToLower(client.Email) != strings.ToLower(existing.Email) {
-		existingByEmail, err := s.GetClientByEmail(userId, client.Email)
-		if err == nil && existingByEmail != nil && existingByEmail.Id != client.Id {
-			return false, common.NewError("Client with email already exists: ", client.Email)
-		}
+	// Email is immutable after creation (WireGuard peer tags, stats, subscriptions bind to it).
+	reqEmail := strings.ToLower(strings.TrimSpace(client.Email))
+	storedEmail := strings.ToLower(strings.TrimSpace(existing.Email))
+	if reqEmail != "" && reqEmail != storedEmail {
+		return false, common.NewError("Client email cannot be changed after creation")
 	}
+	client.Email = existing.Email
 
 	// Normalize and validate UUID when client supplies one; ensure uniqueness on change
 	if client.UUID != "" {
@@ -514,11 +514,6 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	}
 	client.Announce = strings.TrimSpace(client.Announce)
 
-	// Normalize email to lowercase if provided
-	if client.Email != "" {
-		client.Email = strings.ToLower(client.Email)
-	}
-
 	var effectiveInboundIds []int
 	if client.InboundIds != nil {
 		effectiveInboundIds = append(effectiveInboundIds, client.InboundIds...)
@@ -553,11 +548,8 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		}
 	}()
 
-	// Update only provided fields
+	// Update only provided fields (email is never updated here — immutable after creation)
 	updates := make(map[string]interface{})
-	if client.Email != "" {
-		updates["email"] = client.Email
-	}
 	if client.UUID != "" {
 		updates["uuid"] = client.UUID
 	}
