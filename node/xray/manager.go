@@ -48,13 +48,42 @@ func ensureNodeXrayLoggingDefaults(cfg *xray.Config) {
 		logObj = map[string]any{}
 	}
 
-	logObj["loglevel"] = "debug"
+	// Loglevel: respect what the panel sent. Only fall back when the field
+	// is missing or contains an unknown token. "warning" is the safe default
+	// — keeps logs useful without producing the firehose that "debug" does
+	// (every connection ends up in the panel SSE stream via LogWriter).
+	current := strings.ToLower(strings.TrimSpace(asLoglevelString(logObj["loglevel"])))
+	if !isValidNodeXrayLogLevel(current) {
+		logObj["loglevel"] = "warning"
+	}
+
+	// access/error paths must stay on /dev/stderr so LogWriter.Write parses
+	// them and forwards through logger.Emit (filtered by SetMinEmitLevel).
 	logObj["access"] = nodeXrayAccessLogPath
 	logObj["error"] = nodeXrayErrorLogPath
 
 	if b, err := json.Marshal(logObj); err == nil {
 		cfg.LogConfig = json_util.RawMessage(b)
 	}
+}
+
+// isValidNodeXrayLogLevel reports whether v is one of the values Xray
+// accepts in its `log.loglevel` field. Mirrors panel-side validation.
+func isValidNodeXrayLogLevel(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "debug", "info", "warning", "error", "none":
+		return true
+	}
+	return false
+}
+
+// asLoglevelString returns v as a string when v is a string, otherwise "".
+// Used to safely read a map[string]any field that may be nil/typed.
+func asLoglevelString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // NodeStats represents traffic and online clients statistics from a node.

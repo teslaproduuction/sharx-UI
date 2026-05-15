@@ -2801,7 +2801,7 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		}
 	}
 
-	_, subHost := s.getAddressesForInbound(inbound)
+	nodeAddresses, subHost := s.getAddressesForInbound(inbound)
 	applyHostOverridesToHysteriaParams(subHost, params)
 
 	var settings map[string]interface{}
@@ -2840,15 +2840,36 @@ func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth str
 		return strings.Join(links, "\n")
 	}
 
-	link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, s.address, inbound.Port)
-	u, _ := url.Parse(link)
-	q := u.Query()
-	for k, v := range params {
-		q.Add(k, v)
+	// Multi-node aware: emit one link per node address (or the single
+	// default address in non-multi-node mode). Mirrors genVlessLink so
+	// hysteria/hysteria2 no longer hardcode s.address (panel host).
+	links := make([]string, 0, len(nodeAddresses))
+	for _, ap := range nodeAddresses {
+		addr := strings.TrimSpace(ap.Address)
+		if addr == "" {
+			continue
+		}
+		linkPort := inbound.Port
+		if ap.Port > 0 {
+			linkPort = ap.Port
+		}
+
+		rowParams := shallowCopyStringMap(params)
+		if subHost != nil && ap.ApplyHostSubscriptionOverrides {
+			applyHostOverridesToHysteriaParams(subHost, rowParams)
+		}
+
+		link := fmt.Sprintf("%s://%s@%s:%d", protocol, auth, addr, linkPort)
+		u, _ := url.Parse(link)
+		q := u.Query()
+		for k, v := range rowParams {
+			q.Add(k, v)
+		}
+		u.RawQuery = q.Encode()
+		u.Fragment = s.genRemark(inbound, email, strings.TrimSpace(ap.RemarkSuffix), remarkTplFromAP(ap))
+		links = append(links, u.String())
 	}
-	u.RawQuery = q.Encode()
-	u.Fragment = s.genRemark(inbound, email, "", nil)
-	return u.String()
+	return strings.Join(links, "\n")
 }
 
 // splitRemarkModel splits the model string: first rune = separator, rest = ASCII order letters (i, e, o, n, p, r).
