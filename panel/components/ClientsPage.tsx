@@ -1763,7 +1763,17 @@ function ClientUnifiedCard({
                     onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
                     placeholder="user@example.com"
                     autoComplete="off"
+                    readOnly={isEdit}
+                    aria-readonly={isEdit}
+                    className={isEdit ? "cursor-default bg-[var(--bg-muted)]/40" : undefined}
                   />
+                  {isEdit ? (
+                    <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                      {t("pages.clients.emailImmutableHint", {
+                        defaultValue: "Email cannot be changed after the client is created.",
+                      })}
+                    </p>
+                  ) : null}
                 </div>
 
                 {variant === "create" ? (

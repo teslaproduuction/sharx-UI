@@ -80,6 +80,8 @@ type NodeRow = {
   inbounds?: InboundRef[];
   profiles?: ProfileRef[];
   xrayVersion?: string;
+  /** SharX worker build (from node /api/v1/status sharxVersion), cached in DB */
+  workerVersion?: string;
   /** Worker Xray: running | stopped | error | unknown */
   xrayState?: string;
   /** Worker Telemt sidecars: running | stopped | unknown */
@@ -277,7 +279,7 @@ type PendingRegistration = {
   secretKey?: string;
 };
 
-/** Host-network worker: API on port 8080 in the process (default); no port publishing. Self-contained (no .env). */
+/** Host-network worker + Watchtower sidecar (127.0.0.1:8081) for in-panel image updates, same contract as the panel stack. */
 function buildNodeDockerComposeYaml(secretKey: string, panelUrl: string) {
   const p = panelUrl || "https://your-panel.example";
   return `services:
@@ -285,6 +287,8 @@ function buildNodeDockerComposeYaml(secretKey: string, panelUrl: string) {
     image: ${NODE_DOCKER_IMAGE}
     container_name: sharx-node
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     cap_add: [NET_ADMIN]
     network_mode: host
     volumes:
@@ -294,6 +298,31 @@ function buildNodeDockerComposeYaml(secretKey: string, panelUrl: string) {
     environment:
       PANEL_URL: ${JSON.stringify(p)}
       SECRET_KEY: ${JSON.stringify(secretKey)}
+      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8081/v1/update
+      XUI_DOCKER_UPDATER_TOKEN: \${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+
+  watchtower:
+    image: beatkind/watchtower:2.3.2
+    container_name: sharx_node_watchtower
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --http-api-update
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: \${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    networks:
+      - sharx_node_net
+
+networks:
+  sharx_node_net:
+    driver: bridge
 
 volumes:
   sharx-node-logs:
@@ -1220,7 +1249,7 @@ export function NodesPage() {
               </SelectNative>
             </div>
           <div className="panel-data-table overflow-x-auto">
-            <table className="w-full min-w-[960px] border-collapse text-left text-sm">
+            <table className="w-full min-w-[1040px] border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
                   <th
@@ -1236,6 +1265,7 @@ export function NodesPage() {
                     {t("pages.nodes.onlineUsers")}
                   </th>
                   <th className="p-3">{t("pages.nodes.responseTime")}</th>
+                  <th className="p-3">{t("pages.nodes.workerVersion")}</th>
                   <th className="p-3">{t("pages.nodes.xrayVersion")}</th>
                   <th className="p-3">{t("pages.nodes.xrayState")}</th>
                   <th className="p-3">
@@ -1249,7 +1279,7 @@ export function NodesPage() {
                 {sortedAndFilteredRows.length === 0 ? (
                   <tr>
                     <td
-                      colSpan={12}
+                      colSpan={13}
                       className="p-6 text-center text-sm text-[var(--fg-subtle)]"
                     >
                       {t("pages.nodes.noMatches")}
@@ -1298,6 +1328,9 @@ export function NodesPage() {
                       {r.responseTime != null && r.responseTime > 0
                         ? `${r.responseTime} ms`
                         : "—"}
+                    </td>
+                    <td className="p-3 font-mono text-xs">
+                      {r.workerVersion || "—"}
                     </td>
                     <td className="p-3 font-mono text-xs">
                       {r.xrayVersion || "—"}
