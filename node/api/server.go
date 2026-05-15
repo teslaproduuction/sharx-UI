@@ -35,6 +35,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/dockerupdater"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
+	xraycore "github.com/konstpic/sharx-code/v2/xray"
 )
 
 // try executes a function and recovers from panics, logging them as warnings
@@ -617,8 +618,73 @@ func (s *Server) stats(c *gin.Context) {
 	if s.telemtManager != nil {
 		s.telemtManager.MergeTelemtIntoNodeStats(&stats.Traffic, &stats.ClientTraffic, &stats.OnlineClients)
 	}
+	if s.singboxManager != nil {
+		mergeSingboxIntoNodeStats(s.singboxManager, &stats.Traffic, &stats.ClientTraffic, reset)
+	}
 	c.JSON(http.StatusOK, stats)
 	logger.Debugf("Stats response sent")
+}
+
+// mergeSingboxIntoNodeStats appends the singleton sing-box sidecar's per-tag and
+// per-user counters onto the existing Xray-side slices. Tag conflicts are
+// resolved by adding values (sing-box never reuses Xray inbound tags), email
+// conflicts by adding values (rare — would happen only if the same email is
+// used both as an Xray client and a sing-box user). Errors are logged at debug
+// level; we never fail the /stats response over a sidecar gRPC hiccup.
+func mergeSingboxIntoNodeStats(mgr *singbox.Manager, traffic *[]*xraycore.Traffic, clientTraffic *[]*xraycore.ClientTraffic, reset bool) {
+	tags, users, err := mgr.QueryStats(reset)
+	if err != nil {
+		logger.Debugf("singbox stats query failed (continuing): %v", err)
+		return
+	}
+	if traffic != nil {
+		idx := make(map[string]*xraycore.Traffic, len(*traffic))
+		for _, t := range *traffic {
+			if t != nil {
+				idx[t.Tag] = t
+			}
+		}
+		for _, t := range tags {
+			if t == nil {
+				continue
+			}
+			if existing, ok := idx[t.Tag]; ok {
+				existing.Up += t.Up
+				existing.Down += t.Down
+				continue
+			}
+			*traffic = append(*traffic, &xraycore.Traffic{
+				IsInbound:  t.IsInbound,
+				IsOutbound: t.IsOutbound,
+				Tag:        t.Tag,
+				Up:         t.Up,
+				Down:       t.Down,
+			})
+		}
+	}
+	if clientTraffic != nil {
+		idx := make(map[string]*xraycore.ClientTraffic, len(*clientTraffic))
+		for _, c := range *clientTraffic {
+			if c != nil {
+				idx[c.Email] = c
+			}
+		}
+		for _, u := range users {
+			if u == nil {
+				continue
+			}
+			if existing, ok := idx[u.Email]; ok {
+				existing.Up += u.Up
+				existing.Down += u.Down
+				continue
+			}
+			*clientTraffic = append(*clientTraffic, &xraycore.ClientTraffic{
+				Email: u.Email,
+				Up:    u.Up,
+				Down:  u.Down,
+			})
+		}
+	}
 }
 
 // userOnlineSessions returns per-IP online data from Xray stats (user>>>email>>>online) plus Telemt MTProto IPs.
