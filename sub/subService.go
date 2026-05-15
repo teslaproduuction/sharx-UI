@@ -851,11 +851,17 @@ func (s *SubService) genTuicLinkWithClient(inbound *model.Inbound, client *model
 		return ""
 	}
 	pwd := strings.TrimSpace(client.Password)
-	uuid := ""
-	if pwd == "" {
-		pwd, uuid = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
-	} else {
-		_, uuid = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+	uuid := strings.TrimSpace(client.UUID)
+	if pwd == "" || uuid == "" {
+		// Fall back to inline settings.clients[] only when ClientEntity is missing the
+		// field — TUIC has both uuid and password, so prefer entity values when present.
+		inlinePwd, inlineUUID := extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+		if pwd == "" {
+			pwd = inlinePwd
+		}
+		if uuid == "" {
+			uuid = inlineUUID
+		}
 	}
 	return s.buildTuicURI(inbound, uuid, pwd)
 }

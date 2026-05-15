@@ -35,7 +35,6 @@ import {
   defaultMieruClientRow,
   defaultMieruForm,
   defaultNaiveServerForm,
-  defaultSingboxClientRow,
   defaultTelemtForm,
   defaultTUICForm,
   defaultWireguardForm,
@@ -68,15 +67,11 @@ import {
   suggestRandomTlsSni,
   totalBytesToGbInput,
   XHTTP_MODES,
-  type AnyTLSFormState,
   type InboundFormProtocol,
-  type MieruClientRow,
   type MieruFormState,
-  type NaiveServerFormState,
   type SingboxClientRow,
   type SingboxTlsBlock,
   type SniffingFormState,
-  type TUICFormState,
   type VlessTrojanFallbackFormRow,
   type StreamFormState,
 } from "@/lib/inboundDefaults";
@@ -228,12 +223,11 @@ function SingboxTlsAuthBlock(props: {
             <SelectNative
               value={tls.minVersion}
               onChange={(e) => patchTls({ minVersion: e.target.value })}
-              options={[
-                { value: "", label: "(default)" },
-                { value: "1.2", label: "1.2" },
-                { value: "1.3", label: "1.3" },
-              ]}
-            />
+            >
+              <option value="">(default)</option>
+              <option value="1.2">1.2</option>
+              <option value="1.3">1.3</option>
+            </SelectNative>
           </div>
           <CheckboxField
             checked={tls.insecure}
@@ -5347,12 +5341,11 @@ export function InboundsPage() {
                           onChange={(e) =>
                             setForm((f) => ({ ...f, tuicForm: { ...f.tuicForm, congestionControl: e.target.value } }))
                           }
-                          options={[
-                            { value: "bbr", label: "bbr" },
-                            { value: "cubic", label: "cubic" },
-                            { value: "new_reno", label: "new_reno" },
-                          ]}
-                        />
+                        >
+                          <option value="bbr">bbr</option>
+                          <option value="cubic">cubic</option>
+                          <option value="new_reno">new_reno</option>
+                        </SelectNative>
                       </div>
                       <CheckboxField
                         checked={form.tuicForm.zeroRttHandshake}
