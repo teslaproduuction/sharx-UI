@@ -124,12 +124,19 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 		}
 	}
 
-	if len(collected) == 0 {
+	// Phase 3 — sing-box client outbounds (cascade members) join the same
+	// singleton process as the inbounds. Each sidecar contributes a kind-
+	// specific outbound + a 127.0.0.1:listen_port mixed bridge + a route rule
+	// pinning bridge → outbound. Collected here so the empty-config check
+	// below considers both inbounds + outbound sidecars.
+	outboundFrags, bridgeFrags, ruleFrags := collectOutboundFragmentsForNode(0)
+
+	if len(collected) == 0 && len(outboundFrags) == 0 {
 		// Empty payload tells the node manager to stop sing-box.
 		return SingboxNodePayload{}, nil
 	}
 
-	inboundsJSON := make([]json.RawMessage, 0, len(collected))
+	inboundsJSON := make([]json.RawMessage, 0, len(collected)+len(bridgeFrags))
 	statsInbounds := make([]string, 0, len(collected))
 	statsUsers := make(map[string]bool)
 	for _, c := range collected {
@@ -139,6 +146,9 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 			statsUsers[c.user] = true
 		}
 	}
+	// Splice in cascade-bridge inbounds after the user-facing inbounds so the
+	// stats subjects above stay the inbound tags only (not the bridges).
+	inboundsJSON = append(inboundsJSON, bridgeFrags...)
 	statsUserList := make([]string, 0, len(statsUsers))
 	for u := range statsUsers {
 		statsUserList = append(statsUserList, u)
@@ -161,18 +171,33 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 				"secret":              clashSecret,
 			},
 		},
-		"inbounds":  inboundsJSON,
-		"outbounds": []map[string]any{{"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}},
-		// sing-box 1.13+ rule-actions: enable sniffing globally + prefer IPv4 for
-		// resolution. Equivalent to the legacy inbound-level sniff defaults that
-		// got removed in 1.13.
-		"route": map[string]any{
-			"rules": []map[string]any{
-				{"action": "sniff"},
-				{"action": "resolve", "strategy": "prefer_ipv4"},
-			},
-			"final": "direct",
-		},
+		"inbounds": inboundsJSON,
+	}
+
+	// Outbounds: built-ins (direct + block) plus every cascade member.
+	// Order matters only for "final" lookup (direct stays the last-resort);
+	// route.rules below pin bridge tag → cascade outbound explicitly.
+	outboundsList := []any{
+		map[string]any{"type": "direct", "tag": "direct"},
+		map[string]any{"type": "block", "tag": "block"},
+	}
+	for _, ob := range outboundFrags {
+		outboundsList = append(outboundsList, json.RawMessage(ob))
+	}
+	cfg["outbounds"] = outboundsList
+
+	// sing-box 1.13+ rule-actions: enable sniffing + IPv4 resolve globally,
+	// then per-bridge route rules so cascade traffic exits via its sidecar.
+	routeRules := []any{
+		map[string]any{"action": "sniff"},
+		map[string]any{"action": "resolve", "strategy": "prefer_ipv4"},
+	}
+	for _, rr := range ruleFrags {
+		routeRules = append(routeRules, json.RawMessage(rr))
+	}
+	cfg["route"] = map[string]any{
+		"rules": routeRules,
+		"final": "direct",
 	}
 
 	out, err := json.MarshalIndent(cfg, "", "  ")

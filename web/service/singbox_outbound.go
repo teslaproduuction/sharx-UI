@@ -1,0 +1,361 @@
+// Phase 3 — sing-box client outbound builders.
+//
+// Each enabled OutboundSidecar contributes 3 sections to the singleton sing-box
+// config blob produced by BuildSingboxConfigStandalone:
+//
+//   1. an "outbound" section (kind-specific: naive / anytls / mieru / tuic /
+//      hy2) carrying the target server + auth + TLS;
+//   2. a "mixed" inbound on 127.0.0.1:listen_port (the bridge clients dial
+//      from the SharX node — Xray socks-out points here);
+//   3. a route.rule that pins traffic from the bridge inbound to the matching
+//      sidecar outbound (so multiple sidecars can coexist).
+//
+// The Xray socks-out side ("<name>-local" tagged) is auto-created in
+// outbound_sidecar.go on every Create/Update so RoutingBuilder selects can
+// address the cascade member by friendly name.
+//
+// See .agent/plans/phase-3-naive-outbound.md.
+package service
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/konstpic/sharx-code/v2/database/model"
+	"github.com/konstpic/sharx-code/v2/logger"
+)
+
+// SingboxOutboundFragments is the multi-part contribution one sidecar makes
+// to the aggregated config (outbound + bridge + route rule). The aggregator
+// merges these slices across all sidecars before marshalling the final blob.
+type SingboxOutboundFragments struct {
+	Outbound      json.RawMessage
+	BridgeInbound json.RawMessage
+	RouteRule     json.RawMessage
+}
+
+// buildSingboxOutboundForSidecar dispatches by kind. Returns ErrKindNotSupported
+// when the sidecar.kind is unknown — callers should skip + log.
+func buildSingboxOutboundForSidecar(sc *model.OutboundSidecar) (SingboxOutboundFragments, error) {
+	if sc == nil {
+		return SingboxOutboundFragments{}, errors.New("nil sidecar")
+	}
+	if !sc.Enable {
+		return SingboxOutboundFragments{}, nil
+	}
+	if sc.ListenPort <= 0 || sc.ListenPort > 65535 {
+		return SingboxOutboundFragments{}, fmt.Errorf("sidecar id=%d has invalid listen_port %d", sc.Id, sc.ListenPort)
+	}
+
+	tag := strings.TrimSpace(sc.Name)
+	if tag == "" {
+		tag = fmt.Sprintf("sidecar-%d", sc.Id)
+	}
+	bridgeTag := "bridge-" + tag
+
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(sc.ConfigJSON), &raw); err != nil {
+		return SingboxOutboundFragments{}, fmt.Errorf("config_json: %w", err)
+	}
+
+	var ob map[string]any
+	var err error
+	switch strings.TrimSpace(sc.Kind) {
+	case "naive_client":
+		ob, err = buildNaiveClientOutbound(tag, raw)
+	case "anytls_client":
+		ob, err = buildAnyTLSClientOutbound(tag, raw)
+	case "mieru_client":
+		ob, err = buildMieruClientOutbound(tag, raw)
+	case "tuic_client":
+		ob, err = buildTUICClientOutbound(tag, raw)
+	case "hy2_client":
+		ob, err = buildHy2ClientOutbound(tag, raw)
+	default:
+		return SingboxOutboundFragments{}, fmt.Errorf("kind %q not implemented", sc.Kind)
+	}
+	if err != nil {
+		return SingboxOutboundFragments{}, err
+	}
+
+	bridge := map[string]any{
+		"type":        "mixed",
+		"tag":         bridgeTag,
+		"listen":      "127.0.0.1",
+		"listen_port": sc.ListenPort,
+	}
+	rule := map[string]any{
+		"inbound":  []string{bridgeTag},
+		"outbound": tag,
+	}
+
+	obJSON, _ := json.Marshal(ob)
+	bridgeJSON, _ := json.Marshal(bridge)
+	ruleJSON, _ := json.Marshal(rule)
+	return SingboxOutboundFragments{
+		Outbound:      obJSON,
+		BridgeInbound: bridgeJSON,
+		RouteRule:     ruleJSON,
+	}, nil
+}
+
+// requireServer pulls server + server_port out of a kind-agnostic config map.
+// All five client kinds share the same target shape.
+func requireServer(raw map[string]any) (string, int, error) {
+	server, _ := raw["server"].(string)
+	if strings.TrimSpace(server) == "" {
+		return "", 0, errors.New("server is required")
+	}
+	var port int
+	switch v := raw["server_port"].(type) {
+	case float64:
+		port = int(v)
+	case int:
+		port = v
+	}
+	if port <= 0 || port > 65535 {
+		return "", 0, fmt.Errorf("server_port %v invalid", raw["server_port"])
+	}
+	return server, port, nil
+}
+
+// outboundTLSBlock mirrors buildInboundTLS but for the client side: insecure
+// + sni + alpn + (optional) certificate pinning. Returns nil when the kind
+// does not need TLS at all (naive always does, mieru never).
+func outboundTLSBlock(raw map[string]any) (map[string]any, error) {
+	tlsRaw, ok := raw["tls"].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	out := map[string]any{"enabled": true}
+	if v, _ := tlsRaw["server_name"].(string); strings.TrimSpace(v) != "" {
+		out["server_name"] = v
+	}
+	if v, ok := tlsRaw["alpn"].([]any); ok && len(v) > 0 {
+		out["alpn"] = v
+	} else if s, _ := tlsRaw["alpn"].(string); strings.TrimSpace(s) != "" {
+		out["alpn"] = strings.Split(s, ",")
+	}
+	if v, ok := tlsRaw["insecure"].(bool); ok && v {
+		out["insecure"] = true
+	}
+	if v, _ := tlsRaw["min_version"].(string); strings.TrimSpace(v) != "" {
+		out["min_version"] = v
+	}
+	if v, _ := tlsRaw["certificate"].(string); strings.TrimSpace(v) != "" {
+		out["certificate"] = strings.Split(v, "\n")
+	}
+	if v, _ := tlsRaw["certificate_path"].(string); strings.TrimSpace(v) != "" {
+		out["certificate_path"] = v
+	}
+	return out, nil
+}
+
+func buildNaiveClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	username, _ := raw["username"].(string)
+	password, _ := raw["password"].(string)
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
+		return nil, errors.New("naive_client needs username + password")
+	}
+	tls, err := outboundTLSBlock(raw)
+	if err != nil {
+		return nil, err
+	}
+	if tls == nil {
+		tls = map[string]any{"enabled": true}
+	}
+	out := map[string]any{
+		"type":        "naive",
+		"tag":         tag,
+		"server":      server,
+		"server_port": port,
+		"username":    username,
+		"password":    password,
+		"tls":         tls,
+	}
+	return out, nil
+}
+
+func buildAnyTLSClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	password, _ := raw["password"].(string)
+	if strings.TrimSpace(password) == "" {
+		return nil, errors.New("anytls_client needs password")
+	}
+	tls, err := outboundTLSBlock(raw)
+	if err != nil {
+		return nil, err
+	}
+	if tls == nil {
+		tls = map[string]any{"enabled": true}
+	}
+	return map[string]any{
+		"type":        "anytls",
+		"tag":         tag,
+		"server":      server,
+		"server_port": port,
+		"password":    password,
+		"tls":         tls,
+	}, nil
+}
+
+func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	username, _ := raw["username"].(string)
+	password, _ := raw["password"].(string)
+	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
+		return nil, errors.New("mieru_client needs username + password")
+	}
+	out := map[string]any{
+		"type":        "mieru",
+		"tag":         tag,
+		"server":      server,
+		"server_port": port,
+		"username":    username,
+		"password":    password,
+	}
+	if v, _ := raw["transport"].(string); strings.TrimSpace(v) != "" {
+		out["transport"] = strings.ToUpper(v)
+	}
+	if v, _ := raw["multiplexing"].(string); strings.TrimSpace(v) != "" {
+		out["multiplexing"] = v
+	}
+	if v, ok := raw["mtu"].(float64); ok && v > 0 {
+		out["mtu"] = int(v)
+	}
+	return out, nil
+}
+
+func buildTUICClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	uuid, _ := raw["uuid"].(string)
+	password, _ := raw["password"].(string)
+	if strings.TrimSpace(uuid) == "" || strings.TrimSpace(password) == "" {
+		return nil, errors.New("tuic_client needs uuid + password")
+	}
+	tls, err := outboundTLSBlock(raw)
+	if err != nil {
+		return nil, err
+	}
+	if tls == nil {
+		tls = map[string]any{"enabled": true, "alpn": []any{"h3"}}
+	} else if _, has := tls["alpn"]; !has {
+		tls["alpn"] = []any{"h3"}
+	}
+	cc, _ := raw["congestion_control"].(string)
+	if strings.TrimSpace(cc) == "" {
+		cc = "bbr"
+	}
+	out := map[string]any{
+		"type":               "tuic",
+		"tag":                tag,
+		"server":             server,
+		"server_port":        port,
+		"uuid":               uuid,
+		"password":           password,
+		"congestion_control": cc,
+		"tls":                tls,
+	}
+	if v, ok := raw["zero_rtt_handshake"].(bool); ok && v {
+		out["zero_rtt_handshake"] = true
+	}
+	if v, _ := raw["udp_relay_mode"].(string); strings.TrimSpace(v) != "" {
+		out["udp_relay_mode"] = v
+	}
+	return out, nil
+}
+
+func buildHy2ClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	password, _ := raw["password"].(string)
+	if strings.TrimSpace(password) == "" {
+		return nil, errors.New("hy2_client needs password")
+	}
+	tls, err := outboundTLSBlock(raw)
+	if err != nil {
+		return nil, err
+	}
+	if tls == nil {
+		tls = map[string]any{"enabled": true}
+	}
+	out := map[string]any{
+		"type":        "hysteria2",
+		"tag":         tag,
+		"server":      server,
+		"server_port": port,
+		"password":    password,
+		"tls":         tls,
+	}
+	if obfs, _ := raw["obfs"].(map[string]any); len(obfs) > 0 {
+		out["obfs"] = obfs
+	}
+	if up, ok := raw["up_mbps"].(float64); ok && up > 0 {
+		out["up_mbps"] = int(up)
+	}
+	if down, ok := raw["down_mbps"].(float64); ok && down > 0 {
+		out["down_mbps"] = int(down)
+	}
+	return out, nil
+}
+
+// collectOutboundFragmentsForNode walks every enabled OutboundSidecar assigned
+// to the node (or all standalone sidecars when nodeID == 0) and returns the
+// per-section slices the aggregator splices into the final config blob.
+//
+// The function never errors — a malformed sidecar is logged + skipped so one
+// bad row cannot break the entire sing-box config push.
+func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, bridges []json.RawMessage, rules []json.RawMessage) {
+	svc := OutboundSidecarService{}
+	rows, err := svc.List(0)
+	if err != nil {
+		logger.Warningf("singbox outbound: list sidecars: %v", err)
+		return nil, nil, nil
+	}
+	for _, sc := range rows {
+		if sc == nil || !sc.Enable {
+			continue
+		}
+		if nodeID > 0 && !sidecarAssignedToNode(sc, nodeID) {
+			continue
+		}
+		frag, err := buildSingboxOutboundForSidecar(sc)
+		if err != nil {
+			logger.Warningf("singbox outbound: skip sidecar id=%d (%s): %v", sc.Id, sc.Name, err)
+			continue
+		}
+		if len(frag.Outbound) == 0 {
+			continue
+		}
+		outbounds = append(outbounds, frag.Outbound)
+		bridges = append(bridges, frag.BridgeInbound)
+		rules = append(rules, frag.RouteRule)
+	}
+	return outbounds, bridges, rules
+}
+
+func sidecarAssignedToNode(sc *model.OutboundSidecar, nodeID int) bool {
+	for _, nid := range sc.NodeIds {
+		if nid == nodeID {
+			return true
+		}
+	}
+	return false
+}
