@@ -100,9 +100,27 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 				continue
 			}
 			collected = append(collected, sbxInbound{json: frag, tag: inb.Tag, user: firstUser(users)})
-		default:
-			// AnyTLS/Naive/TUIC — TODO follow-up commits.
-			logger.Debugf("singbox: skipping inbound id=%d protocol=%s (not yet implemented)", inb.Id, inb.Protocol)
+		case model.AnyTLS:
+			frag, users, err := buildAnyTLSInboundJSON(inb)
+			if err != nil {
+				logger.Warningf("singbox: skip inbound id=%d (anytls build error): %v", inb.Id, err)
+				continue
+			}
+			collected = append(collected, sbxInbound{json: frag, tag: inb.Tag, user: firstUser(users)})
+		case model.NaiveServer:
+			frag, users, err := buildNaiveServerInboundJSON(inb)
+			if err != nil {
+				logger.Warningf("singbox: skip inbound id=%d (naive build error): %v", inb.Id, err)
+				continue
+			}
+			collected = append(collected, sbxInbound{json: frag, tag: inb.Tag, user: firstUser(users)})
+		case model.TUIC:
+			frag, users, err := buildTUICInboundJSON(inb)
+			if err != nil {
+				logger.Warningf("singbox: skip inbound id=%d (tuic build error): %v", inb.Id, err)
+				continue
+			}
+			collected = append(collected, sbxInbound{json: frag, tag: inb.Tag, user: firstUser(users)})
 		}
 	}
 
@@ -228,20 +246,28 @@ func PreviewSingboxInbound(inb *model.Inbound) (any, error) {
 	if inb == nil {
 		return nil, errors.New("nil inbound")
 	}
+	var raw json.RawMessage
+	var err error
 	switch model.NormalizeProtocol(inb.Protocol) {
 	case model.Mieru:
-		raw, _, err := buildMieruInboundJSON(inb)
-		if err != nil {
-			return nil, err
-		}
-		var out any
-		if err := json.Unmarshal(raw, &out); err != nil {
-			return nil, err
-		}
-		return out, nil
+		raw, _, err = buildMieruInboundJSON(inb)
+	case model.AnyTLS:
+		raw, _, err = buildAnyTLSInboundJSON(inb)
+	case model.NaiveServer:
+		raw, _, err = buildNaiveServerInboundJSON(inb)
+	case model.TUIC:
+		raw, _, err = buildTUICInboundJSON(inb)
 	default:
 		return nil, fmt.Errorf("preview not implemented for protocol %s", inb.Protocol)
 	}
+	if err != nil {
+		return nil, err
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func firstUser(users []sbxUser) string {
@@ -404,6 +430,260 @@ func buildMieruInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, erro
 		if firstPort, ok := portBindings[0]["port"].(int); ok {
 			frag["listen_port"] = firstPort
 		}
+	}
+	out, err := json.Marshal(frag)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, users, nil
+}
+
+// extractInlineUsers pulls {email,password} pairs from inbound.Settings.clients[].
+// All four sing-box server protocols (mieru/anytls/naive/tuic) accept users via
+// settings.clients[] in the same shape; the per-protocol JSON renderer below
+// remaps to the field names that protocol expects (name, username, uuid, …).
+func extractInlineUsers(raw map[string]any) ([]sbxUser, error) {
+	cs, ok := raw["clients"].([]any)
+	if !ok {
+		return nil, errors.New("no users (provide settings.clients[])")
+	}
+	var out []sbxUser
+	for _, c := range cs {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		email, _ := cm["email"].(string)
+		pwd, _ := cm["password"].(string)
+		uuid, _ := cm["uuid"].(string)
+		if strings.TrimSpace(email) == "" {
+			continue
+		}
+		out = append(out, sbxUser{Name: email, Password: pwd, UUID: uuid})
+	}
+	if len(out) == 0 {
+		return nil, errors.New("no users with email field")
+	}
+	return out, nil
+}
+
+// buildInboundTLS produces the sing-box `tls` block for protocols that always
+// require TLS (anytls/naive/tuic). Settings JSON is expected to carry either
+// inline cert/key strings (multi-line) or paths on the worker filesystem:
+//
+//	"tls": {
+//	  "server_name": "example.com",
+//	  "alpn": ["h3"],          // optional
+//	  "min_version": "1.3",     // optional
+//	  "certificate": "-----BEGIN CERTIFICATE-----\n…",
+//	  "key":         "-----BEGIN PRIVATE KEY-----\n…"
+//	  // or:
+//	  "certificate_path": "/etc/ssl/server.crt",
+//	  "key_path":         "/etc/ssl/server.key"
+//	}
+//
+// Defaults: enabled=true. Returns ErrNoTLS when the settings.tls block is
+// missing or has neither cert content nor cert path — caller decides whether
+// to error out (anytls/tuic require TLS) or fall back (naive technically can
+// run plaintext but we treat that as misconfig).
+func buildInboundTLS(raw map[string]any) (map[string]any, error) {
+	tlsRaw, ok := raw["tls"].(map[string]any)
+	if !ok {
+		return nil, errors.New("missing settings.tls block")
+	}
+	cert, _ := tlsRaw["certificate"].(string)
+	certPath, _ := tlsRaw["certificate_path"].(string)
+	key, _ := tlsRaw["key"].(string)
+	keyPath, _ := tlsRaw["key_path"].(string)
+	if strings.TrimSpace(cert) == "" && strings.TrimSpace(certPath) == "" {
+		return nil, errors.New("settings.tls.certificate or certificate_path is required")
+	}
+	if strings.TrimSpace(key) == "" && strings.TrimSpace(keyPath) == "" {
+		return nil, errors.New("settings.tls.key or key_path is required")
+	}
+	out := map[string]any{"enabled": true}
+	if v, _ := tlsRaw["server_name"].(string); strings.TrimSpace(v) != "" {
+		out["server_name"] = v
+	}
+	if v, ok := tlsRaw["alpn"].([]any); ok && len(v) > 0 {
+		out["alpn"] = v
+	}
+	if v, _ := tlsRaw["min_version"].(string); strings.TrimSpace(v) != "" {
+		out["min_version"] = v
+	}
+	if v, _ := tlsRaw["max_version"].(string); strings.TrimSpace(v) != "" {
+		out["max_version"] = v
+	}
+	if cert != "" {
+		out["certificate"] = strings.Split(cert, "\n")
+	} else {
+		out["certificate_path"] = certPath
+	}
+	if key != "" {
+		out["key"] = strings.Split(key, "\n")
+	} else {
+		out["key_path"] = keyPath
+	}
+	return out, nil
+}
+
+// buildAnyTLSInboundJSON renders one sing-box `anytls` inbound.
+// AnyTLS is a TLS-mandatory protocol with optional padding scheme (anti-pattern-detect).
+// Per-user auth uses {name, password}.
+func buildAnyTLSInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, error) {
+	if inb == nil {
+		return nil, nil, errors.New("nil inbound")
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
+		return nil, nil, fmt.Errorf("settings JSON: %w", err)
+	}
+	users, err := extractInlineUsers(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsBlock, err := buildInboundTLS(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	listen := strings.TrimSpace(inb.Listen)
+	if listen == "" {
+		listen = "::"
+	}
+	tag := strings.TrimSpace(inb.Tag)
+	if tag == "" {
+		tag = fmt.Sprintf("anytls-in-%d", inb.Id)
+	}
+	anytlsUsers := make([]map[string]string, 0, len(users))
+	for _, u := range users {
+		anytlsUsers = append(anytlsUsers, map[string]string{"name": u.Name, "password": u.Password})
+	}
+	frag := map[string]any{
+		"type":        "anytls",
+		"tag":         tag,
+		"listen":      listen,
+		"listen_port": inb.Port,
+		"users":       anytlsUsers,
+		"tls":         tlsBlock,
+	}
+	if v, ok := raw["padding_scheme"].([]any); ok && len(v) > 0 {
+		frag["padding_scheme"] = v
+	}
+	out, err := json.Marshal(frag)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, users, nil
+}
+
+// buildNaiveServerInboundJSON renders one sing-box `naive` inbound (Naïve over h2/h3).
+// auth.User shape = {username, password}; TLS mandatory.
+func buildNaiveServerInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, error) {
+	if inb == nil {
+		return nil, nil, errors.New("nil inbound")
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
+		return nil, nil, fmt.Errorf("settings JSON: %w", err)
+	}
+	users, err := extractInlineUsers(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsBlock, err := buildInboundTLS(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	listen := strings.TrimSpace(inb.Listen)
+	if listen == "" {
+		listen = "::"
+	}
+	tag := strings.TrimSpace(inb.Tag)
+	if tag == "" {
+		tag = fmt.Sprintf("naive-in-%d", inb.Id)
+	}
+	naiveUsers := make([]map[string]string, 0, len(users))
+	for _, u := range users {
+		naiveUsers = append(naiveUsers, map[string]string{"username": u.Name, "password": u.Password})
+	}
+	frag := map[string]any{
+		"type":        "naive",
+		"tag":         tag,
+		"listen":      listen,
+		"listen_port": inb.Port,
+		"network":     "tcp",
+		"users":       naiveUsers,
+		"tls":         tlsBlock,
+	}
+	if v, _ := raw["quic_congestion_control"].(string); strings.TrimSpace(v) != "" {
+		frag["quic_congestion_control"] = v
+	}
+	out, err := json.Marshal(frag)
+	if err != nil {
+		return nil, nil, err
+	}
+	return out, users, nil
+}
+
+// buildTUICInboundJSON renders one sing-box `tuic` inbound.
+// TUIC v5 user shape = {name, uuid, password}; TLS mandatory; QUIC transport.
+// Defaults: congestion_control=bbr, alpn=[h3].
+func buildTUICInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, error) {
+	if inb == nil {
+		return nil, nil, errors.New("nil inbound")
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
+		return nil, nil, fmt.Errorf("settings JSON: %w", err)
+	}
+	users, err := extractInlineUsers(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	tlsBlock, err := buildInboundTLS(raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	// TUIC requires alpn=[h3] over QUIC; inject if operator omitted it.
+	if _, has := tlsBlock["alpn"]; !has {
+		tlsBlock["alpn"] = []any{"h3"}
+	}
+	listen := strings.TrimSpace(inb.Listen)
+	if listen == "" {
+		listen = "::"
+	}
+	tag := strings.TrimSpace(inb.Tag)
+	if tag == "" {
+		tag = fmt.Sprintf("tuic-in-%d", inb.Id)
+	}
+	tuicUsers := make([]map[string]string, 0, len(users))
+	for _, u := range users {
+		uuid := strings.TrimSpace(u.UUID)
+		if uuid == "" {
+			// Fall back to deriving uuid from email — TUIC client uses uuid+password,
+			// no email field — admin must provide a real uuid in clients[]. Skip silently.
+			continue
+		}
+		tuicUsers = append(tuicUsers, map[string]string{"name": u.Name, "uuid": uuid, "password": u.Password})
+	}
+	if len(tuicUsers) == 0 {
+		return nil, nil, errors.New("tuic users need uuid + password (got none)")
+	}
+	cc, _ := raw["congestion_control"].(string)
+	if strings.TrimSpace(cc) == "" {
+		cc = "bbr"
+	}
+	frag := map[string]any{
+		"type":               "tuic",
+		"tag":                tag,
+		"listen":             listen,
+		"listen_port":        inb.Port,
+		"users":              tuicUsers,
+		"congestion_control": cc,
+		"tls":                tlsBlock,
+	}
+	if v, ok := raw["zero_rtt_handshake"].(bool); ok {
+		frag["zero_rtt_handshake"] = v
 	}
 	out, err := json.Marshal(frag)
 	if err != nil {
