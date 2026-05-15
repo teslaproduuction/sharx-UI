@@ -131,22 +131,21 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	engine.Use(sessions.Sessions("sharx", store))
 	engine.Use(func(c *gin.Context) {
-		// Phase 1 — Caddy front-door uses handle_path to strip the secret prefix
-		// before forwarding, so backend's webBasePath stays "/". The browser still
-		// lives under /<prefix>/, so any redirect we emit must be re-prefixed or
-		// it will land on /panel/ → decoy. Caddy injects X-Forwarded-Prefix; honor
-		// it when present so webBasePath/webPanelURL produce browser-correct paths.
-		bp := basePath
+		// base_path stays the engine's mount basePath (matches what the URL
+		// actually is on the backend after Caddy's handle_path strip). URL
+		// parsers (panelURLSubpath, sub helpers) read this and must see "/"
+		// for subpath extraction to work.
+		c.Set("base_path", basePath)
+		// forwarded_prefix is read by webBasePath/webPanelURL ONLY when emitting
+		// redirect Location headers. Browser lives under /<prefix>/, so a 302
+		// without the prefix lands on the Caddy decoy. See controller/base.go.
 		if fp := strings.TrimSpace(c.GetHeader("X-Forwarded-Prefix")); fp != "" {
 			if !strings.HasPrefix(fp, "/") {
 				fp = "/" + fp
 			}
-			if !strings.HasSuffix(fp, "/") {
-				fp += "/"
-			}
-			bp = fp
+			fp = strings.TrimSuffix(fp, "/")
+			c.Set("forwarded_prefix", fp)
 		}
-		c.Set("base_path", bp)
 	})
 	engine.Use(func(c *gin.Context) {
 		uri := c.Request.RequestURI
