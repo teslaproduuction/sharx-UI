@@ -135,8 +135,11 @@ func (s *WarpAccountService) Register(name string) (*model.WarpAccount, error) {
 		return nil, errors.New("CF register: response has no peers")
 	}
 	peer := rr.Config.Peers[0]
+	// CF returns endpoint as either "host:port" (modern) or just "host:" / "" /
+	// "ip:0" (older API). Always normalize to engage.cloudflareclient.com:2408
+	// when port is 0/missing — that is the canonical WARP relay anycast.
 	endpoint := peer.Endpoint.V4
-	if endpoint == "" {
+	if !strings.Contains(endpoint, ":") || strings.HasSuffix(endpoint, ":0") || strings.HasSuffix(endpoint, ":") {
 		endpoint = "engage.cloudflareclient.com:2408"
 	}
 	reserved, _ := warpReservedFromClientID(rr.Config.ClientID)
@@ -207,8 +210,13 @@ func (s *WarpAccountService) BuildXrayOutboundJSON(acc *model.WarpAccount) (stri
 	for _, b := range acc.Reserved {
 		reservedNums = append(reservedNums, int(b))
 	}
+	// Tag = "warp-<name>" but skip double prefix when admin already named it warp-*.
+	tag := "warp-" + acc.Name
+	if strings.HasPrefix(strings.ToLower(acc.Name), "warp-") || strings.EqualFold(acc.Name, "warp") {
+		tag = acc.Name
+	}
 	out := map[string]any{
-		"tag":      "warp-" + acc.Name,
+		"tag":      tag,
 		"protocol": "wireguard",
 		"settings": map[string]any{
 			"secretKey": priv,

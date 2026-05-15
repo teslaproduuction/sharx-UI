@@ -35,8 +35,15 @@ api.interceptors.response.use(
   (response) => response,
   (error: AxiosError) => {
     if (error.response?.status === 401) {
+      // Soft-redirect to root — root index controller renders the login page when
+      // session is invalid. Hard reload caused redirect loops on subpath-mounted
+      // panels (cookie/path edge cases) — sending the user to the login page once
+      // and stopping is safer than reloading the same protected URL.
       if (typeof window !== "undefined") {
-        window.location.reload();
+        const base = (process.env.NEXT_PUBLIC_BASE_PATH || "").replace(/\/$/, "");
+        if (window.location.pathname !== `${base}/` && window.location.pathname !== "/") {
+          window.location.href = `${base}/` || "/";
+        }
       }
     }
     return Promise.reject(error);
