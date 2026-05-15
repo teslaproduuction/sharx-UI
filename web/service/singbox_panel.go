@@ -64,6 +64,19 @@ func LocalSingboxRunning() bool {
 	return panelSingbox.RunningCount() > 0
 }
 
+// LocalSingboxConfigHash returns the sha256 of the last-applied aggregated
+// sing-box config blob (empty before first Apply). Used by the dashboard
+// status card to surface drift between what the panel built and what the
+// sidecar is actually running.
+func LocalSingboxConfigHash() string {
+	panelSingboxMu.Lock()
+	defer panelSingboxMu.Unlock()
+	if panelSingbox == nil {
+		return ""
+	}
+	return panelSingbox.ConfigHash()
+}
+
 // ApplyLocalSingboxStandalone rebuilds the aggregated sing-box config from DB
 // and pushes it into the local manager (which writes config.json + SIGHUPs the child).
 // In multi-node mode, this function is a no-op — workers receive the config via

@@ -14,7 +14,10 @@ export type InboundFormProtocol =
   | "wireguard"
   | "telemt"
   // Phase 2 — sing-box managed (hiddify-sing-box singleton sidecar).
-  | "mieru";
+  | "mieru"
+  | "anytls"
+  | "naive_server"
+  | "tuic";
 
 function randomId(length: number): string {
   const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
@@ -265,6 +268,231 @@ export function buildMieruSettingsJson(form: MieruFormState): string {
   };
   if (form.tcpPorts.trim()) out.tcpPorts = form.tcpPorts.trim();
   if (form.udpPorts.trim()) out.udpPorts = form.udpPorts.trim();
+  return JSON.stringify(out);
+}
+
+// =====================================================================
+// Phase 2 — AnyTLS / Naive / TUIC (sing-box singleton sidecar protocols)
+// =====================================================================
+//
+// Shared shape across all three: clients[] with email+password (TUIC also
+// needs uuid), and a TLS block (server_name, alpn, certificate, key,
+// allow_insecure). Each protocol has 1-2 extras unique to it.
+//
+// Backend renders these via web/service/singbox_config.go build*InboundJSON
+// and never patches Xray. SubService.gen{AnyTLS,Naive,Tuic}Link emits the
+// matching URI on the public sub endpoint.
+
+export type SingboxClientRow = {
+  email: string;
+  password: string;
+  /** TUIC only — 36-char UUID per user. Ignored by anytls/naive. */
+  uuid?: string;
+};
+
+export type SingboxTlsBlock = {
+  /** SNI advertised in the certificate. Required by clients to verify chain. */
+  serverName: string;
+  /** Multiline PEM. When empty + certificatePath set, backend uses the path. */
+  certificate: string;
+  /** Optional path on the worker filesystem (alternative to inline cert). */
+  certificatePath: string;
+  key: string;
+  keyPath: string;
+  /** Comma-separated. TUIC enforces h3; AnyTLS/Naive default empty (any). */
+  alpn: string;
+  /** "1.2" / "1.3" — leave empty for sing-box default. */
+  minVersion: string;
+  insecure: boolean;
+};
+
+export type AnyTLSFormState = {
+  clients: SingboxClientRow[];
+  tls: SingboxTlsBlock;
+  /** Multi-line padding-scheme string (one rule per line). Optional. */
+  paddingScheme: string;
+};
+
+export type NaiveServerFormState = {
+  clients: SingboxClientRow[];
+  tls: SingboxTlsBlock;
+  /** "" | "TBBR" | "B2ON" | "QBIC" | "RENO" — usually empty (let sing-box pick). */
+  quicCongestionControl: string;
+};
+
+export type TUICFormState = {
+  clients: SingboxClientRow[];
+  tls: SingboxTlsBlock;
+  /** "bbr" (default) | "cubic" | "new_reno" */
+  congestionControl: string;
+  zeroRttHandshake: boolean;
+};
+
+function defaultSingboxTls(): SingboxTlsBlock {
+  return {
+    serverName: "",
+    certificate: "",
+    certificatePath: "",
+    key: "",
+    keyPath: "",
+    alpn: "",
+    minVersion: "1.2",
+    insecure: false,
+  };
+}
+
+export function defaultSingboxClientRow(): SingboxClientRow {
+  return { email: `user-${randomId(6)}`, password: randomPassword(16) };
+}
+
+export function defaultAnyTLSForm(): AnyTLSFormState {
+  return {
+    clients: [defaultSingboxClientRow()],
+    tls: defaultSingboxTls(),
+    paddingScheme: "",
+  };
+}
+
+export function defaultNaiveServerForm(): NaiveServerFormState {
+  return {
+    clients: [defaultSingboxClientRow()],
+    tls: defaultSingboxTls(),
+    quicCongestionControl: "",
+  };
+}
+
+export function defaultTUICForm(): TUICFormState {
+  return {
+    clients: [{ ...defaultSingboxClientRow(), uuid: randomUUID() }],
+    tls: { ...defaultSingboxTls(), alpn: "h3" },
+    congestionControl: "bbr",
+    zeroRttHandshake: false,
+  };
+}
+
+/** Random RFC 4122 v4 UUID; falls back to a hex pattern when crypto is absent. */
+function randomUUID(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  return randomPassword(16).replace(
+    /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12}).*$/,
+    "$1-$2-$3-$4-$5",
+  );
+}
+
+function parseSingboxTls(raw: Record<string, unknown> | undefined): SingboxTlsBlock {
+  const out = defaultSingboxTls();
+  if (!raw) return out;
+  if (typeof raw.server_name === "string") out.serverName = raw.server_name;
+  if (typeof raw.certificate === "string") out.certificate = raw.certificate;
+  if (typeof raw.certificate_path === "string") out.certificatePath = raw.certificate_path;
+  if (typeof raw.key === "string") out.key = raw.key;
+  if (typeof raw.key_path === "string") out.keyPath = raw.key_path;
+  if (Array.isArray(raw.alpn)) out.alpn = (raw.alpn as unknown[]).filter((v) => typeof v === "string").join(",");
+  else if (typeof raw.alpn === "string") out.alpn = raw.alpn;
+  if (typeof raw.min_version === "string") out.minVersion = raw.min_version;
+  if (typeof raw.insecure === "boolean") out.insecure = raw.insecure;
+  return out;
+}
+
+function parseSingboxClients(arr: unknown): SingboxClientRow[] {
+  if (!Array.isArray(arr)) return [];
+  const out: SingboxClientRow[] = [];
+  for (const c of arr) {
+    if (!c || typeof c !== "object") continue;
+    const cm = c as Record<string, unknown>;
+    const email = typeof cm.email === "string" ? cm.email.trim() : "";
+    const password = typeof cm.password === "string" ? cm.password : "";
+    if (!email) continue;
+    const row: SingboxClientRow = { email, password };
+    if (typeof cm.uuid === "string" && cm.uuid.trim()) row.uuid = cm.uuid.trim();
+    out.push(row);
+  }
+  return out;
+}
+
+function buildSingboxTlsJson(tls: SingboxTlsBlock): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  if (tls.serverName.trim()) out.server_name = tls.serverName.trim();
+  if (tls.certificate.trim()) out.certificate = tls.certificate;
+  else if (tls.certificatePath.trim()) out.certificate_path = tls.certificatePath.trim();
+  if (tls.key.trim()) out.key = tls.key;
+  else if (tls.keyPath.trim()) out.key_path = tls.keyPath.trim();
+  if (tls.alpn.trim()) out.alpn = tls.alpn.split(",").map((s) => s.trim()).filter(Boolean);
+  if (tls.minVersion.trim()) out.min_version = tls.minVersion.trim();
+  if (tls.insecure) out.insecure = true;
+  return out;
+}
+
+export function parseAnyTLSSettingsToForm(s: string): AnyTLSFormState {
+  const base = defaultAnyTLSForm();
+  try {
+    const root = JSON.parse(s || "{}") as Record<string, unknown>;
+    base.clients = parseSingboxClients(root.clients);
+    if (base.clients.length === 0) base.clients = [defaultSingboxClientRow()];
+    base.tls = parseSingboxTls(root.tls as Record<string, unknown> | undefined);
+    if (Array.isArray(root.padding_scheme)) {
+      base.paddingScheme = (root.padding_scheme as unknown[]).filter((v) => typeof v === "string").join("\n");
+    }
+  } catch {/* keep defaults */}
+  return base;
+}
+
+export function buildAnyTLSSettingsJson(form: AnyTLSFormState): string {
+  const out: Record<string, unknown> = {
+    clients: form.clients.map((c) => ({ email: c.email.trim(), password: c.password })).filter((c) => c.email && c.password),
+    tls: buildSingboxTlsJson(form.tls),
+  };
+  if (form.paddingScheme.trim()) {
+    out.padding_scheme = form.paddingScheme.split("\n").map((s) => s.trim()).filter(Boolean);
+  }
+  return JSON.stringify(out);
+}
+
+export function parseNaiveServerSettingsToForm(s: string): NaiveServerFormState {
+  const base = defaultNaiveServerForm();
+  try {
+    const root = JSON.parse(s || "{}") as Record<string, unknown>;
+    base.clients = parseSingboxClients(root.clients);
+    if (base.clients.length === 0) base.clients = [defaultSingboxClientRow()];
+    base.tls = parseSingboxTls(root.tls as Record<string, unknown> | undefined);
+    if (typeof root.quic_congestion_control === "string") base.quicCongestionControl = root.quic_congestion_control;
+  } catch {/* keep defaults */}
+  return base;
+}
+
+export function buildNaiveServerSettingsJson(form: NaiveServerFormState): string {
+  const out: Record<string, unknown> = {
+    clients: form.clients.map((c) => ({ email: c.email.trim(), password: c.password })).filter((c) => c.email && c.password),
+    tls: buildSingboxTlsJson(form.tls),
+  };
+  if (form.quicCongestionControl.trim()) out.quic_congestion_control = form.quicCongestionControl.trim();
+  return JSON.stringify(out);
+}
+
+export function parseTUICSettingsToForm(s: string): TUICFormState {
+  const base = defaultTUICForm();
+  try {
+    const root = JSON.parse(s || "{}") as Record<string, unknown>;
+    base.clients = parseSingboxClients(root.clients);
+    if (base.clients.length === 0) base.clients = [{ ...defaultSingboxClientRow(), uuid: randomUUID() }];
+    base.tls = parseSingboxTls(root.tls as Record<string, unknown> | undefined);
+    if (typeof root.congestion_control === "string") base.congestionControl = root.congestion_control;
+    if (typeof root.zero_rtt_handshake === "boolean") base.zeroRttHandshake = root.zero_rtt_handshake;
+  } catch {/* keep defaults */}
+  return base;
+}
+
+export function buildTUICSettingsJson(form: TUICFormState): string {
+  const out: Record<string, unknown> = {
+    clients: form.clients
+      .map((c) => ({ email: c.email.trim(), password: c.password, uuid: (c.uuid || "").trim() }))
+      .filter((c) => c.email && c.password && c.uuid),
+    tls: buildSingboxTlsJson(form.tls),
+    congestion_control: form.congestionControl.trim() || "bbr",
+  };
+  if (form.zeroRttHandshake) out.zero_rtt_handshake = true;
   return JSON.stringify(out);
 }
 
@@ -969,6 +1197,9 @@ export type InboundStreamTransportMode =
   | "wireguard"
   | "telemt"
   | "mieru"
+  | "anytls"
+  | "naive_server"
+  | "tuic"
   | "full";
 
 export function getInboundStreamTransportMode(
@@ -984,6 +1215,10 @@ export function getInboundStreamTransportMode(
   if (protocol === "telemt") return "telemt";
   /** Mieru runs in sing-box — no Xray streamSettings (it has its own packet format). */
   if (protocol === "mieru") return "mieru";
+  /** AnyTLS/Naive/TUIC also live in sing-box; TLS is configured inside their settings. */
+  if (protocol === "anytls") return "anytls";
+  if (protocol === "naive_server") return "naive_server";
+  if (protocol === "tuic") return "tuic";
   return "full";
 }
 
@@ -1428,6 +1663,12 @@ export type FirstClientPatch = {
   vlessTrojanFallbacks?: VlessTrojanFallbackFormRow[];
   /** Mieru (Phase 2). Full form passed verbatim — buildMieruSettingsJson serializes it. */
   mieruForm?: MieruFormState;
+  /** AnyTLS (Phase 2). */
+  anytlsForm?: AnyTLSFormState;
+  /** Naive-server (Phase 2). */
+  naiveServerForm?: NaiveServerFormState;
+  /** TUIC (Phase 2). */
+  tuicForm?: TUICFormState;
 };
 
 export function buildSettingsJson(
@@ -1558,6 +1799,18 @@ export function buildSettingsJson(
     case "mieru": {
       const form = opts.mieruForm ?? defaultMieruForm();
       return buildMieruSettingsJson(form);
+    }
+    case "anytls": {
+      const form = opts.anytlsForm ?? defaultAnyTLSForm();
+      return buildAnyTLSSettingsJson(form);
+    }
+    case "naive_server": {
+      const form = opts.naiveServerForm ?? defaultNaiveServerForm();
+      return buildNaiveServerSettingsJson(form);
+    }
+    case "tuic": {
+      const form = opts.tuicForm ?? defaultTUICForm();
+      return buildTUICSettingsJson(form);
     }
     default:
       return "{}";

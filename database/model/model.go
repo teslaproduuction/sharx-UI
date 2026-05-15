@@ -139,6 +139,21 @@ type HistoryOfSeeders struct {
 	SeederName string `json:"seederName"`
 }
 
+// SingboxPendingChange is one queued CRUD on a sing-box-managed inbound or
+// its assigned users. See web/service/singbox_pending.go and
+// migrations/0045_singbox_pending_changes.sql.
+type SingboxPendingChange struct {
+	Id          int64  `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	NodeId      int    `json:"nodeId" gorm:"column:node_id;index"`
+	ChangeType  string `json:"changeType" gorm:"column:change_type"`
+	PayloadJSON string `json:"payload" gorm:"column:payload_json;type:text"`
+	CreatedAt   int64  `json:"createdAt" gorm:"column:created_at"`
+	AppliedAt   *int64 `json:"appliedAt,omitempty" gorm:"column:applied_at"`
+}
+
+// TableName names the singbox_pending_changes table for GORM.
+func (SingboxPendingChange) TableName() string { return "singbox_pending_changes" }
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
@@ -310,6 +325,11 @@ type Node struct {
 	XrayVersion  string `json:"xrayVersion" gorm:"column:xray_version;default:''"`                       // cached Xray version from worker (e.g. "26.5.3"), empty when unknown
 	WorkerVersion string `json:"workerVersion" gorm:"column:worker_version;default:''"`                     // cached SharX worker build/version from node API (sharxVersion)
 	TelemtState  string `json:"telemtState" gorm:"column:telemt_state;default:unknown"`                  // running | stopped | unknown (worker Telemt sidecars)
+	// SingboxState mirrors the Phase 2 hiddify-sing-box singleton sidecar status
+	// (running | stopped | unknown). Reported by the node /status endpoint and
+	// refreshed by web/service/node.go RefreshNodeSingboxStateFromWorker (TODO).
+	SingboxState      string `json:"singboxState" gorm:"column:singbox_state;default:unknown"`
+	SingboxConfigHash string `json:"singboxConfigHash" gorm:"column:singbox_config_hash;default:''"`
 
 	// Pairing (auth_mode=pairing): panel stores JWT key and mTLS client cert; worker uses SECRET_KEY. Legacy values accepted; see IsPairingMode.
 	AuthMode           string `json:"authMode" gorm:"column:auth_mode;default:legacy"` // legacy | pairing

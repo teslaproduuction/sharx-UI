@@ -390,6 +390,10 @@ func (s *SubService) getInboundsBySubId(subId string) ([]*model.Inbound, error) 
 			model.Mixed:       {},
 			model.Hysteria:    {},
 			model.Hysteria2:   {},
+			model.Mieru:       {},
+			model.AnyTLS:      {},
+			model.NaiveServer: {},
+			model.TUIC:        {},
 		}
 		inboundById := make(map[int]*model.Inbound, len(all))
 		for _, inb := range all {
@@ -524,6 +528,12 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 		return ""
 	case model.Mieru:
 		return s.genMieruLink(&in, email)
+	case model.AnyTLS:
+		return s.genAnyTLSLink(&in, email)
+	case model.NaiveServer:
+		return s.genNaiveLink(&in, email)
+	case model.TUIC:
+		return s.genTuicLink(&in, email)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLink(&in, email)
@@ -565,6 +575,12 @@ func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.Cli
 		return s.genTelemtLinkWithClient(&in, client)
 	case model.Mieru:
 		return s.genMieruLinkWithClient(&in, client)
+	case model.AnyTLS:
+		return s.genAnyTLSLinkWithClient(&in, client)
+	case model.NaiveServer:
+		return s.genNaiveLinkWithClient(&in, client)
+	case model.TUIC:
+		return s.genTuicLinkWithClient(&in, client)
 	default:
 		if model.IsHysteria(in.Protocol) {
 			return s.genHysteriaLinkWithClient(&in, client)
@@ -699,6 +715,194 @@ func (s *SubService) buildMieruURI(inbound *model.Inbound, username, password, t
 		q.Encode(),
 		url.QueryEscape(remark),
 	)
+}
+
+// resolveSingboxHost picks the externally-routable host the same way mieru does.
+func (s *SubService) resolveSingboxHost(inbound *model.Inbound) string {
+	host := strings.TrimSpace(s.address)
+	if host == "" {
+		host = strings.TrimSpace(inbound.Listen)
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" || host == "::0" {
+		host = "127.0.0.1"
+	}
+	return host
+}
+
+// extractInlineCredentials reads first matching email's password (and uuid for tuic)
+// from settings.clients[]. Returns ("", "") if not found. Used by the legacy/email
+// path of getLink which has no ClientEntity yet.
+func extractInlineCredentialsForEmail(settings, email string) (password, uuid string) {
+	type inlineClient struct {
+		Email    string `json:"email"`
+		Password string `json:"password"`
+		UUID     string `json:"uuid"`
+	}
+	var raw struct {
+		Clients []inlineClient `json:"clients"`
+	}
+	_ = json.Unmarshal([]byte(settings), &raw)
+	em := strings.ToLower(strings.TrimSpace(email))
+	for _, c := range raw.Clients {
+		if strings.ToLower(strings.TrimSpace(c.Email)) == em {
+			return c.Password, c.UUID
+		}
+	}
+	return "", ""
+}
+
+// genAnyTLSLink — sing-box anytls:// scheme used by NekoBox/Karing.
+//
+//	anytls://<password>@<host>:<port>?sni=<sni>&insecure=0&alpn=h2,http/1.1#<remark>
+func (s *SubService) genAnyTLSLink(inbound *model.Inbound, email string) string {
+	if inbound == nil || email == "" {
+		return ""
+	}
+	pwd, _ := extractInlineCredentialsForEmail(inbound.Settings, email)
+	return s.buildAnyTLSURI(inbound, pwd)
+}
+
+func (s *SubService) genAnyTLSLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || client == nil {
+		return ""
+	}
+	pwd := strings.TrimSpace(client.Password)
+	if pwd == "" {
+		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+	}
+	return s.buildAnyTLSURI(inbound, pwd)
+}
+
+func (s *SubService) buildAnyTLSURI(inbound *model.Inbound, password string) string {
+	if password == "" {
+		return ""
+	}
+	host := s.resolveSingboxHost(inbound)
+	sni, alpn, insecure := singboxTLSHints(inbound.Settings)
+	q := url.Values{}
+	if sni != "" {
+		q.Set("sni", sni)
+	}
+	if alpn != "" {
+		q.Set("alpn", alpn)
+	}
+	if insecure {
+		q.Set("insecure", "1")
+	}
+	remark := strings.TrimSpace(inbound.Remark)
+	if remark == "" {
+		remark = "anytls"
+	}
+	return fmt.Sprintf("anytls://%s@%s:%d?%s#%s",
+		url.QueryEscape(password), host, inbound.Port, q.Encode(), url.QueryEscape(remark))
+}
+
+// genNaiveLink — Naïve uses the standard naive+https:// scheme (Chromium client).
+//
+//	naive+https://<username>:<password>@<host>:<port>?padding=1#<remark>
+func (s *SubService) genNaiveLink(inbound *model.Inbound, email string) string {
+	if inbound == nil || email == "" {
+		return ""
+	}
+	pwd, _ := extractInlineCredentialsForEmail(inbound.Settings, email)
+	return s.buildNaiveURI(inbound, email, pwd)
+}
+
+func (s *SubService) genNaiveLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || client == nil {
+		return ""
+	}
+	pwd := strings.TrimSpace(client.Password)
+	if pwd == "" {
+		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+	}
+	return s.buildNaiveURI(inbound, client.Email, pwd)
+}
+
+func (s *SubService) buildNaiveURI(inbound *model.Inbound, username, password string) string {
+	if username == "" || password == "" {
+		return ""
+	}
+	host := s.resolveSingboxHost(inbound)
+	remark := strings.TrimSpace(inbound.Remark)
+	if remark == "" {
+		remark = "naive"
+	}
+	q := url.Values{}
+	q.Set("padding", "1")
+	return fmt.Sprintf("naive+https://%s:%s@%s:%d?%s#%s",
+		url.QueryEscape(username), url.QueryEscape(password),
+		host, inbound.Port, q.Encode(), url.QueryEscape(remark))
+}
+
+// genTuicLink — TUIC v5 standard URI (NekoBox/Karing/v2rayN).
+//
+//	tuic://<uuid>:<password>@<host>:<port>?congestion_control=bbr&alpn=h3&udp_relay_mode=native&sni=<sni>&allow_insecure=0#<remark>
+func (s *SubService) genTuicLink(inbound *model.Inbound, email string) string {
+	if inbound == nil || email == "" {
+		return ""
+	}
+	pwd, uuid := extractInlineCredentialsForEmail(inbound.Settings, email)
+	return s.buildTuicURI(inbound, uuid, pwd)
+}
+
+func (s *SubService) genTuicLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
+	if inbound == nil || client == nil {
+		return ""
+	}
+	pwd := strings.TrimSpace(client.Password)
+	uuid := strings.TrimSpace(client.UUID)
+	if pwd == "" || uuid == "" {
+		// Fall back to inline settings.clients[] only when ClientEntity is missing the
+		// field — TUIC has both uuid and password, so prefer entity values when present.
+		inlinePwd, inlineUUID := extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+		if pwd == "" {
+			pwd = inlinePwd
+		}
+		if uuid == "" {
+			uuid = inlineUUID
+		}
+	}
+	return s.buildTuicURI(inbound, uuid, pwd)
+}
+
+func (s *SubService) buildTuicURI(inbound *model.Inbound, uuid, password string) string {
+	if uuid == "" || password == "" {
+		return ""
+	}
+	host := s.resolveSingboxHost(inbound)
+	sni, _, insecure := singboxTLSHints(inbound.Settings)
+	q := url.Values{}
+	q.Set("congestion_control", "bbr")
+	q.Set("alpn", "h3")
+	q.Set("udp_relay_mode", "native")
+	if sni != "" {
+		q.Set("sni", sni)
+	}
+	if insecure {
+		q.Set("allow_insecure", "1")
+	}
+	remark := strings.TrimSpace(inbound.Remark)
+	if remark == "" {
+		remark = "tuic"
+	}
+	return fmt.Sprintf("tuic://%s:%s@%s:%d?%s#%s",
+		url.QueryEscape(uuid), url.QueryEscape(password),
+		host, inbound.Port, q.Encode(), url.QueryEscape(remark))
+}
+
+// singboxTLSHints reads tls.server_name + alpn + insecure from settings JSON.
+// Returns ("","",false) when settings has no .tls block.
+func singboxTLSHints(settings string) (sni string, alpn string, insecure bool) {
+	var raw struct {
+		TLS struct {
+			ServerName string   `json:"server_name"`
+			ALPN       []string `json:"alpn"`
+			Insecure   bool     `json:"insecure"`
+		} `json:"tls"`
+	}
+	_ = json.Unmarshal([]byte(settings), &raw)
+	return raw.TLS.ServerName, strings.Join(raw.TLS.ALPN, ","), raw.TLS.Insecure
 }
 
 func (s *SubService) genTelemtLinkWithClient(inbound *model.Inbound, client *model.ClientEntity) string {
