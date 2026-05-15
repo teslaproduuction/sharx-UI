@@ -25,12 +25,18 @@ import {
   buildSettingsJson,
   buildSniffingFromForm,
   buildStreamSettingsFromForm,
+  buildAnyTLSSettingsJson,
   buildMieruSettingsJson,
+  buildNaiveServerSettingsJson,
   buildTelemtSettingsJson,
+  buildTUICSettingsJson,
   buildWireguardInboundApiPayload,
+  defaultAnyTLSForm,
   defaultMieruClientRow,
   defaultMieruForm,
+  defaultNaiveServerForm,
   defaultTelemtForm,
+  defaultTUICForm,
   defaultWireguardForm,
   defaultSniffingForm,
   defaultSniffingString,
@@ -42,7 +48,10 @@ import {
   hostFromRealityTarget,
   mergeFirstClientIntoSettings,
   newWireGuardSecretKeyBase64,
+  parseAnyTLSSettingsToForm,
   parseFirstClientFromSettings,
+  parseNaiveServerSettingsToForm,
+  parseTUICSettingsToForm,
   parseWireguardSettingsToForm,
   parseMieruSettingsToForm,
   parseSniffingToForm,
@@ -59,8 +68,9 @@ import {
   totalBytesToGbInput,
   XHTTP_MODES,
   type InboundFormProtocol,
-  type MieruClientRow,
   type MieruFormState,
+  type SingboxClientRow,
+  type SingboxTlsBlock,
   type SniffingFormState,
   type VlessTrojanFallbackFormRow,
   type StreamFormState,
@@ -102,6 +112,144 @@ function TextArea({
       spellCheck={false}
       {...rest}
     />
+  );
+}
+
+/**
+ * Shared auth-step UI for the three TLS-mandatory sing-box server protocols
+ * (anytls/naive/tuic). Renders clients[], TLS cert/key + SNI/ALPN, and
+ * accepts a per-protocol `extras` slot for the unique fields
+ * (anytls padding-scheme, tuic congestion control + 0-RTT, …).
+ */
+function SingboxTlsAuthBlock(props: {
+  protocol: "anytls" | "naive_server" | "tuic";
+  clients: SingboxClientRow[];
+  onClientsChange: (rows: SingboxClientRow[]) => void;
+  tls: SingboxTlsBlock;
+  onTlsChange: (tls: SingboxTlsBlock) => void;
+  extras?: ReactNode;
+}) {
+  const { protocol, clients, onClientsChange, tls, onTlsChange, extras } = props;
+  const isTuic = protocol === "tuic";
+  const userLabel = protocol === "naive_server" ? "username" : "name";
+  const newRow = (): SingboxClientRow => {
+    const base: SingboxClientRow = {
+      email: `user-${Math.random().toString(36).slice(2, 8)}`,
+      password: Array.from(crypto.getRandomValues(new Uint8Array(16)))
+        .map((b) => b.toString(16).padStart(2, "0"))
+        .join(""),
+    };
+    if (isTuic) base.uuid = crypto.randomUUID ? crypto.randomUUID() : "";
+    return base;
+  };
+  const patchClient = (idx: number, patch: Partial<SingboxClientRow>) => {
+    onClientsChange(clients.map((c, i) => (i === idx ? { ...c, ...patch } : c)));
+  };
+  const patchTls = (patch: Partial<SingboxTlsBlock>) => onTlsChange({ ...tls, ...patch });
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs text-[var(--fg-subtle)]">
+        Runs in the SharX sing-box sidecar. TLS is mandatory — paste cert+key inline
+        or point to a path on the worker filesystem.
+      </p>
+
+      <div className="space-y-2">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+          Clients ({clients.length})
+        </p>
+        <div className="space-y-2">
+          {clients.map((c, idx) => (
+            <div key={idx} className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end rounded-lg border border-[var(--border)] p-2">
+              <div className="sm:col-span-3">
+                <label className="text-[10px] uppercase tracking-wide text-[var(--fg-subtle)]">{userLabel}</label>
+                <Input
+                  className="font-mono text-xs"
+                  value={c.email}
+                  onChange={(e) => patchClient(idx, { email: e.target.value })}
+                />
+              </div>
+              <div className={isTuic ? "sm:col-span-4" : "sm:col-span-7"}>
+                <label className="text-[10px] uppercase tracking-wide text-[var(--fg-subtle)]">password</label>
+                <Input
+                  className="font-mono text-xs"
+                  value={c.password}
+                  onChange={(e) => patchClient(idx, { password: e.target.value })}
+                />
+              </div>
+              {isTuic ? (
+                <div className="sm:col-span-3">
+                  <label className="text-[10px] uppercase tracking-wide text-[var(--fg-subtle)]">uuid</label>
+                  <Input
+                    className="font-mono text-xs"
+                    value={c.uuid ?? ""}
+                    onChange={(e) => patchClient(idx, { uuid: e.target.value })}
+                  />
+                </div>
+              ) : null}
+              <div className="sm:col-span-2 flex gap-1">
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={clients.length <= 1}
+                  onClick={() => onClientsChange(clients.filter((_, i) => i !== idx))}
+                >
+                  Del
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+        <Button type="button" variant="secondary" onClick={() => onClientsChange([...clients, newRow()])}>
+          Add user
+        </Button>
+      </div>
+
+      <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">TLS</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">server_name (SNI)</label>
+            <Input className="font-mono text-xs" placeholder="example.com" value={tls.serverName} onChange={(e) => patchTls({ serverName: e.target.value })} />
+          </div>
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">ALPN (comma-separated)</label>
+            <Input className="font-mono text-xs" placeholder={isTuic ? "h3" : "h2,http/1.1"} value={tls.alpn} onChange={(e) => patchTls({ alpn: e.target.value })} />
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">min_version</label>
+            <SelectNative
+              value={tls.minVersion}
+              onChange={(e) => patchTls({ minVersion: e.target.value })}
+            >
+              <option value="">(default)</option>
+              <option value="1.2">1.2</option>
+              <option value="1.3">1.3</option>
+            </SelectNative>
+          </div>
+          <CheckboxField
+            checked={tls.insecure}
+            onChange={(e) => patchTls({ insecure: e.target.checked })}
+            label="insecure (skip cert chain verification — dev only)"
+          />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">certificate (PEM)</label>
+          <TextArea placeholder={"-----BEGIN CERTIFICATE-----\n…"} value={tls.certificate} onChange={(e) => patchTls({ certificate: e.target.value })} />
+          <label className="mb-1.5 mt-2 block text-[10px] text-[var(--fg-subtle)]">…or certificate_path</label>
+          <Input className="font-mono text-xs" placeholder="/etc/ssl/server.crt" value={tls.certificatePath} onChange={(e) => patchTls({ certificatePath: e.target.value })} />
+        </div>
+        <div>
+          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">key (PEM)</label>
+          <TextArea placeholder={"-----BEGIN PRIVATE KEY-----\n…"} value={tls.key} onChange={(e) => patchTls({ key: e.target.value })} />
+          <label className="mb-1.5 mt-2 block text-[10px] text-[var(--fg-subtle)]">…or key_path</label>
+          <Input className="font-mono text-xs" placeholder="/etc/ssl/server.key" value={tls.keyPath} onChange={(e) => patchTls({ keyPath: e.target.value })} />
+        </div>
+      </div>
+      {extras}
+    </div>
   );
 }
 
@@ -402,6 +550,9 @@ const PROTOCOLS: { value: InboundFormProtocol; label: string }[] = [
   { value: "telemt", label: "Telemt (MTProto)" },
   // Phase 2 — sing-box managed
   { value: "mieru", label: "Mieru" },
+  { value: "anytls", label: "AnyTLS" },
+  { value: "naive_server", label: "Naïve" },
+  { value: "tuic", label: "TUIC" },
 ];
 
 const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
@@ -415,6 +566,9 @@ const KNOWN_INBOUND_PROTOCOLS = new Set<InboundFormProtocol>([
   "wireguard",
   "telemt",
   "mieru",
+  "anytls",
+  "naive_server",
+  "tuic",
 ]);
 
 const TRAFFIC_RESET: { value: string; labelKey: string }[] = [
@@ -526,6 +680,9 @@ const PROTOCOL_TONE: Record<string, "accent" | "info" | "warning" | "success" | 
   telemt: "info",
   // Phase 2 sing-box protocols (purple/pink palette to set them apart)
   mieru: "warning",
+  anytls: "warning",
+  naive_server: "warning",
+  tuic: "warning",
 };
 
 const defaultForm = () => ({
@@ -545,6 +702,9 @@ const defaultForm = () => ({
   wireguardForm: defaultWireguardForm(),
   telemtForm: defaultTelemtForm(),
   mieruForm: defaultMieruForm(),
+  anytlsForm: defaultAnyTLSForm(),
+  naiveServerForm: defaultNaiveServerForm(),
+  tuicForm: defaultTUICForm(),
   totalGb: "0",
   trafficReset: "never",
   streamForm: defaultStreamForm(),
@@ -737,16 +897,28 @@ export function InboundsPage() {
           proto === "mieru"
             ? parseMieruSettingsToForm(ib.settings || "{}")
             : defaultMieruForm(),
+        anytlsForm:
+          proto === "anytls"
+            ? parseAnyTLSSettingsToForm(ib.settings || "{}")
+            : defaultAnyTLSForm(),
+        naiveServerForm:
+          proto === "naive_server"
+            ? parseNaiveServerSettingsToForm(ib.settings || "{}")
+            : defaultNaiveServerForm(),
+        tuicForm:
+          proto === "tuic"
+            ? parseTUICSettingsToForm(ib.settings || "{}")
+            : defaultTUICForm(),
         totalGb: totalBytesToGbInput(ib.total ?? 0),
         trafficReset: ib.trafficReset || "never",
         streamForm: parseStreamSettingsToForm(
-          proto === "telemt" || proto === "mieru"
+          proto === "telemt" || proto === "mieru" || proto === "anytls" || proto === "naive_server" || proto === "tuic"
             ? "{}"
             : (ib.streamSettings || defaultStreamSettingsString()),
           proto,
         ),
         sniffingForm: parseSniffingToForm(
-          proto === "telemt" || proto === "mieru"
+          proto === "telemt" || proto === "mieru" || proto === "anytls" || proto === "naive_server" || proto === "tuic"
             ? '{"enabled":false,"destOverride":[],"metadataOnly":false,"routeOnly":false}'
             : (ib.sniffing || defaultSniffingString()),
         ),
@@ -786,6 +958,9 @@ export function InboundsPage() {
       const isSwitchingToWg = protocol === "wireguard" && f.protocol !== "wireguard";
       const isSwitchingToTelemt = protocol === "telemt" && f.protocol !== "telemt";
       const isSwitchingToMieru = protocol === "mieru" && f.protocol !== "mieru";
+      const isSwitchingToAnyTLS = protocol === "anytls" && f.protocol !== "anytls";
+      const isSwitchingToNaive = protocol === "naive_server" && f.protocol !== "naive_server";
+      const isSwitchingToTuic = protocol === "tuic" && f.protocol !== "tuic";
       const streamForm =
         protocol === "hysteria" || protocol === "hysteria2"
           ? defaultStreamFormHysteria()
@@ -797,6 +972,9 @@ export function InboundsPage() {
         wireguardForm: isSwitchingToWg ? defaultWireguardForm() : f.wireguardForm,
         telemtForm: isSwitchingToTelemt ? defaultTelemtForm() : f.telemtForm,
         mieruForm: isSwitchingToMieru ? defaultMieruForm() : f.mieruForm,
+        anytlsForm: isSwitchingToAnyTLS ? defaultAnyTLSForm() : f.anytlsForm,
+        naiveServerForm: isSwitchingToNaive ? defaultNaiveServerForm() : f.naiveServerForm,
+        tuicForm: isSwitchingToTuic ? defaultTUICForm() : f.tuicForm,
       };
       if (isSwitchingToMieru) {
         out.port = 2999;
@@ -808,6 +986,21 @@ export function InboundsPage() {
         if (!f.listen.trim()) {
           out.listen = "::";
         }
+      }
+      if (isSwitchingToAnyTLS) {
+        out.port = 8443;
+        if (!f.remark.trim()) out.remark = "AnyTLS";
+        if (!f.listen.trim()) out.listen = "::";
+      }
+      if (isSwitchingToNaive) {
+        out.port = 8443;
+        if (!f.remark.trim()) out.remark = "Naive";
+        if (!f.listen.trim()) out.listen = "::";
+      }
+      if (isSwitchingToTuic) {
+        out.port = 8443;
+        if (!f.remark.trim()) out.remark = "TUIC";
+        if (!f.listen.trim()) out.listen = "::";
       }
       if (isSwitchingToTelemt) {
         out.port = 443;
@@ -977,9 +1170,12 @@ export function InboundsPage() {
     }
     const isTelemt = form.protocol === "telemt";
     const isMieru = form.protocol === "mieru";
-    // Sing-box-managed protocols (mieru, future: anytls/naive/tuic) have no Xray
+    const isAnyTLS = form.protocol === "anytls";
+    const isNaive = form.protocol === "naive_server";
+    const isTuic = form.protocol === "tuic";
+    // Sing-box-managed protocols (mieru/anytls/naive/tuic) have no Xray
     // streamSettings/sniffing — sing-box reads its own JSON.
-    const skipStream = isTelemt || isMieru;
+    const skipStream = isTelemt || isMieru || isAnyTLS || isNaive || isTuic;
     const streamSettingsStr = skipStream
       ? "{}"
       : buildStreamSettingsFromForm(form.streamForm, form.protocol);
@@ -1032,6 +1228,12 @@ export function InboundsPage() {
       settings = buildTelemtSettingsJson(form.telemtForm);
     } else if (form.protocol === "mieru") {
       settings = buildMieruSettingsJson(form.mieruForm);
+    } else if (form.protocol === "anytls") {
+      settings = buildAnyTLSSettingsJson(form.anytlsForm);
+    } else if (form.protocol === "naive_server") {
+      settings = buildNaiveServerSettingsJson(form.naiveServerForm);
+    } else if (form.protocol === "tuic") {
+      settings = buildTUICSettingsJson(form.tuicForm);
     } else if (form.protocol === "mixed") {
       // For mixed, accounts are managed entirely via client assignments.
       // Preserve existing settings from DB on edit; use noauth skeleton on create.
@@ -1120,7 +1322,7 @@ export function InboundsPage() {
       body.id = editId;
     }
     const isTelemt = form.protocol === "telemt";
-    const isMieru = form.protocol === "mieru";
+    const isSingbox = form.protocol === "mieru" || form.protocol === "anytls" || form.protocol === "naive_server" || form.protocol === "tuic";
     const fail = (msg: string) => {
       if (!alive) return;
       setXrayPreviewText(null);
@@ -1129,7 +1331,7 @@ export function InboundsPage() {
     };
     const endpoint = isTelemt
       ? panel("api/inbounds/previewTelemt")
-      : isMieru
+      : isSingbox
         ? panel("api/inbounds/previewSingbox")
         : panel("api/inbounds/previewXray");
     void postJson<unknown>(endpoint, body, true).then(
@@ -1295,10 +1497,11 @@ export function InboundsPage() {
     return INBOUND_STEP_ORDER.filter((id) => {
       if (id === "nodes" && multiNodeMode !== true) return false;
       if (id === "auth" && !hasAuth) return false;
-      // Sing-box-managed protocols (mieru) and Telemt run outside Xray —
+      // Sing-box-managed protocols (mieru/anytls/naive/tuic) and Telemt run outside Xray —
       // no Xray sniffing/streamSettings UI steps.
-      if (id === "sniffing" && (form.protocol === "telemt" || form.protocol === "mieru")) return false;
-      if (id === "transport" && form.protocol === "mieru") return false;
+      const isSbx = form.protocol === "mieru" || form.protocol === "anytls" || form.protocol === "naive_server" || form.protocol === "tuic";
+      if (id === "sniffing" && (form.protocol === "telemt" || isSbx)) return false;
+      if (id === "transport" && isSbx) return false;
       return true;
     });
   }, [multiNodeMode, form.protocol]);
@@ -5079,6 +5282,82 @@ export function InboundsPage() {
                   </p>
                 </div>
               </div>
+            ) : null}
+            {form.protocol === "anytls" || form.protocol === "naive_server" || form.protocol === "tuic" ? (
+              <SingboxTlsAuthBlock
+                protocol={form.protocol}
+                clients={
+                  form.protocol === "anytls"
+                    ? form.anytlsForm.clients
+                    : form.protocol === "naive_server"
+                      ? form.naiveServerForm.clients
+                      : form.tuicForm.clients
+                }
+                onClientsChange={(rows) => {
+                  setForm((f) => {
+                    if (f.protocol === "anytls") return { ...f, anytlsForm: { ...f.anytlsForm, clients: rows } };
+                    if (f.protocol === "naive_server") return { ...f, naiveServerForm: { ...f.naiveServerForm, clients: rows } };
+                    return { ...f, tuicForm: { ...f.tuicForm, clients: rows } };
+                  });
+                }}
+                tls={
+                  form.protocol === "anytls"
+                    ? form.anytlsForm.tls
+                    : form.protocol === "naive_server"
+                      ? form.naiveServerForm.tls
+                      : form.tuicForm.tls
+                }
+                onTlsChange={(tls) => {
+                  setForm((f) => {
+                    if (f.protocol === "anytls") return { ...f, anytlsForm: { ...f.anytlsForm, tls } };
+                    if (f.protocol === "naive_server") return { ...f, naiveServerForm: { ...f.naiveServerForm, tls } };
+                    return { ...f, tuicForm: { ...f.tuicForm, tls } };
+                  });
+                }}
+                extras={
+                  form.protocol === "anytls" ? (
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-anytls-padding">
+                        {t("pages.inbounds.anytlsPaddingScheme", { defaultValue: "Padding scheme (one rule per line)" })}
+                      </label>
+                      <TextArea
+                        id="in-anytls-padding"
+                        placeholder={"stop=8\n0=30-30\n1=100-400"}
+                        value={form.anytlsForm.paddingScheme}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, anytlsForm: { ...f.anytlsForm, paddingScheme: e.target.value } }))
+                        }
+                      />
+                    </div>
+                  ) : form.protocol === "tuic" ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tuic-cc">
+                          {t("pages.inbounds.tuicCongestionControl", { defaultValue: "Congestion control" })}
+                        </label>
+                        <SelectNative
+                          id="in-tuic-cc"
+                          value={form.tuicForm.congestionControl}
+                          onChange={(e) =>
+                            setForm((f) => ({ ...f, tuicForm: { ...f.tuicForm, congestionControl: e.target.value } }))
+                          }
+                        >
+                          <option value="bbr">bbr</option>
+                          <option value="cubic">cubic</option>
+                          <option value="new_reno">new_reno</option>
+                        </SelectNative>
+                      </div>
+                      <CheckboxField
+                        checked={form.tuicForm.zeroRttHandshake}
+                        onChange={(e) =>
+                          setForm((f) => ({ ...f, tuicForm: { ...f.tuicForm, zeroRttHandshake: e.target.checked } }))
+                        }
+                        label={t("pages.inbounds.tuicZeroRtt", { defaultValue: "0-RTT handshake" })}
+                      />
+                    </div>
+                  ) : null
+                }
+              />
             ) : null}
             {form.protocol === "wireguard" ? (
               <div className="space-y-3">
