@@ -154,6 +154,45 @@ type SingboxPendingChange struct {
 // TableName names the singbox_pending_changes table for GORM.
 func (SingboxPendingChange) TableName() string { return "singbox_pending_changes" }
 
+// OutboundSidecar is one sing-box client outbound (Phase 3) that joins the
+// same singleton sidecar as the Phase 2 inbounds. config_json holds the
+// kind-specific target/auth/tls (server, port, password, sni, …).
+// listen_port is the 127.0.0.1:port the corresponding `mixed` bridge inbound
+// binds; an Xray socks-out tagged "<name>-local" points at this port so
+// routing rules can address the cascade member by friendly name.
+type OutboundSidecar struct {
+	Id         int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	UserId     int    `json:"userId" gorm:"column:user_id;default:1;index"`
+	Name       string `json:"name" gorm:"column:name;uniqueIndex"`
+	Kind       string `json:"kind" gorm:"column:kind"`
+	ConfigJSON string `json:"config" gorm:"column:config_json;type:text"`
+	ListenPort int    `json:"listenPort" gorm:"column:listen_port"`
+	Enable     bool   `json:"enable" gorm:"column:enable;default:true"`
+	CreatedAt  int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt  int64  `json:"updatedAt" gorm:"column:updated_at;autoUpdateTime"`
+
+	// Relations (not stored in DB).
+	NodeIds []int `json:"nodeIds,omitempty" gorm:"-"`
+}
+
+// TableName names the outbound_sidecars table for GORM.
+func (OutboundSidecar) TableName() string { return "outbound_sidecars" }
+
+// OutboundSidecarNodeMapping pins a sidecar to one or more worker nodes.
+// Cascade exit semantics: the sing-box outbound section + bridge inbound is
+// applied on every assigned node; assigning the same sidecar to multiple
+// nodes makes it a multi-node cascade member.
+type OutboundSidecarNodeMapping struct {
+	Id        int `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	SidecarId int `json:"sidecarId" gorm:"column:sidecar_id;index"`
+	NodeId    int `json:"nodeId" gorm:"column:node_id;index"`
+}
+
+// TableName names the outbound_sidecar_node_mappings table for GORM.
+func (OutboundSidecarNodeMapping) TableName() string {
+	return "outbound_sidecar_node_mappings"
+}
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
