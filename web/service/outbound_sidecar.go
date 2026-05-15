@@ -91,6 +91,8 @@ func (s *OutboundSidecarService) Get(id int) (*model.OutboundSidecar, error) {
 
 // Create persists a sidecar + its node assignments. listen_port is allocated
 // when the supplied value is 0; otherwise the supplied port is used as-is.
+// Also auto-creates the matching Xray socks outbound ("<name>-local") so
+// RoutingBuilder can address the cascade member by friendly name.
 func (s *OutboundSidecarService) Create(sc *model.OutboundSidecar) error {
 	if sc == nil {
 		return errors.New("nil sidecar")
@@ -111,15 +113,50 @@ func (s *OutboundSidecarService) Create(sc *model.OutboundSidecar) error {
 		}
 		sc.ListenPort = port
 	}
-	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+	if err := database.GetDB().Transaction(func(tx *gorm.DB) error {
 		if err := tx.Create(sc).Error; err != nil {
 			return err
 		}
 		return s.replaceNodeAssignmentsTx(tx, sc.Id, sc.NodeIds)
-	})
+	}); err != nil {
+		return err
+	}
+	return s.syncXrayBridgeOutbound(sc)
 }
 
-// Update writes name/kind/config/listen_port/enable + reconciles node assignments.
+// syncXrayBridgeOutbound creates (or updates) the auto-managed Xray socks
+// outbound that points at the cascade bridge port. Tag is "<name>-local" so
+// admin-created Xray outbounds never collide with cascade ones.
+func (s *OutboundSidecarService) syncXrayBridgeOutbound(sc *model.OutboundSidecar) error {
+	if sc == nil {
+		return nil
+	}
+	tag := strings.TrimSpace(sc.Name) + "-local"
+	settings := fmt.Sprintf(`{"servers":[{"address":"127.0.0.1","port":%d}]}`, sc.ListenPort)
+	remark := fmt.Sprintf("Cascade bridge for sidecar %q (auto-managed)", sc.Name)
+	var existing model.Outbound
+	err := database.GetDB().Where("tag = ?", tag).First(&existing).Error
+	if err == nil {
+		patch := map[string]any{
+			"protocol": "socks",
+			"settings": settings,
+			"remark":   remark,
+			"enable":   sc.Enable,
+		}
+		return database.GetDB().Model(&model.Outbound{}).Where("id = ?", existing.Id).Updates(patch).Error
+	}
+	row := &model.Outbound{
+		Remark:   remark,
+		Enable:   sc.Enable,
+		Protocol: "socks",
+		Settings: settings,
+		Tag:      tag,
+	}
+	return database.GetDB().Create(row).Error
+}
+
+// Update writes name/kind/config/listen_port/enable + reconciles node assignments
+// and re-syncs the matching Xray socks bridge outbound.
 func (s *OutboundSidecarService) Update(sc *model.OutboundSidecar) error {
 	if sc == nil || sc.Id <= 0 {
 		return errors.New("invalid sidecar id")
@@ -127,7 +164,7 @@ func (s *OutboundSidecarService) Update(sc *model.OutboundSidecar) error {
 	if !isSupportedKind(sc.Kind) {
 		return fmt.Errorf("unsupported kind %q", sc.Kind)
 	}
-	return database.GetDB().Transaction(func(tx *gorm.DB) error {
+	if err := database.GetDB().Transaction(func(tx *gorm.DB) error {
 		patch := map[string]any{
 			"name":        sc.Name,
 			"kind":        sc.Kind,
@@ -139,11 +176,20 @@ func (s *OutboundSidecarService) Update(sc *model.OutboundSidecar) error {
 			return err
 		}
 		return s.replaceNodeAssignmentsTx(tx, sc.Id, sc.NodeIds)
-	})
+	}); err != nil {
+		return err
+	}
+	return s.syncXrayBridgeOutbound(sc)
 }
 
-// Delete drops the sidecar and its assignments (FK cascade).
+// Delete drops the sidecar (FK cascade clears its node mappings) and removes
+// the matching Xray socks bridge outbound.
 func (s *OutboundSidecarService) Delete(id int) error {
+	var sc model.OutboundSidecar
+	if err := database.GetDB().First(&sc, id).Error; err == nil {
+		tag := strings.TrimSpace(sc.Name) + "-local"
+		_ = database.GetDB().Where("tag = ?", tag).Delete(&model.Outbound{}).Error
+	}
 	return database.GetDB().Delete(&model.OutboundSidecar{}, id).Error
 }
 
