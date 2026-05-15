@@ -311,26 +311,11 @@ func buildMieruInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, erro
 		return nil, nil, fmt.Errorf("settings JSON: %w", err)
 	}
 
-	// Pull users via the canonical SharX path: ClientEntity rows assigned to this inbound.
-	// For the mieru baseline we still also accept inline clients[] in settings so the API tests
-	// can create an inbound + user in a single POST without going through ClientEntity yet.
-	var users []sbxUser
-	if cs, ok := raw["clients"].([]any); ok {
-		for _, c := range cs {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			email, _ := cm["email"].(string)
-			pwd, _ := cm["password"].(string)
-			if email == "" || pwd == "" {
-				continue
-			}
-			users = append(users, sbxUser{Name: email, Password: pwd})
-		}
-	}
-	if len(users) == 0 {
-		return nil, nil, errors.New("no users (provide settings.clients[] with email+password)")
+	// Pull users via the canonical SharX path (ClientEntity assignments) and fall back
+	// to inline settings.clients[] for inbounds whose users haven't been migrated yet.
+	users, err := resolveSingboxUsers(inb, raw, func(u sbxUser) bool { return u.Password != "" })
+	if err != nil {
+		return nil, nil, err
 	}
 
 	// hiddify-sing-box mieru schema (option/mieru.go):
@@ -438,15 +423,12 @@ func buildMieruInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, erro
 	return out, users, nil
 }
 
-// extractInlineUsers pulls {email,password} pairs from inbound.Settings.clients[].
+// extractInlineUsers pulls {email,password,uuid} pairs from inbound.Settings.clients[].
 // All four sing-box server protocols (mieru/anytls/naive/tuic) accept users via
 // settings.clients[] in the same shape; the per-protocol JSON renderer below
 // remaps to the field names that protocol expects (name, username, uuid, …).
-func extractInlineUsers(raw map[string]any) ([]sbxUser, error) {
-	cs, ok := raw["clients"].([]any)
-	if !ok {
-		return nil, errors.New("no users (provide settings.clients[])")
-	}
+func extractInlineUsers(raw map[string]any) []sbxUser {
+	cs, _ := raw["clients"].([]any)
 	var out []sbxUser
 	for _, c := range cs {
 		cm, ok := c.(map[string]any)
@@ -461,10 +443,66 @@ func extractInlineUsers(raw map[string]any) ([]sbxUser, error) {
 		}
 		out = append(out, sbxUser{Name: email, Password: pwd, UUID: uuid})
 	}
-	if len(out) == 0 {
-		return nil, errors.New("no users with email field")
+	return out
+}
+
+// extractClientEntityUsers pulls users assigned to inbound via the
+// ClientInboundMapping table — the canonical SharX path. Used as a primary
+// source so the operator does not have to also paste users into
+// settings.clients[]. Returns ([], nil) when the inbound has no client
+// assignments yet.
+func extractClientEntityUsers(inbound *model.Inbound) []sbxUser {
+	if inbound == nil || inbound.Id <= 0 {
+		return nil
 	}
-	return out, nil
+	cs := ClientService{}
+	clients, err := cs.GetClientsForInbound(inbound.Id)
+	if err != nil || len(clients) == 0 {
+		return nil
+	}
+	out := make([]sbxUser, 0, len(clients))
+	for _, c := range clients {
+		if c == nil || !c.Enable || strings.TrimSpace(c.Email) == "" {
+			continue
+		}
+		out = append(out, sbxUser{
+			Name:     c.Email,
+			Password: c.Password,
+			UUID:     c.UUID,
+		})
+	}
+	return out
+}
+
+// resolveSingboxUsers prefers ClientEntity assignments (canonical SharX path)
+// and falls back to settings.clients[] for inbounds whose users haven't
+// been migrated yet (single-POST API tests). Inline rows that share an email
+// with a ClientEntity are dropped — entity wins.
+func resolveSingboxUsers(inbound *model.Inbound, raw map[string]any, requireField func(sbxUser) bool) ([]sbxUser, error) {
+	users := extractClientEntityUsers(inbound)
+	have := make(map[string]struct{}, len(users))
+	for _, u := range users {
+		have[strings.ToLower(u.Name)] = struct{}{}
+	}
+	for _, u := range extractInlineUsers(raw) {
+		if _, dup := have[strings.ToLower(u.Name)]; dup {
+			continue
+		}
+		users = append(users, u)
+	}
+	if requireField != nil {
+		filtered := users[:0]
+		for _, u := range users {
+			if requireField(u) {
+				filtered = append(filtered, u)
+			}
+		}
+		users = filtered
+	}
+	if len(users) == 0 {
+		return nil, errors.New("no users (assign clients to this inbound or provide settings.clients[])")
+	}
+	return users, nil
 }
 
 // buildInboundTLS produces the sing-box `tls` block for protocols that always
@@ -538,7 +576,7 @@ func buildAnyTLSInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, err
 	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
 		return nil, nil, fmt.Errorf("settings JSON: %w", err)
 	}
-	users, err := extractInlineUsers(raw)
+	users, err := resolveSingboxUsers(inb, raw, func(u sbxUser) bool { return u.Password != "" })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -586,7 +624,7 @@ func buildNaiveServerInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser
 	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
 		return nil, nil, fmt.Errorf("settings JSON: %w", err)
 	}
-	users, err := extractInlineUsers(raw)
+	users, err := resolveSingboxUsers(inb, raw, func(u sbxUser) bool { return u.Password != "" })
 	if err != nil {
 		return nil, nil, err
 	}
@@ -636,7 +674,7 @@ func buildTUICInboundJSON(inb *model.Inbound) (json.RawMessage, []sbxUser, error
 	if err := json.Unmarshal([]byte(inb.Settings), &raw); err != nil {
 		return nil, nil, fmt.Errorf("settings JSON: %w", err)
 	}
-	users, err := extractInlineUsers(raw)
+	users, err := resolveSingboxUsers(inb, raw, func(u sbxUser) bool { return u.Password != "" && u.UUID != "" })
 	if err != nil {
 		return nil, nil, err
 	}
