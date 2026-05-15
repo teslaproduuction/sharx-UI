@@ -1153,46 +1153,54 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 			// Reinitialize with Loki - use DEBUG level when Grafana is enabled for full logging
 			// InitLoggerWithLoki handles errors internally and falls back gracefully
 			logger.InitLoggerWithLoki(logging.DEBUG, allSetting.GrafanaLokiUrl, true, "")
+			// Grafana mode = full fidelity to Loki; let everything through
+			// the Emit gate so Loki receives all levels.
+			logger.SetMinEmitLevel("debug")
 		}
 	} else {
 		// Reinitialize without Loki
 		// Use panel log level if set, otherwise fall back to env var
 		var logLevel logging.Level
+		var emitLevel string
 		panelLogLevel, err := s.getString("panelLogLevel")
 		if err != nil || panelLogLevel == "" {
 			// Fall back to env var
 			switch config.GetLogLevel() {
 			case config.Debug:
-				logLevel = logging.DEBUG
+				logLevel, emitLevel = logging.DEBUG, "debug"
 			case config.Info:
-				logLevel = logging.INFO
+				logLevel, emitLevel = logging.INFO, "info"
 			case config.Notice:
-				logLevel = logging.NOTICE
+				logLevel, emitLevel = logging.NOTICE, "info"
 			case config.Warning:
-				logLevel = logging.WARNING
+				logLevel, emitLevel = logging.WARNING, "warn"
 			case config.Error:
-				logLevel = logging.ERROR
+				logLevel, emitLevel = logging.ERROR, "error"
 			default:
-				logLevel = logging.INFO
+				logLevel, emitLevel = logging.INFO, "info"
 			}
 		} else {
 			// Use panel log level setting
 			switch strings.ToLower(panelLogLevel) {
 			case "debug":
-				logLevel = logging.DEBUG
+				logLevel, emitLevel = logging.DEBUG, "debug"
 			case "info":
-				logLevel = logging.INFO
+				logLevel, emitLevel = logging.INFO, "info"
 			case "notice":
-				logLevel = logging.NOTICE
+				logLevel, emitLevel = logging.NOTICE, "info"
 			case "warning":
-				logLevel = logging.WARNING
+				logLevel, emitLevel = logging.WARNING, "warn"
 			case "error":
-				logLevel = logging.ERROR
+				logLevel, emitLevel = logging.ERROR, "error"
 			default:
-				logLevel = logging.INFO
+				logLevel, emitLevel = logging.INFO, "info"
 			}
 		}
 		logger.InitLogger(logLevel)
+		// Gate the in-memory UI buffer / Loki / node→panel pusher to the same
+		// level. Without this, debug noise from Xray and node logs floods the
+		// dashboard regardless of the operator's choice.
+		logger.SetMinEmitLevel(emitLevel)
 	}
 
 	// Initialize metrics exporter (metrics are exposed via /panel/metrics endpoint)
@@ -1208,7 +1216,6 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 }
 
 func (s *SettingService) ensureXrayLoggingDefaults() error {
-	target := "debug"
 	accessPath := config.GetLogFolder() + "/xray-access.log"
 	errorPath := config.GetLogFolder() + "/xray-error.log"
 	raw, err := s.getString("xrayTemplateConfig")
@@ -1227,10 +1234,16 @@ func (s *SettingService) ensureXrayLoggingDefaults() error {
 	}
 	changed := false
 
-	current, _ := logObj["loglevel"].(string)
-	if !strings.EqualFold(strings.TrimSpace(current), target) {
-		logObj["loglevel"] = target
-		changed = true
+	// Loglevel: respect operator-set values. Only normalize when the field
+	// is missing or contains an unknown token. Use panelLogLevel as the
+	// fallback so the dashboard knob actually steers Xray verbosity.
+	current := strings.ToLower(strings.TrimSpace(asString(logObj["loglevel"])))
+	if !isValidXrayLogLevel(current) {
+		target := s.resolveXrayLogLevelFromPanel()
+		if current != target {
+			logObj["loglevel"] = target
+			changed = true
+		}
 	}
 
 	accessCurrent, _ := logObj["access"].(string)
@@ -1261,6 +1274,49 @@ func (s *SettingService) ensureXrayLoggingDefaults() error {
 	xrayService := NewXrayService()
 	xrayService.RestartXrayAsync(false)
 	return nil
+}
+
+// isValidXrayLogLevel reports whether v is one of the values Xray accepts in
+// its `log.loglevel` field. Used by ensureXrayLoggingDefaults to decide
+// whether the operator-supplied value should be left intact.
+func isValidXrayLogLevel(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "debug", "info", "warning", "error", "none":
+		return true
+	}
+	return false
+}
+
+// resolveXrayLogLevelFromPanel maps panelLogLevel to a valid Xray loglevel.
+// "warn" is renamed to "warning" because Xray rejects the short form.
+// Unknown / empty values fall back to "warning" — the safe default that
+// keeps logs useful without producing the firehose that "debug" generates.
+func (s *SettingService) resolveXrayLogLevelFromPanel() string {
+	panelLogLevel, _ := s.getString("panelLogLevel")
+	switch strings.ToLower(strings.TrimSpace(panelLogLevel)) {
+	case "debug":
+		return "debug"
+	case "info":
+		return "info"
+	case "notice":
+		// Xray has no "notice"; closest semantic is info.
+		return "info"
+	case "warn", "warning":
+		return "warning"
+	case "error":
+		return "error"
+	default:
+		return "warning"
+	}
+}
+
+// asString returns v as a trimmed string when v is a string, otherwise "".
+// Used to safely read map[string]any fields that may be nil/typed.
+func asString(v any) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return ""
 }
 
 // EnsureXrayLoggingDefaults ensures xrayTemplateConfig has persistent access/error paths and debug level.
