@@ -21,10 +21,11 @@ import (
 // OutboundSidecarService manages cascade-member sing-box client outbounds.
 type OutboundSidecarService struct{}
 
-// SupportedKinds lists every OutboundSidecar.kind the panel knows how to render.
-// Kept in sync with web/service/singbox_<kind>.go builders (added per-kind).
+// SupportedKinds lists every OutboundSidecar.kind the panel knows how to render
+// AND the runtime sing-box build supports. naive_client is intentionally
+// excluded for now — cronet-go (the naive Chromium-based client) needs CGO
+// and the C cronet library. AnyTLS / TUIC / Mieru / Hy2 are pure Go.
 var SupportedKinds = []string{
-	"naive_client",
 	"anytls_client",
 	"mieru_client",
 	"tuic_client",
