@@ -16,18 +16,29 @@ import (
 // BaseController provides common functionality for all controllers, including authentication checks.
 type BaseController struct{}
 
-// webBasePath returns a path-absolute base URL prefix, always with a trailing slash (e.g. "/" or "/xui/").
-// Never returns empty — a missing/empty context value is treated as "/".
+// webBasePath returns a path-absolute base URL prefix used for outbound
+// redirects (Location headers, link composition). When Caddy's handle_path
+// strip is in front of us, the inbound URL has the prefix stripped already;
+// to keep the browser inside the masked path we prepend X-Forwarded-Prefix
+// (set by the engine middleware as "forwarded_prefix") onto the engine's
+// base_path. Always returns with a trailing slash.
 func webBasePath(c *gin.Context) string {
 	p := c.GetString("base_path")
 	if p == "" {
-		return "/"
+		p = "/"
 	}
 	if !strings.HasPrefix(p, "/") {
 		p = "/" + p
 	}
 	if !strings.HasSuffix(p, "/") {
 		p += "/"
+	}
+	if fp := strings.TrimSpace(c.GetString("forwarded_prefix")); fp != "" {
+		// fp is already normalized to leading slash + no trailing slash.
+		if p == "/" {
+			return fp + "/"
+		}
+		return fp + p
 	}
 	return p
 }
