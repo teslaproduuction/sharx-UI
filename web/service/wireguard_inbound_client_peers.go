@@ -204,20 +204,41 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 	}
 
 	active := make([]*model.ClientEntity, 0, len(clientEntities))
+	assigned := make([]*model.ClientEntity, 0, len(clientEntities))
 	for _, c := range clientEntities {
-		if !isWireGuardClientActive(c) || strings.TrimSpace(c.Email) == "" {
+		if c == nil || strings.TrimSpace(c.Email) == "" {
 			continue
 		}
-		active = append(active, c)
+		assigned = append(assigned, c)
+		if isWireGuardClientActive(c) {
+			active = append(active, c)
+		}
 	}
 	sort.Slice(active, func(i, j int) bool { return active[i].Email < active[j].Email })
+	sort.Slice(assigned, func(i, j int) bool { return assigned[i].Email < assigned[j].Email })
 
-	seen := make(map[string]struct{}, len(active))
-	for _, c := range active {
-		seen[strings.ToLower(strings.TrimSpace(c.Email))] = struct{}{}
+	inactivePeersAny, _ := settings[PanelWireGuardInactivePeersSettingsKey].([]any)
+	for _, p := range inactivePeersAny {
+		m, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		e := wireGuardPeerAnyEmail(m)
+		if e == "" {
+			continue
+		}
+		ek := strings.ToLower(e)
+		if _, exists := byEmail[ek]; !exists {
+			byEmail[ek] = m
+		}
+	}
+
+	assignedSet := make(map[string]struct{}, len(assigned))
+	for _, c := range assigned {
+		assignedSet[strings.ToLower(strings.TrimSpace(c.Email))] = struct{}{}
 	}
 	for k := range byEmail {
-		if _, ok := seen[k]; !ok {
+		if _, ok := assignedSet[k]; !ok {
 			delete(byEmail, k)
 		}
 	}
@@ -240,7 +261,8 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 	}
 	used := collectWireGuardUsedIPv4(srv, allPeersForUsed)
 
-	for _, c := range active {
+	// Ensure keys and IPs for every assigned client; inactive peers stay in the vault with stable keys.
+	for _, c := range assigned {
 		ek := strings.ToLower(strings.TrimSpace(c.Email))
 		peer, ok := byEmail[ek]
 		if !ok {
@@ -314,6 +336,22 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 		}
 	}
 	settings["peers"] = out
+
+	inactiveOut := make([]any, 0)
+	for _, c := range assigned {
+		if isWireGuardClientActive(c) {
+			continue
+		}
+		ek := strings.ToLower(strings.TrimSpace(c.Email))
+		if p := byEmail[ek]; p != nil {
+			inactiveOut = append(inactiveOut, p)
+		}
+	}
+	if len(inactiveOut) > 0 {
+		settings[PanelWireGuardInactivePeersSettingsKey] = inactiveOut
+	} else {
+		delete(settings, PanelWireGuardInactivePeersSettingsKey)
+	}
 	return nil
 }
 

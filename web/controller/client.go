@@ -406,10 +406,7 @@ func (a *ClientController) updateClient(c *gin.Context) {
 	if c.ContentType() == "application/json" {
 		var updateData map[string]interface{}
 		if err := c.ShouldBindJSON(&updateData); err == nil {
-			// Update only fields that are present in the request
-			if email, ok := updateData["email"].(string); ok && email != "" {
-				client.Email = email
-			}
+			// Update only fields that are present in the request (email is immutable after creation)
 			if uuid, ok := updateData["uuid"].(string); ok && uuid != "" {
 				client.UUID = uuid
 			}
@@ -523,10 +520,7 @@ func (a *ClientController) updateClient(c *gin.Context) {
 		// For form data, use ShouldBind
 		updateClient := &model.ClientEntity{}
 		if err := c.ShouldBind(updateClient); err == nil {
-			// Update only non-empty fields
-			if updateClient.Email != "" {
-				client.Email = updateClient.Email
-			}
+			// Update only non-empty fields (email is immutable after creation)
 			if updateClient.UUID != "" {
 				client.UUID = updateClient.UUID
 			}

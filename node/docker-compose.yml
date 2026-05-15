@@ -1,6 +1,6 @@
 # SharX node worker. Auth: SECRET_KEY → TLS + mTLS + JWT (no NODE_API_KEY).
-# Set PANEL_URL and SECRET_KEY below (same values as in the panel “copy compose” flow). No .env required.
-# Named volumes persist data; first start copies image content into empty volumes (e.g. /app/bin).
+# Set PANEL_URL and SECRET_KEY below (same values as in the panel “copy compose” flow). No .env required for dev defaults.
+# Watchtower: internal bridge only; worker (host network) calls http://127.0.0.1:8081/v1/update — same pattern as the panel stack.
 services:
   node:
     build:
@@ -9,6 +9,8 @@ services:
     # image: registry.konstpic.ru/sharx/sharxnode:latest
     container_name: sharx-node
     restart: unless-stopped
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     # Required for drop-connections (conntrack) API:
     cap_add: [NET_ADMIN]
     network_mode: host
@@ -23,11 +25,34 @@ services:
     environment:
       PANEL_URL: ""
       SECRET_KEY: ""
+      XUI_DOCKER_UPDATER_URL: http://127.0.0.1:8081/v1/update
+      XUI_DOCKER_UPDATER_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+
+  watchtower:
+    image: beatkind/watchtower:2.3.2
+    container_name: sharx_node_watchtower
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8081:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    command:
+      - --http-api-update
+    environment:
+      WATCHTOWER_HTTP_API_TOKEN: ${WATCHTOWER_HTTP_API_TOKEN:-local-dev-insecure-watchtower-token}
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+    networks:
+      - sharx_node_net
+
+networks:
+  sharx_node_net:
+    driver: bridge
 
 volumes:
   sharx-node-bin:
   sharx-node-logs:
   sharx-node-cert:
   sharx-node-data:
-
-

@@ -6,15 +6,16 @@
 
 **SharX** is a fork of the original **3XUI** panel with enhanced features and monitoring capabilities.
 
-This version brings significant improvements, a modern architecture, streamlined installation process using Docker containers, and **Grafana integration** for advanced monitoring with Prometheus and Loki.
+This version brings a modern, Docker-first architecture, **multi-node** workers, a **visual subscription page builder**, **encrypted cookie web sessions** (`web/web.go`), and **optional observability**: Prometheus text metrics at `{basePath}panel/metrics`, optional Loki / VictoriaMetrics endpoints in panel settings, and a downloadable Grafana dashboard JSON for your own stack.
 
 ## What's New
 
-### Node Mode (1 Panel – Multiple Nodes)
-- **Centralized Management**: One panel can now manage multiple nodes
-- **Registration Mode**: On first start, nodes run in registration mode and wait for connection from the panel
-- **Secure Authentication**: The panel issues an API token, signs the node, and stores it for future use
-- **Scalable Architecture**: Easily add or remove nodes as your infrastructure grows
+### Node Mode (1 panel – multiple nodes)
+- **Centralized management**: one panel manages several worker nodes
+- **Enable multi-node** in the panel settings first
+- **Add node from the UI**: under **Nodes**, the modal gives a ready **`docker-compose.yml`** with **`PANEL_URL`** and **`SECRET_KEY`** (base64 **pairing** bundle for TLS, mTLS, and JWT when the panel talks to the node). You do **not** paste a legacy **`NODE_API_KEY`**
+- **On the worker host**: save the file (e.g. `docker-compose.yml`) and run **`docker compose up -d --build`**
+- **Scalable architecture**: add or remove nodes as you grow
 
 ### Client and Inbound Entities Separation
 - **Flexible Client Assignment**: A client can now be assigned to multiple inbounds
@@ -27,23 +28,19 @@ This version brings significant improvements, a modern architecture, streamlined
 - **Proxy Support**: Perfect for nodes hidden behind a proxy or load balancer
 - **Flexible Routing**: Configure different host addresses for different use cases
 
-### Redis Integration
-- **Performance Boost**: Significantly faster UI response times
-- **Smart Caching**: Caches frequent database queries
-- **Efficient Data Serving**: If request parameters haven't changed and cache is valid, data is served directly from Redis
-- **Reduced Database Load**: Less stress on PostgreSQL database
+### Web sessions
+- **Cookie-based sessions**: Admin login sessions use Gin's encrypted cookie store (`web/web.go`).
+- **Live data paths**: Client lists, traffic, and online state are served from PostgreSQL and backend services (see e.g. client service notes on real-time data).
 
-### Full Migration to PostgreSQL
-- **Reliable Database**: Complete migration from SQLite to PostgreSQL
-- **Updated Import/Export**: Backup section has been updated for PostgreSQL
-- **Migration Tool**: Built-in migration tool from SQLite to PostgreSQL supports existing users
-- **Data Integrity**: Full and reliable data transfer during migration process
+### PostgreSQL database
+- **Production datastore**: The panel runtime uses **PostgreSQL** (GORM + SQL migrations in `database/`).
+- **Legacy import**: A built-in **SQLite → PostgreSQL** migration tool is available for importing old 3XUI SQLite dumps (`web/service/migration.go`).
 
-### Grafana Integration
-- **Prometheus Metrics**: Real-time metrics collection and monitoring
-- **Loki Logs**: Centralized log aggregation and analysis
-- **Advanced Monitoring**: Comprehensive dashboards for system performance
-- **Alerting**: Configurable alerts based on metrics and logs
+### Observability (optional; not a bundled Grafana stack)
+- **Prometheus scrape**: Metrics are exposed in Prometheus text format at `{basePath}panel/metrics` (`web/web.go`, `web/service/metrics.go`).
+- **Loki logging**: Optional push logging when *Grafana integration* is enabled in settings (`logger/loki.go`, `web/entity/entity.go`).
+- **VictoriaMetrics**: Optional remote ingest URL in settings for metric forwarding.
+- **Grafana dashboard JSON**: Export from the panel (settings API) to import into **your** Grafana; the default `docker-compose` does **not** ship Grafana/Prometheus/Loki containers.
 
 ### New Distribution Model
 - **Docker-Based**: Pre-built Docker images for easy deployment
@@ -297,9 +294,12 @@ The panel container is recreated with a new image; your **PostgreSQL** data on t
 
 ### Remote nodes (multi-node)
 
-Adding nodes, binding them to inbounds, and day-to-day management are done **in the web panel** (e.g. **Nodes** and **Geography**). The `install.sh` script in the SharX distribution only deploys the panel and database stack.
+1. Install the **panel**, then enable **multi-node** mode in settings.
+2. In **Nodes**, use **add node** — copy the **`docker-compose.yml`** snippet from the modal (already filled with **`PANEL_URL`** and **`SECRET_KEY`** from pairing).
+3. On the **worker server**, save it (e.g. `docker-compose.yml`) and run **`docker compose up -d --build`**.
+4. Bind nodes to inbounds, geography, and operations remain **in the web UI** (**Nodes**, **Geography**). The SharX install script only deploys the panel and database, not workers.
 
-To run a **separate** node worker container on another machine (image, ports, `NODE_TLS_*`), see [node/README.md](node/README.md) in this repository.
+Details: [node/README.md](node/README.md).
 
 ### Advanced Configuration
 
@@ -322,9 +322,10 @@ The default PostgreSQL configuration uses:
 
 To change these settings, update the environment variables in `docker-compose.yml`.
 
-#### Redis Configuration
+#### Sessions & observability
 
-Redis is automatically configured and integrated. No additional setup is required.
+- **Sessions**: Encrypted cookie store only; protect browser/session cookies like any admin app.
+- **Metrics / logs**: Configure optional Loki and VictoriaMetrics URLs in the panel **Settings** UI if you run those services yourself. Protect `/panel/metrics` at the network or reverse-proxy layer if you scrape it.
 
 #### Environment Variables Configuration
 
@@ -382,7 +383,7 @@ SharX supports comprehensive configuration through environment variables. These 
 |----------|-------------|---------|---------|
 | `XUI_ENABLE_FAIL2BAN` | Enable fail2ban | `true` | `true`, `false` |
 
-**Node worker TLS (not the panel):** `NODE_TLS_CERT_FILE` and `NODE_TLS_KEY_FILE` apply only to the **node** service `docker-compose`; see [node/README.md](node/README.md).
+**Worker node (not the panel):** the default path is **pairing** via **`SECRET_KEY`** + **`PANEL_URL`** from the panel modal; see [node/README.md](node/README.md).
 
 **Example docker-compose.yml configuration:**
 

@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/curve25519"
 
 	"github.com/konstpic/sharx-code/v2/database/model"
+	"github.com/konstpic/sharx-code/v2/web/service"
 )
 
 // wireguardPublicKeyFromPrivateB64 decodes a standard WireGuard base64 private key and returns base64-encoded public key.
@@ -108,6 +109,19 @@ func findWireguardPeerForClient(peers []any, clientEmail string) map[string]any 
 	return nil
 }
 
+// findWireguardPeerForClientActiveOrInactive looks in Xray `peers` first, then panel-only inactive vault.
+func findWireguardPeerForClientActiveOrInactive(settings map[string]any, clientEmail string) map[string]any {
+	if settings == nil {
+		return nil
+	}
+	peers, _ := settings["peers"].([]any)
+	if m := findWireguardPeerForClient(peers, clientEmail); m != nil {
+		return m
+	}
+	inactive, _ := settings[service.PanelWireGuardInactivePeersSettingsKey].([]any)
+	return findWireguardPeerForClient(inactive, clientEmail)
+}
+
 // buildWireguardPanelInfo returns text for the panel "View connection keys" modal (not a v2ray:// URL).
 // Optional clientEmail matches a server peer with "email" / "clientEmail" / "panelEmail" in settings JSON.
 func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail string) string {
@@ -185,14 +199,15 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 	}
 
 	peers, _ := settings["peers"].([]any)
+	inactivePeers, _ := settings[service.PanelWireGuardInactivePeersSettingsKey].([]any)
 	clientEmail = strings.TrimSpace(clientEmail)
 	b.WriteString("\n---\n")
 	b.WriteString("Peers on the server (Xray `settings.peers`)\n")
-	if len(peers) == 0 {
+	if len(peers) == 0 && len(inactivePeers) == 0 {
 		b.WriteString("No peers in settings yet. Assign a client to this inbound in “Clients” to auto-create a peer, or add peers manually in Inbounds → WireGuard.\n")
 	} else {
-		b.WriteString(fmt.Sprintf("Configured: %d peer(s).\n", len(peers)))
-		if m := findWireguardPeerForClient(peers, clientEmail); m != nil {
+		b.WriteString(fmt.Sprintf("Configured: %d active + %d inactive (panel vault) peer(s).\n", len(peers), len(inactivePeers)))
+		if m := findWireguardPeerForClientActiveOrInactive(settings, clientEmail); m != nil {
 			b.WriteString("\nRow linked to this client (matched by email on the peer)\n")
 			if pk, _ := m["publicKey"].(string); strings.TrimSpace(pk) != "" {
 				b.WriteString("Device public key (must be this key on the server peer row): " + strings.TrimSpace(pk) + "\n")
@@ -222,7 +237,7 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 
 	if serverPub != "" {
 		b.WriteString("\n---\n")
-		peerMatch := findWireguardPeerForClient(peers, clientEmail)
+		peerMatch := findWireguardPeerForClientActiveOrInactive(settings, clientEmail)
 		b.WriteString("Example: paste into a WireGuard app (or .conf).\n\n")
 		b.WriteString("[Interface]\n")
 		if peerMatch != nil {

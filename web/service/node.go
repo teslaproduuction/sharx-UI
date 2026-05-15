@@ -279,6 +279,11 @@ func (s *NodeService) SetNodeXrayVersion(id int, version string) error {
 	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("xray_version", version).Error
 }
 
+// SetNodeWorkerVersion persists the cached SharX worker build string from the node API (sharxVersion).
+func (s *NodeService) SetNodeWorkerVersion(id int, version string) error {
+	return database.GetDB().Model(&model.Node{}).Where("id = ?", id).Update("worker_version", version).Error
+}
+
 // SetNodeTelemtState persists worker Telemt sidecar state (running | stopped | unknown).
 func (s *NodeService) SetNodeTelemtState(id int, state string) error {
 	st := strings.TrimSpace(strings.ToLower(state))
@@ -345,13 +350,31 @@ func extractNodeXrayVersion(status map[string]interface{}) string {
 	return ""
 }
 
-// RefreshNodeXrayStateFromWorker sets xray_state (and caches xray_version) from GET /api/v1/status on the worker.
+func extractNodeWorkerVersion(status map[string]interface{}) string {
+	if status == nil {
+		return ""
+	}
+	for _, key := range []string{"sharxVersion", "workerVersion"} {
+		v, ok := status[key].(string)
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v != "" && !strings.EqualFold(v, "unknown") {
+			return v
+		}
+	}
+	return ""
+}
+
+// RefreshNodeXrayStateFromWorker sets xray_state (and caches xray_version, worker_version) from GET /api/v1/status on the worker.
 func (s *NodeService) RefreshNodeXrayStateFromWorker(node *model.Node) error {
 	if node == nil {
 		return nil
 	}
 	if !node.Enable {
 		_ = s.SetNodeXrayVersion(node.Id, "")
+		_ = s.SetNodeWorkerVersion(node.Id, "")
 		return s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
 	}
 	st, err := s.GetNodeStatus(node)
@@ -374,6 +397,7 @@ func (s *NodeService) RefreshNodeXrayStateFromWorker(node *model.Node) error {
 		}
 	}
 	_ = s.SetNodeXrayVersion(node.Id, version)
+	_ = s.SetNodeWorkerVersion(node.Id, extractNodeWorkerVersion(st))
 
 	if statusMapRunning(st["running"]) {
 		return s.SetNodeXrayState(node.Id, model.NodeXrayRunning)
@@ -507,12 +531,73 @@ func (s *NodeService) RestartXrayOnNode(node *model.Node) error {
 	return nil
 }
 
+// TriggerDockerUpdaterOnNode asks the worker to call its configured Docker sidecar updater (Watchtower), same env as the panel.
+func (s *NodeService) TriggerDockerUpdaterOnNode(ctx context.Context, node *model.Node) error {
+	if node == nil {
+		return fmt.Errorf("node is nil")
+	}
+	if !node.Enable {
+		return fmt.Errorf("node is disabled")
+	}
+	client, err := s.createHTTPClient(node, 3*time.Minute+15*time.Second)
+	if err != nil {
+		return err
+	}
+	urlStr := fmt.Sprintf("%s/api/v1/docker-updater/trigger", nodeRequestBaseURL(node))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, nil)
+	if err != nil {
+		return err
+	}
+	if err := s.setNodeAuthHeader(node, req); err != nil {
+		return err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = resp.Status
+		}
+		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, msg)
+	}
+	return nil
+}
+
+// TriggerDockerUpdaterOnAllNodes invokes the docker updater on every enabled node. Returns human-readable errors (empty if all succeeded).
+func (s *NodeService) TriggerDockerUpdaterOnAllNodes(ctx context.Context) []string {
+	settingSvc := SettingService{}
+	multi, err := settingSvc.GetMultiNodeMode()
+	if err != nil || !multi {
+		return nil
+	}
+	nodes, err := s.GetAllNodes()
+	if err != nil {
+		return []string{fmt.Sprintf("list nodes: %v", err)}
+	}
+	var out []string
+	for _, node := range nodes {
+		if node == nil || !node.Enable {
+			continue
+		}
+		if err := s.TriggerDockerUpdaterOnNode(ctx, node); err != nil {
+			logger.Warningf("[Node: %s] docker-updater trigger: %v", node.Name, err)
+			out = append(out, fmt.Sprintf("%s: %v", node.Name, err))
+		}
+	}
+	return out
+}
+
 // CheckNodeHealth checks if a node is online and updates its status and response time.
 func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 	if node != nil && !node.Enable {
 		resetNodeHealthTgHysteresis(node.Id)
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayStopped)
 		_ = s.SetNodeXrayVersion(node.Id, "")
+		_ = s.SetNodeWorkerVersion(node.Id, "")
 		_ = s.SetNodeTelemtState(node.Id, model.NodeTelemtStopped)
 		return nil
 	}
@@ -529,6 +614,7 @@ func (s *NodeService) CheckNodeHealth(node *model.Node) error {
 		}
 		_ = s.SetNodeXrayState(node.Id, model.NodeXrayError)
 		_ = s.SetNodeXrayVersion(node.Id, "")
+		_ = s.SetNodeWorkerVersion(node.Id, "")
 		_ = s.SetNodeTelemtState(node.Id, model.NodeTelemtUnknown)
 		sendDown, _, downFrom := nodeHealthTgHysteresisAfterCheck(node.Id, true, previousStatus)
 		if sendDown {
@@ -1601,9 +1687,13 @@ func (s *NodeService) CollectNodeStats() error {
 	for _, node := range nodesWithInbounds {
 		go func(n *model.Node) {
 			if h, hErr := s.GetNodePublicHealth(n); hErr == nil && !h.XrayRunning {
-				logger.Debugf("[Node: %s] Skipping stats: xray not running (GET /health)", n.Name)
-				results <- nodeStatsResult{node: n, skip: true}
-				return
+				telemtActive := h.TelemtRunning || h.TelemtCount > 0
+				if !telemtActive {
+					logger.Debugf("[Node: %s] Skipping stats: xray not running and telemt inactive (GET /health)", n.Name)
+					results <- nodeStatsResult{node: n, skip: true}
+					return
+				}
+				logger.Debugf("[Node: %s] Xray not running but telemt active — still collecting stats (GET /health)", n.Name)
 			}
 			// Use reset=true to get delta traffic (incremental values) instead of cumulative
 			// This prevents double-counting when adding to database
