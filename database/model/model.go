@@ -139,6 +139,21 @@ type HistoryOfSeeders struct {
 	SeederName string `json:"seederName"`
 }
 
+// SingboxPendingChange is one queued CRUD on a sing-box-managed inbound or
+// its assigned users. See web/service/singbox_pending.go and
+// migrations/0045_singbox_pending_changes.sql.
+type SingboxPendingChange struct {
+	Id          int64  `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	NodeId      int    `json:"nodeId" gorm:"column:node_id;index"`
+	ChangeType  string `json:"changeType" gorm:"column:change_type"`
+	PayloadJSON string `json:"payload" gorm:"column:payload_json;type:text"`
+	CreatedAt   int64  `json:"createdAt" gorm:"column:created_at"`
+	AppliedAt   *int64 `json:"appliedAt,omitempty" gorm:"column:applied_at"`
+}
+
+// TableName names the singbox_pending_changes table for GORM.
+func (SingboxPendingChange) TableName() string { return "singbox_pending_changes" }
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
