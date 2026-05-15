@@ -131,7 +131,22 @@ func (s *Server) initRouter() (*gin.Engine, error) {
 	}
 	engine.Use(sessions.Sessions("sharx", store))
 	engine.Use(func(c *gin.Context) {
-		c.Set("base_path", basePath)
+		// Phase 1 — Caddy front-door uses handle_path to strip the secret prefix
+		// before forwarding, so backend's webBasePath stays "/". The browser still
+		// lives under /<prefix>/, so any redirect we emit must be re-prefixed or
+		// it will land on /panel/ → decoy. Caddy injects X-Forwarded-Prefix; honor
+		// it when present so webBasePath/webPanelURL produce browser-correct paths.
+		bp := basePath
+		if fp := strings.TrimSpace(c.GetHeader("X-Forwarded-Prefix")); fp != "" {
+			if !strings.HasPrefix(fp, "/") {
+				fp = "/" + fp
+			}
+			if !strings.HasSuffix(fp, "/") {
+				fp += "/"
+			}
+			bp = fp
+		}
+		c.Set("base_path", bp)
 	})
 	engine.Use(func(c *gin.Context) {
 		uri := c.Request.RequestURI

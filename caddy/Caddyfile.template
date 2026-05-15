@@ -32,6 +32,10 @@ ${SITE_ADDRESS} {
             header_up X-Real-IP {remote_host}
             header_up X-Forwarded-Proto {scheme}
             header_up X-Forwarded-Host {host}
+            # Tell backend the public-facing prefix it lives under so Redirect()
+            # targets (login → /panel/, etc.) include /<prefix>/ and survive
+            # Caddy's strip+forward instead of landing on the decoy.
+            header_up X-Forwarded-Prefix /${PANEL_SECRET_PREFIX}
         }
     }
 
