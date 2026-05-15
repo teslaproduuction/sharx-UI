@@ -193,6 +193,33 @@ func (OutboundSidecarNodeMapping) TableName() string {
 	return "outbound_sidecar_node_mappings"
 }
 
+// WarpAccount is one anonymous Cloudflare WARP registration. Sensitive fields
+// (private_key, license_key, access_token) are stored encrypted; see
+// web/service/warp.go and migrations/0047_warp_accounts.sql.
+type WarpAccount struct {
+	Id            int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	UserId        int    `json:"userId" gorm:"column:user_id;default:1;index"`
+	Name          string `json:"name" gorm:"column:name;uniqueIndex"`
+	DeviceId      string `json:"deviceId" gorm:"column:device_id"`
+	AccountId     string `json:"accountId" gorm:"column:account_id"`
+	PrivateKey    string `json:"-" gorm:"column:private_key;type:text"` // AES-GCM encrypted
+	PublicKey     string `json:"publicKey" gorm:"column:public_key;type:text"`
+	LicenseKey    string `json:"-" gorm:"column:license_key;type:text"` // AES-GCM encrypted
+	IsPlus        bool   `json:"isPlus" gorm:"column:is_plus;default:false"`
+	IPv4Address   string `json:"ipv4Address" gorm:"column:ipv4_address"`
+	IPv6Address   string `json:"ipv6Address,omitempty" gorm:"column:ipv6_address"`
+	PeerEndpoint  string `json:"peerEndpoint" gorm:"column:peer_endpoint;default:engage.cloudflareclient.com:2408"`
+	PeerPublicKey string `json:"peerPublicKey" gorm:"column:peer_public_key"`
+	Reserved      []byte `json:"reserved,omitempty" gorm:"column:reserved"` // 3 bytes
+	AccessToken   string `json:"-" gorm:"column:access_token;type:text"`    // AES-GCM encrypted
+	OutboundId    *int   `json:"outboundId,omitempty" gorm:"column:outbound_id"`
+	CreatedAt     int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+	RefreshedAt   int64  `json:"refreshedAt" gorm:"column:refreshed_at"`
+}
+
+// TableName names the warp_accounts table for GORM.
+func (WarpAccount) TableName() string { return "warp_accounts" }
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
