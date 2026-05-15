@@ -48,6 +48,10 @@ type Manager struct {
 	replayMu sync.RWMutex
 	replayOK bool
 	replay   Payload
+
+	// v2ray_api StatsService client — lazily dialed on first QueryStats.
+	statsMu sync.Mutex
+	stats   *StatsClient
 }
 
 // NewManager returns an empty manager; the process is started lazily on first Apply.
@@ -107,6 +111,33 @@ func (m *Manager) ConfigHash() string {
 	return m.cfgHash
 }
 
+// QueryStats returns per-tag and per-user counters from the v2ray_api StatsService
+// exposed by hiddify-sing-box. Returns ((nil,nil,nil)) when the process is not
+// running so callers do not have to special-case start-up. Lazy-dials on first call.
+func (m *Manager) QueryStats(reset bool) ([]*Traffic, []*ClientTraffic, error) {
+	if m == nil || m.RunningCount() == 0 {
+		return nil, nil, nil
+	}
+	m.statsMu.Lock()
+	if m.stats == nil {
+		m.stats = NewStatsClient(0)
+	}
+	sc := m.stats
+	m.statsMu.Unlock()
+	return sc.QueryStats(reset)
+}
+
+// closeStatsLocked is called when the process is being stopped — drops the
+// gRPC connection so the next Apply re-dials cleanly against the new pid.
+func (m *Manager) closeStatsLocked() {
+	m.statsMu.Lock()
+	if m.stats != nil {
+		m.stats.Close()
+		m.stats = nil
+	}
+	m.statsMu.Unlock()
+}
+
 // ReplaySnapshotForRestart returns the most recent successful payload for the
 // /restart-singbox endpoint. Mirrors node/telemt.ReplaySnapshotForRestart.
 func (m *Manager) ReplaySnapshotForRestart() (Payload, bool) {
@@ -133,6 +164,7 @@ func (m *Manager) Stop() {
 }
 
 func (m *Manager) stopLocked() {
+	m.closeStatsLocked()
 	if m.cmd == nil || m.cmd.Process == nil {
 		m.cmd = nil
 		m.pid = 0
