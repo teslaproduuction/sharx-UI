@@ -1404,17 +1404,6 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 		return false, common.NewError("Client not found")
 	}
 
-	// Check for duplicate email if email changed
-	if newClient.Email != "" && strings.ToLower(newClient.Email) != strings.ToLower(oldEmail) {
-		existEmail, err := s.checkEmailsExistForClients(newClients)
-		if err != nil {
-			return false, err
-		}
-		if existEmail != "" {
-			return false, common.NewError("Duplicate email:", existEmail)
-		}
-	}
-
 	// Find ClientEntity by old email
 	clientService := ClientService{}
 	clientEntity, err := clientService.GetClientByEmail(oldInbound.UserId, oldEmail)
@@ -1429,6 +1418,8 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	updatedEntity.CreatedAt = clientEntity.CreatedAt
 	// Preserve inbound assignments
 	updatedEntity.InboundIds = clientEntity.InboundIds
+	// Client email cannot be changed after creation (same as panel Clients API).
+	updatedEntity.Email = clientEntity.Email
 
 	// Update client using ClientService (this handles Settings update automatically)
 	needRestart, err := clientService.UpdateClient(oldInbound.UserId, updatedEntity)

@@ -1,114 +1,96 @@
-# SharX Node Service
+# SharX Node (worker)
 
-Node service (worker) for SharX multi-node architecture.
+Worker-узел для multi-mode панели SharX: на машине крутится Xray (и при необходимости Telemt sidecar’ы); конфиг **забирается с панели** (pull/apply). Доступ к API узла — **HTTPS + mTLS + JWT** из бандла `SECRET_KEY`, а не старый `NODE_API_KEY`.
 
-## Description
+---
 
-This service runs on separate servers and manages XRAY Core instances. The SharX panel (master) sends configurations to nodes via REST API.
+## Установка узла (рекомендуемый порядок)
 
-## Features
+1. **Ставите панель** (Docker/скрипт из репозитория SharX) и доводите до рабочего входа в веб-UI.
 
-- REST API for XRAY Core management
-- Apply configurations from the panel
-- Reload XRAY without stopping the container
-- Status and health checks
+2. **Включаете multi-node** в настройках панели (режим нескольких узлов).
 
-## API Endpoints
+3. **Добавляете ноду** в интерфейсе (страница узлов). Откроется модалка **добавления узлы**: там будет готовый фрагмент **`docker-compose.yml`** (или инструкция «скопировать compose») с уже подставленными **`PANEL_URL`** и **`SECRET_KEY`** (base64 JSON bundle из панели).
 
-### `GET /health`
-Health check endpoint (no authentication required)
+4. **На сервере узла** (отдельная машина):
+   - создаёте файл, например `docker-compose.yml`;
+   - вставляете содержимое из модалки;
+   - при необходимости правите только то, что позволяет документация/модалка (образ vs `build`, тома, редко — порт, если не host-сеть).
 
-### `POST /api/v1/apply`
-Apply new XRAY configuration
-- **Headers**: `Authorization: Bearer <api-key>`
-- **Body**: XRAY JSON configuration
-
-### `POST /api/v1/reload`
-Reload XRAY
-- **Headers**: `Authorization: Bearer <api-key>`
-
-### `POST /api/v1/force-reload`
-Force reload XRAY (stops and restarts)
-- **Headers**: `Authorization: Bearer <api-key>`
-
-### `GET /api/v1/status`
-Get XRAY status
-- **Headers**: `Authorization: Bearer <api-key>`
-
-### `GET /api/v1/stats`
-Get traffic statistics and online clients
-- **Headers**: `Authorization: Bearer <api-key>`
-- **Query Parameters**: `reset=true` to reset statistics after reading
-
-## Running
-
-### Docker Compose
-
-```bash
-cd node
-NODE_API_KEY=your-secure-api-key docker-compose up -d --build
-```
-
-#### HTTPS Configuration
-
-To enable HTTPS for the node API:
-
-1. Create a `cert` directory in the `node` folder:
+5. **Запуск:**
    ```bash
-   mkdir -p node/cert
+   docker compose up -d --build
    ```
 
-2. Place your TLS certificate files in `node/cert/`:
-   - Certificate file: `cert.pem` (or `fullchain.pem`)
-   - Private key file: `key.pem` (or `privkey.pem`)
+6. В панели проверяете, что узел **подключился** и **получил конфиг** (статус, синхронизация, логи при необходимости).
 
-3. Uncomment and configure environment variables in `docker-compose.yml`:
-   ```yaml
-   environment:
-     - NODE_TLS_CERT_FILE=/app/cert/cert.pem
-     - NODE_TLS_KEY_FILE=/app/cert/key.pem
-   ```
+Типовой `docker-compose` в репозитории: `network_mode: host`, тома под `cert` / `data` / `logs`, переменные **`PANEL_URL`** и **`SECRET_KEY`**. Секрет **один раз копируется из панели** — не выдумывайте и не смешивайте с узлами другой панели.
 
-4. Uncomment the HTTPS port mapping:
-   ```yaml
-   ports:
-     - "8080:8080"  # HTTP (optional, can be removed if using HTTPS only)
-     - "8443:8443"  # HTTPS
-   ```
+---
 
-5. Restart the container:
-   ```bash
-   docker-compose down
-   docker-compose up -d
-   ```
+## Настройка TLS / сеть
 
-**Note:** XRAY Core is automatically downloaded during Docker image build for your architecture. Docker BuildKit automatically detects the host architecture. To explicitly specify the architecture, use:
+В режиме **pairing** сертификаты и проверка клиента задаются **бандлом `SECRET_KEY`** (панель выпускает материалы узла). Отдельная ручная настройка `NODE_TLS_*` в compose обычно **не нужна**, если вы используете выданный из панели сценарий.
+
+Если панель доступна по HTTPS с корпоративным CA — следуйте подсказкам в UI/доках панели (доверие к CA на узле при pull).
+
+---
+
+## Переменные окружения (актуально)
+
+| Переменная | Описание |
+|------------|----------|
+| **`SECRET_KEY`** | Обязательно. Base64 JSON bundle с панели (pairing). |
+| **`PANEL_URL`** | URL панели для первого pull и фоновой синхронизации (как в модалке). |
+| **`NODE_ADDRESS`** | Опционально. Публичный адрес узла, если авто не подходит (см. код/настройки). |
+
+Устаревший **`NODE_API_KEY`** в текущем worker **не используется**.
+
+---
+
+## API (кратко)
+
+- Панель обращается к узлу по HTTPS с **mTLS**; в заголовке **`Authorization: Bearer <JWT>`** — токен, который **выпускает панель**, а не строка «api-key» пользователя.
+- `GET /health` — без авторизации (проверка «узел поднялся»).
+
+Детальный список маршрутов см. в коде `node/api/server.go` и в `web/docs/API.md` панели.
+
+---
+
+## Разработка / сборка образа
 
 ```bash
 DOCKER_BUILDKIT=1 docker build --build-arg TARGETARCH=arm64 -t sharx-node -f node/Dockerfile ..
 ```
 
-### Manual
+Локальный запуск без Docker (для отладки): задайте **`SECRET_KEY`** и при необходимости **`PANEL_URL`** в окружении, затем:
 
 ```bash
-go run node/main.go -port 8080 -api-key your-secure-api-key
+go run ./node -port 8080
 ```
 
-## Environment Variables
+---
 
-- `NODE_API_KEY` - API key for authentication (required)
-- `NODE_TLS_CERT_FILE` - Path to TLS certificate file (optional, enables HTTPS)
-- `NODE_TLS_KEY_FILE` - Path to TLS private key file (optional, enables HTTPS)
-
-## Structure
+## Структура каталога
 
 ```
 node/
-├── main.go           # Entry point
-├── api/
-│   └── server.go     # REST API server
-├── xray/
-│   └── manager.go    # XRAY process management
-├── Dockerfile        # Docker image
+├── main.go
+├── api/           # HTTP API
+├── xray/          # процесс Xray
+├── telemt/        # Telemt sidecar (multi-node)
+├── configpull/    # pull конфига с панели
+├── Dockerfile
 └── docker-compose.yml
 ```
+
+---
+
+## Installation (English, short)
+
+1. Install the **panel** and enable **multi-node** mode.
+2. **Add a node** in the UI — copy the **`docker-compose.yml`** snippet from the modal (`PANEL_URL` + `SECRET_KEY` bundle).
+3. On the worker server: save as `docker-compose.yml`, then `docker compose up -d --build`.
+4. Confirm the node is **online** in the panel.
+
+Auth is **pairing-only** (`SECRET_KEY`); there is **no** `NODE_API_KEY` in the current worker.

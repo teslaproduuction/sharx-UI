@@ -33,6 +33,9 @@ const (
 	defaultWireGuardMTU           = 1420
 	defaultWireGuardCIDR          = "10.8.0.1/32"
 	defaultWireGuardPeerKeepAlive = 25
+	// PanelWireGuardInactivePeersSettingsKey stores WG peer rows for clients assigned to this inbound
+	// who are disabled or expired. Xray must not see this key; see SanitizeWireGuardSettingsJSONForXray.
+	PanelWireGuardInactivePeersSettingsKey = "panelWgInactivePeers"
 )
 
 // normalizeWireGuardInterfaceAddress forces Xray-required masks: /32 (IPv4) and /128 (IPv6).
@@ -70,6 +73,34 @@ func normalizeWireGuardClientDNSList(in []string) []string {
 		out = append(out, t)
 	}
 	return out
+}
+
+// SanitizeWireGuardSettingsJSONForXray returns settings safe to embed in an Xray core inbound:
+// drops panel-only inactive-peer vault and per-peer privateKey, normalizes `address` masks.
+func SanitizeWireGuardSettingsJSONForXray(settings string) string {
+	settings = strings.TrimSpace(settings)
+	if settings == "" {
+		return settings
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(settings), &m); err != nil || m == nil {
+		return settings
+	}
+	delete(m, PanelWireGuardInactivePeersSettingsKey)
+	if peers, ok := m["peers"].([]any); ok {
+		for _, p := range peers {
+			pm, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			delete(pm, "privateKey")
+		}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return settings
+	}
+	return applyWireGuardSettingsAddressForXray(string(b))
 }
 
 // applyWireGuardSettingsAddressForXray rewrites `address` to /32 and /128 so Xray 26+ accepts configs
@@ -238,21 +269,39 @@ func PreserveWireGuardPeersOnInboundUpdate(newSettingsJSON, oldSettingsJSON stri
 	if err := json.Unmarshal([]byte(newSettingsJSON), &newM); err != nil || newM == nil {
 		newM = make(map[string]any)
 	}
-	if pNew, _ := newM["peers"].([]any); len(pNew) > 0 {
+	pNew, _ := newM["peers"].([]any)
+	peersRestored := false
+	if len(pNew) == 0 {
+		var oldM map[string]any
+		if err := json.Unmarshal([]byte(oldSettingsJSON), &oldM); err != nil || oldM == nil {
+			return newSettingsJSON, nil
+		}
+		pOld, _ := oldM["peers"].([]any)
+		if len(pOld) == 0 {
+			return newSettingsJSON, nil
+		}
+		newM["peers"] = pOld
+		peersRestored = true
+		if !wireGuardInactivePeersPresent(newM) && wireGuardInactivePeersPresent(oldM) {
+			if v, ok := oldM[PanelWireGuardInactivePeersSettingsKey]; ok {
+				newM[PanelWireGuardInactivePeersSettingsKey] = v
+			}
+		}
+	}
+	if len(pNew) > 0 && !peersRestored {
 		return newSettingsJSON, nil
 	}
-	var oldM map[string]any
-	if err := json.Unmarshal([]byte(oldSettingsJSON), &oldM); err != nil || oldM == nil {
-		return newSettingsJSON, nil
-	}
-	pOld, _ := oldM["peers"].([]any)
-	if len(pOld) == 0 {
-		return newSettingsJSON, nil
-	}
-	newM["peers"] = pOld
 	b, err := json.MarshalIndent(newM, "", "  ")
 	if err != nil {
 		return newSettingsJSON, err
 	}
 	return string(b), nil
+}
+
+func wireGuardInactivePeersPresent(m map[string]any) bool {
+	if m == nil {
+		return false
+	}
+	p, ok := m[PanelWireGuardInactivePeersSettingsKey].([]any)
+	return ok && len(p) > 0
 }

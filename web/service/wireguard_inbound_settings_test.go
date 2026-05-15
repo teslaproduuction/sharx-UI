@@ -2,6 +2,7 @@ package service
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -124,5 +125,47 @@ func TestPreserveWireGuardPeersOnInboundUpdate(t *testing.T) {
 	}
 	if keep != `{"peers":[{"publicKey":"x"}]}` {
 		t.Fatalf("got %q", keep)
+	}
+}
+
+func TestPreserveWireGuardPeersOnInboundUpdate_restoresInactiveVaultWithPeers(t *testing.T) {
+	old := fmt.Sprintf(`{"mtu":1420,"secretKey":"old","address":["10.8.0.1/32"],"peers":[{"publicKey":"a","email":"a@b.c"}],"%s":[{"publicKey":"z","email":"z@b.c"}]}`,
+		PanelWireGuardInactivePeersSettingsKey)
+	newNoPeers := `{"mtu":1500,"secretKey":"new","address":["10.8.0.1/32"],"peers":[]}`
+	out, err := PreserveWireGuardPeersOnInboundUpdate(newNoPeers, old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatal(err)
+	}
+	v, ok := m[PanelWireGuardInactivePeersSettingsKey].([]any)
+	if !ok || len(v) != 1 {
+		t.Fatalf("inactive vault: %#v", m[PanelWireGuardInactivePeersSettingsKey])
+	}
+}
+
+func TestSanitizeWireGuardSettingsJSONForXray(t *testing.T) {
+	raw := fmt.Sprintf(`{"mtu":1420,"secretKey":"x","address":["10.8.0.1/24"],"peers":[{"publicKey":"pk","privateKey":"sk","email":"a@b"}],"%s":[{"publicKey":"p2"}]}`,
+		PanelWireGuardInactivePeersSettingsKey)
+	out := SanitizeWireGuardSettingsJSONForXray(raw)
+	var m map[string]any
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m[PanelWireGuardInactivePeersSettingsKey]; ok {
+		t.Fatal("vault should be stripped")
+	}
+	peers, _ := m["peers"].([]any)
+	if len(peers) != 1 {
+		t.Fatalf("peers: %v", peers)
+	}
+	p0 := peers[0].(map[string]any)
+	if _, ok := p0["privateKey"]; ok {
+		t.Fatal("privateKey should be stripped from peers for Xray")
+	}
+	if p0["publicKey"] != "pk" {
+		t.Fatalf("publicKey: %v", p0["publicKey"])
 	}
 }

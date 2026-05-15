@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/config"
@@ -31,7 +32,36 @@ var (
 	// logBuffer maintains recent log entries in memory for web UI retrieval.
 	// It stores structured entries; GetLogs serializes them as NDJSON.
 	logBuffer []Entry
+
+	// minEmitLevel gates Emit() so debug entries are not forwarded to the
+	// in-memory buffer, Loki and the node→panel pusher when the operator
+	// configured a higher level. The console/file backends still have their
+	// own level (set in InitLogger), this is the user-facing knob.
+	minEmitLevel   = levelRank("debug")
+	minEmitLevelMu sync.RWMutex
 )
+
+// SetMinEmitLevel sets the minimum severity that reaches the in-memory log
+// buffer (UI), Loki and the node→panel push pipeline. Anything below this
+// level is dropped before any of those sinks see it. Call this from
+// settings reload (panel) and from node startup. Empty / unknown levels
+// fall back to "info".
+func SetMinEmitLevel(level string) {
+	level = strings.TrimSpace(strings.ToLower(level))
+	if level == "" {
+		level = "info"
+	}
+	minEmitLevelMu.Lock()
+	minEmitLevel = levelRank(level)
+	minEmitLevelMu.Unlock()
+}
+
+// getMinEmitLevel returns the current Emit threshold (read-locked).
+func getMinEmitLevel() int {
+	minEmitLevelMu.RLock()
+	defer minEmitLevelMu.RUnlock()
+	return minEmitLevel
+}
 
 // Entry is the single-source-of-truth structured log record (NDJSON on disk/wire).
 // One Entry must serialize to exactly one JSON object per line.
@@ -255,6 +285,10 @@ func writeDirect(e Entry) {
 
 // Emit writes a structured log Entry as one JSON line and adds it to the buffer.
 // Level/source are normalized; Ts is set if missing.
+//
+// Entries below the configured minimum emit level (see SetMinEmitLevel) are
+// dropped before any sink (in-memory buffer / Loki / node→panel push).
+// Console and file backends use their own level set in InitLogger.
 func Emit(e Entry) {
 	ensureLogger()
 
@@ -271,6 +305,12 @@ func Emit(e Entry) {
 	e.Source = strings.ToLower(strings.TrimSpace(e.Source))
 	if e.Source == "" {
 		e.Source = "panel"
+	}
+
+	// User-facing level gate: keeps debug noise out of UI buffer / Loki /
+	// node→panel push when the operator picked info/warn/error in settings.
+	if levelRank(e.Level) < getMinEmitLevel() {
+		return
 	}
 
 	line, err := encodeEntry(e)

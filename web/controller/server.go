@@ -241,9 +241,21 @@ func (a *ServerController) dockerUpdaterTrigger(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "pages.settings.dockerUpdaterTriggerError"), err)
 		return
 	}
+	nodeSvc := service.NodeService{}
+	nodeErrs := nodeSvc.TriggerDockerUpdaterOnAllNodes(ctx)
+	if len(nodeErrs) > 0 {
+		logger.Warningf("Docker updater on workers: %d failure(s): %s", len(nodeErrs), strings.Join(nodeErrs, "; "))
+	}
 	tg := service.Tgbot{}
 	if tg.IsRunning() {
 		tg.NotifyPanelAction("Docker sidecar updater triggered (e.g. Watchtower)", "", getRemoteIp(c))
+		if len(nodeErrs) > 0 {
+			tg.NotifyPanelAction(
+				fmt.Sprintf("Node worker docker updater: %d error(s)", len(nodeErrs)),
+				strings.Join(nodeErrs, "; "),
+				getRemoteIp(c),
+			)
+		}
 	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.dockerUpdaterTriggerSuccess"), nil)
 }
