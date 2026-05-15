@@ -38,6 +38,7 @@ func (a *XUIController) initRouter(g *gin.RouterGroup) {
 	NewClientGroupController(g.Group("/group"))
 	NewOutboundController(g.Group("/outbound"))
 	NewOutboundSidecarController(g.Group("/outbound-sidecar"))
+	NewWarpAccountController(g.Group("/warp-account"))
 	NewXrayCoreConfigProfileController(g.Group("/xray-core-config-profile"))
 	NewDbInspectorController(g)
 
