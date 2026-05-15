@@ -243,8 +243,12 @@ func (s *Server) startTask() {
 	}
 	// Check whether xray is running every second
 	s.cron.AddJob("@every 1s", job.NewCheckXrayRunningJob())
-	// Tail Xray file logs (access/error) into unified WS stream.
-	s.cron.AddJob("@every 1s", job.NewXrayLogTailJob())
+	// Removed: duplicate Xray log forwarding. Xray writes access/error to
+	// files on disk (see ensureXrayLoggingDefaults). The process stderr is
+	// already captured by xray.LogWriter.Write → logger.Emit, which is the
+	// single source feeding the in-memory buffer / Loki / SSE stream.
+	// Tailing the same files here produced every line twice in the UI.
+	// s.cron.AddJob("@every 1s", job.NewXrayLogTailJob())
 
 	// Check if xray needs to be restarted every 30 seconds
 	s.cron.AddFunc("@every 30s", func() {
