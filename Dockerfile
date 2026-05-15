@@ -51,7 +51,7 @@ ENV CGO_ENABLED=0
 # patched for per-user accounting). with_wireguard pulls psiphon — we only need
 # wireguard outbound for the cascade later, so drop it for the Phase 2 baseline.
 RUN go build -trimpath \
-      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp" \
+      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp,with_naive_outbound" \
       -ldflags "-w -s" \
       -o /out/sing-box ./cmd/sing-box
 RUN /out/sing-box version | head -3 && /out/sing-box version | grep -i mieru || echo "mieru tag check skipped"
