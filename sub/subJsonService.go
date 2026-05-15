@@ -195,14 +195,48 @@ func (s *SubJsonService) getConfig(inbound *model.Inbound, client model.Client, 
 
 	externalProxies, ok := stream["externalProxy"].([]any)
 	if !ok || len(externalProxies) == 0 {
-		externalProxies = []any{
-			map[string]any{
-				"forceTls": "same",
-				"dest":     host,
-				"port":     float64(inbound.Port),
-				"remark":   "",
-			},
+		// Multi-node aware default. The previous fallback hardcoded the
+		// panel host into a synthetic externalProxy, which produced wrong
+		// addresses for hysteria/hysteria2 (and any protocol relying on
+		// the panel-derived host) when nodes were configured. We now seed
+		// the per-iteration list from getAddressesForInbound so the loop
+		// below mirrors how genVlessLink/genTrojanLink iterate node rows.
+		var nodeAddrs []AddressPort
+		if s.SubService != nil {
+			nodeAddrs, _ = s.SubService.getAddressesForInbound(inbound)
 		}
+		if len(nodeAddrs) == 0 {
+			nodeAddrs = []AddressPort{{Address: host, Port: inbound.Port}}
+		}
+		seeds := make([]any, 0, len(nodeAddrs))
+		for _, ap := range nodeAddrs {
+			addr := strings.TrimSpace(ap.Address)
+			if addr == "" {
+				continue
+			}
+			port := ap.Port
+			if port <= 0 {
+				port = inbound.Port
+			}
+			seeds = append(seeds, map[string]any{
+				"forceTls": "same",
+				"dest":     addr,
+				"port":     float64(port),
+				"remark":   strings.TrimSpace(ap.RemarkSuffix),
+			})
+		}
+		if len(seeds) == 0 {
+			// Last-resort: keep prior behaviour rather than emitting nothing.
+			seeds = []any{
+				map[string]any{
+					"forceTls": "same",
+					"dest":     host,
+					"port":     float64(inbound.Port),
+					"remark":   "",
+				},
+			}
+		}
+		externalProxies = seeds
 	}
 
 	delete(stream, "externalProxy")
