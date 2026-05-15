@@ -220,6 +220,37 @@ type WarpAccount struct {
 // TableName names the warp_accounts table for GORM.
 func (WarpAccount) TableName() string { return "warp_accounts" }
 
+// OutboundChain is one Xray routing.balancers entry. Members can be cascade
+// bridges (Phase 3), native Xray outbound tags, or WARP outbound tags — the
+// chain builder resolves at config-render time. See .agent/plans/phase-4-cascade.md.
+type OutboundChain struct {
+	Id                   int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	UserId               int    `json:"userId" gorm:"column:user_id;default:1;index"`
+	Name                 string `json:"name" gorm:"column:name;uniqueIndex"`
+	Strategy             string `json:"strategy" gorm:"column:strategy;default:leastPing"`
+	ProbeURL             string `json:"probeUrl" gorm:"column:probe_url"`
+	ProbeIntervalSeconds int    `json:"probeIntervalSeconds" gorm:"column:probe_interval_seconds;default:60"`
+	Enable               bool   `json:"enable" gorm:"column:enable;default:true"`
+	CreatedAt            int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+	UpdatedAt            int64  `json:"updatedAt" gorm:"column:updated_at;autoUpdateTime"`
+
+	Members []OutboundChainMember `json:"members,omitempty" gorm:"foreignKey:ChainId;references:Id"`
+}
+
+// TableName names the outbound_chains table for GORM.
+func (OutboundChain) TableName() string { return "outbound_chains" }
+
+// OutboundChainMember references one outbound tag participating in a chain.
+type OutboundChainMember struct {
+	Id          int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	ChainId     int    `json:"chainId" gorm:"column:chain_id;index"`
+	OutboundTag string `json:"outboundTag" gorm:"column:outbound_tag"`
+	SortOrder   int    `json:"sortOrder" gorm:"column:sort_order;default:0"`
+}
+
+// TableName names the outbound_chain_members table for GORM.
+func (OutboundChainMember) TableName() string { return "outbound_chain_members" }
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
