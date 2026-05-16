@@ -123,11 +123,40 @@ services:
 
 ---
 
+## v2.0 — Phase 1 (Caddy masking) + Phase 2 (sing-box)
+
+### Caddy panel front-door
+
+| Переменная | Описание | Значение по умолчанию | Пример |
+|------------|----------|----------------------|--------|
+| `PANEL_DOMAIN` | Домен панели (без него Caddy слушает `:443` с self-signed) | — | `panel.example.com` |
+| `PANEL_SECRET_PREFIX` | Случайный URL-префикс, скрывающий панель за `/<prefix>/` | — | `6bc0dc699a0ee99a` |
+| `PANEL_DECOY_URL` | Куда Caddy reverse-proxy'ит нераспознанные пути (Hiddify-pattern) | `https://example.com` | `https://news.ycombinator.com` |
+| `PANEL_BACKEND_HOST` | Хост, куда Caddy форвардит трафик панели | `127.0.0.1` | `127.0.0.1` |
+| `PANEL_BACKEND_PORT` | Порт панели за Caddy | `2053` | `2053` |
+| `SUB_BACKEND_PORT` | Порт subscription за Caddy | `2096` | `2096` |
+| `NEXT_PUBLIC_BASE_PATH` | Bake-time префикс Next.js (= `PANEL_SECRET_PREFIX` с `/.../`) | `/` | `/6bc0dc699a0ee99a/` |
+
+### Sing-box singleton sidecar (Phase 2 — mieru/AnyTLS/Naïve/TUIC)
+
+| Переменная | Описание | Значение по умолчанию | Пример |
+|------------|----------|----------------------|--------|
+| `SINGBOX_BIN` | Путь к hiddify-sing-box бинарю | `/app/bin/sing-box` | `/usr/local/bin/sing-box` |
+| `SINGBOX_WORK_ROOT` | Per-instance config + work dir | `/app/singbox` или `${XUI_DATA_FOLDER}/singbox` | `/srv/singbox` |
+
+`NEXT_PUBLIC_BASE_PATH` обязательно совпадает с `PANEL_SECRET_PREFIX` (+ ведущий/завершающий `/`). Несовпадение → ассеты Next.js указывают на корневой путь и Caddy decoy их перехватит → blank screen.
+
 ## Примечания
 
 1. **Web Panel и Subscription настройки** (`XUI_WEB_*` и `XUI_SUB_*`) доступны **только через переменные окружения** и не могут быть изменены через веб-интерфейс.
 
 2. **База данных**: `XUI_DB_USER`, `XUI_DB_PASSWORD` являются обязательными для работы приложения.
+
+3. **Phase 1 маскировка обязательна**: панель должна быть скрыта за `PANEL_SECRET_PREFIX` + Caddy decoy. Прямое выставление панели на публичный 2053 категорически не рекомендуется — DPI/RKN мгновенно её обнаруживает.
+
+4. **Multi-node sing-box**: воркеры получают sing-box config через apply-config envelope (поле `singbox: {cfg, configHash}`). Бинарь sing-box должен лежать в `SINGBOX_BIN` на воркере (наш `node/Dockerfile` копирует его из `singbox-fetch` стейджа).
+
+5. **Cascade hub на panel-host**: в multi-node режиме panel-host sing-box живёт + обслуживает inbound'ы и OutboundSidecar с пустым `NodeIds`. Это позволяет панели быть entry-узлом каскада (RU → cascade outbound → IN worker → exit).
 
 
 3. Все пути к сертификатам должны быть абсолютными путями внутри контейнера (обычно /app/cert/*.pem).
