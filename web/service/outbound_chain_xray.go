@@ -113,7 +113,10 @@ func MergeChainsIntoXrayConfig(cfg *xray.Config) error {
 			}
 		}
 		if _, has := observatory["probeInterval"]; !has {
-			observatory["probeInterval"] = "60s"
+			// Default 5min — keeps probes cheap when a chain member is offline
+			// (Xray retries every interval; tight intervals on a bogus exit
+			// burn CPU on DNS/connect retries). Per-chain interval can override.
+			observatory["probeInterval"] = "300s"
 		}
 		cfg.Observatory = mustMarshalJSONUtil(observatory)
 	}
