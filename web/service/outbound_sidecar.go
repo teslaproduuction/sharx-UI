@@ -137,7 +137,12 @@ func (s *OutboundSidecarService) syncXrayBridgeOutbound(sc *model.OutboundSideca
 	var existing model.Outbound
 	err := database.GetDB().Where("tag = ?", tag).First(&existing).Error
 	if err == nil {
+		uid := sc.UserId
+		if uid == 0 {
+			uid = 1
+		}
 		patch := map[string]any{
+			"user_id":  uid,
 			"protocol": "socks",
 			"settings": settings,
 			"remark":   remark,
