@@ -145,7 +145,12 @@ func (s *OutboundSidecarService) syncXrayBridgeOutbound(sc *model.OutboundSideca
 		}
 		return database.GetDB().Model(&model.Outbound{}).Where("id = ?", existing.Id).Updates(patch).Error
 	}
+	uid := sc.UserId
+	if uid == 0 {
+		uid = 1 // OutboundService.GetOutbounds filters by user_id; default to admin.
+	}
 	row := &model.Outbound{
+		UserId:   uid,
 		Remark:   remark,
 		Enable:   sc.Enable,
 		Protocol: "socks",
