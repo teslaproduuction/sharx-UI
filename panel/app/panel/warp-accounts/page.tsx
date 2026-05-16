@@ -139,8 +139,8 @@ export default function Page() {
             <div className="flex flex-col items-center gap-3 text-center">
               <IconTile icon={Cloud} tone="info" size="lg" />
               <p className="text-sm text-[var(--fg-muted)]">
-                No WARP accounts yet. Click "Add WARP" to register one against the
-                Cloudflare anonymous-device endpoint.
+                No WARP accounts yet. Click &quot;Add WARP&quot; to register one against
+                the Cloudflare anonymous-device endpoint.
               </p>
             </div>
           </div>
