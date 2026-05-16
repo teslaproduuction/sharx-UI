@@ -116,6 +116,7 @@ func (a *InboundController) initRouter(g *gin.RouterGroup) {
 
 	g.GET("/list", a.getInbounds)
 	g.GET("/get/:id", a.getInbound)
+	g.GET("/previewById/:id", a.previewInboundById)
 	g.GET("/getClientTraffics/:email", a.getClientTraffics)
 	g.GET("/getClientTrafficsById/:id", a.getClientTrafficsById)
 
@@ -277,6 +278,62 @@ func (a *InboundController) previewInboundSingbox(c *gin.Context) {
 		return
 	}
 	jsonObj(c, frag, nil)
+}
+
+// previewInboundById renders the appropriate core preview (xray/singbox/telemt)
+// for an already-saved inbound. Lets the Inbounds page show "View config"
+// without rebuilding the full bind body the edit-modal previews require.
+func (a *InboundController) previewInboundById(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid id", fmt.Errorf("bad id"))
+		return
+	}
+	inbound, err := a.inboundService.GetInbound(id)
+	if err != nil {
+		jsonMsg(c, I18nWeb(c, "pages.inbounds.toasts.obtain"), err)
+		return
+	}
+	user := session.GetLoginUser(c)
+	if inbound.UserId != user.Id {
+		jsonMsg(c, "access denied", fmt.Errorf("access denied"))
+		return
+	}
+	settingService := service.SettingService{}
+	multiMode, _ := settingService.GetMultiNodeMode()
+	inbound.Tag = a.inboundService.GenerateInboundTag(inbound, multiMode)
+
+	resp := gin.H{"kind": "", "protocol": inbound.Protocol}
+	switch {
+	case model.IsXrayInboundProtocol(inbound.Protocol):
+		resp["kind"] = "xray"
+		cfg, perr := a.xrayService.PreviewInboundCoreConfig(inbound)
+		if perr != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), perr)
+			return
+		}
+		resp["config"] = cfg
+	case model.IsSingboxInboundProtocol(inbound.Protocol):
+		resp["kind"] = "singbox"
+		frag, perr := service.PreviewSingboxInbound(inbound)
+		if perr != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), perr)
+			return
+		}
+		resp["config"] = frag
+	case model.NormalizeProtocol(inbound.Protocol) == model.Telemt:
+		resp["kind"] = "telemt"
+		tomlStr, perr := service.PreviewTelemtToml(inbound)
+		if perr != nil {
+			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), perr)
+			return
+		}
+		resp["config"] = tomlStr
+	default:
+		jsonMsg(c, "unsupported protocol", fmt.Errorf("unsupported"))
+		return
+	}
+	jsonObj(c, resp, nil)
 }
 
 // generateSelfSignedTls returns a PEM certificate and key for development / Hysteria testing.
