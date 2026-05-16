@@ -1,4 +1,18 @@
 # SharX Telemt fork: build once with ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
+# Phase 2 — fetch + build hiddify-sing-box for worker nodes (same recipe as panel).
+FROM golang:1.25-bookworm AS singbox-fetch
+ARG SINGBOX_REF=extended
+RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+    git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
+        https://github.com/hiddify/hiddify-sing-box.git /src
+WORKDIR /src
+ENV CGO_ENABLED=0
+RUN go build -trimpath \
+      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp" \
+      -ldflags "-w -s" \
+      -o /out/sing-box ./cmd/sing-box
+
 # Build stage
 FROM golang:1.26-alpine AS builder
 
@@ -61,6 +75,13 @@ COPY --from=builder /build/node-service .
 COPY --from=builder /build/bin/ ./bin/
 # Unmounted copy for /app/bin when a Docker volume is empty (see docker-entrypoint.sh)
 COPY --from=builder /build/bin/ /opt/sharx-node-embedded/bin/
+
+# Phase 2 — sing-box for worker (Phase 2 inbounds + Phase 3 cascade outbounds).
+# Panel pushes the aggregated config via apply-config envelope; manager spawns
+# the binary on first Apply.
+COPY --from=singbox-fetch /out/sing-box /app/bin/sing-box
+COPY --from=singbox-fetch /out/sing-box /opt/sharx-node-embedded/bin/sing-box
+RUN chmod +x /app/bin/sing-box /opt/sharx-node-embedded/bin/sing-box
 
 # Optional rename path uses same TARGETARCH as build (for legacy layouts with plain `xray` only)
 # Verify: exactly one xray-linux-* from build; chmod. Do not hardcode amd64 only.
