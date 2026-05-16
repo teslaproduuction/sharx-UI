@@ -255,6 +255,53 @@ type OutboundChainMember struct {
 // TableName names the outbound_chain_members table for GORM.
 func (OutboundChainMember) TableName() string { return "outbound_chain_members" }
 
+// CloudflareCredential is one CF API token (encrypted) the panel uses to
+// drive the CF API on behalf of an admin. See migrations/0049_cloudflare.sql.
+type CloudflareCredential struct {
+	Id            int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	UserId        int    `json:"userId" gorm:"column:user_id;default:1;index"`
+	Name          string `json:"name" gorm:"column:name;uniqueIndex"`
+	APIToken      string `json:"-" gorm:"column:api_token;type:text"` // AES-GCM encrypted
+	AccountId     string `json:"accountId" gorm:"column:account_id"`
+	ScopeSummary  string `json:"scopeSummary" gorm:"column:scope_summary;type:text"`
+	LastVerified  int64  `json:"lastVerified" gorm:"column:last_verified;default:0"`
+	CreatedAt     int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+}
+
+// TableName names the cloudflare_credentials table for GORM.
+func (CloudflareCredential) TableName() string { return "cloudflare_credentials" }
+
+// CloudflareZone is one DNS zone discovered via the CF API.
+type CloudflareZone struct {
+	Id           int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	CredentialId int    `json:"credentialId" gorm:"column:credential_id;index"`
+	CfZoneId     string `json:"cfZoneId" gorm:"column:cf_zone_id"`
+	Name         string `json:"name" gorm:"column:name"`
+	Status       string `json:"status" gorm:"column:status"`
+	CreatedAt    int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+}
+
+// TableName names the cloudflare_zones table for GORM.
+func (CloudflareZone) TableName() string { return "cloudflare_zones" }
+
+// CloudflareDomain is one panel-managed domain routed through CF in one of
+// 4 modes (direct / cdn / worker / auto_cdn_ip).
+type CloudflareDomain struct {
+	Id              int    `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
+	CredentialId    int    `json:"credentialId" gorm:"column:credential_id;index"`
+	ZoneId          *int   `json:"zoneId,omitempty" gorm:"column:zone_id"`
+	Name            string `json:"name" gorm:"column:name;uniqueIndex"`
+	Mode            string `json:"mode" gorm:"column:mode;default:direct"`
+	Status          string `json:"status" gorm:"column:status;default:pending"`
+	OriginIP        string `json:"originIp" gorm:"column:origin_ip"`
+	WorkerScriptId  string `json:"workerScriptId,omitempty" gorm:"column:worker_script_id"`
+	LastSynced      int64  `json:"lastSynced" gorm:"column:last_synced;default:0"`
+	CreatedAt       int64  `json:"createdAt" gorm:"column:created_at;autoCreateTime"`
+}
+
+// TableName names the cloudflare_domains table for GORM.
+func (CloudflareDomain) TableName() string { return "cloudflare_domains" }
+
 // GenXrayInboundConfig generates an Xray inbound configuration from the Inbound model.
 func (i *Inbound) GenXrayInboundConfig() *xray.InboundConfig {
 	// Empty listen becomes JSON null via RawMessage; Xray QUIC/Hysteria inbounds need a real bind address.
