@@ -1440,6 +1440,22 @@ simplePolicySectionTitle = "Политика и статистика"
 
 [pages.outbounds]
 title = "Аутбаунды"
+subtitle = "Xray outbound записи (участники каскада, WARP exit, импорты). Import — вставить vless/vmess/trojan/ss/socks/http ссылки."
+importButton = "Импорт из URI"
+importTitle = "Импорт outbound URI"
+importHint = "Одна URI на строку. Поддержка: vless:// vmess:// trojan:// ss:// socks:// http(s)://"
+parseButton = "Парсить"
+parsing = "Парсинг…"
+saving = "Сохранение…"
+saveAllButton = "Сохранить {{count}}"
+empty = "Нет outbound'ов."
+colRemark = "Имя"
+colTag = "Tag"
+colProtocol = "Протокол"
+colActions = "Действия"
+deleteConfirm = "Удалить outbound #{{id}}?"
+nothingToSave = "Нечего сохранять"
+imported = "Импортировано {{added}}, ошибок {{failed}}"
 
 [pages.outboundsNodes]
 title = "Аутбаунды нод"

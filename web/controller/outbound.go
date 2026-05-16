@@ -32,6 +32,85 @@ func (a *OutboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/add", a.addOutbound)
 	g.POST("/del/:id", a.delOutbound)
 	g.POST("/update/:id", a.updateOutbound)
+	g.POST("/parseUri", a.parseUri)
+}
+
+// parseUri accepts a multi-line list of share-link URIs and returns a parsed
+// preview row per line. The caller decides whether to persist via /add. Per-
+// line errors are returned alongside successes so a partial import works.
+func (a *OutboundController) parseUri(c *gin.Context) {
+	var body struct {
+		Uris string `json:"uris"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		jsonMsg(c, "bad body", err)
+		return
+	}
+	type ParseResult struct {
+		URI      string          `json:"uri"`
+		OK       bool            `json:"ok"`
+		Error    string          `json:"error,omitempty"`
+		Outbound *model.Outbound `json:"outbound,omitempty"`
+	}
+	out := make([]ParseResult, 0)
+	for _, line := range splitNonEmpty(body.Uris) {
+		ob, err := service.ParseOutboundURI(line)
+		if err != nil {
+			out = append(out, ParseResult{URI: line, OK: false, Error: err.Error()})
+			continue
+		}
+		out = append(out, ParseResult{URI: line, OK: true, Outbound: ob})
+	}
+	jsonObj(c, out, nil)
+}
+
+func splitNonEmpty(s string) []string {
+	lines := make([]string, 0)
+	for _, raw := range splitOnAny(s, "\r\n") {
+		t := trimSpaceStr(raw)
+		if t == "" {
+			continue
+		}
+		lines = append(lines, t)
+	}
+	return lines
+}
+
+// splitOnAny is a tiny local helper to avoid importing strings just for this;
+// uses byte-level split that accepts both \n and \r\n.
+func splitOnAny(s, seps string) []string {
+	out := []string{}
+	cur := []byte{}
+	for _, b := range []byte(s) {
+		if containsByte(seps, b) {
+			out = append(out, string(cur))
+			cur = cur[:0]
+			continue
+		}
+		cur = append(cur, b)
+	}
+	out = append(out, string(cur))
+	return out
+}
+
+func containsByte(s string, b byte) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] == b {
+			return true
+		}
+	}
+	return false
+}
+
+func trimSpaceStr(s string) string {
+	i, j := 0, len(s)
+	for i < j && (s[i] == ' ' || s[i] == '\t') {
+		i++
+	}
+	for j > i && (s[j-1] == ' ' || s[j-1] == '\t') {
+		j--
+	}
+	return s[i:j]
 }
 
 // getOutbounds retrieves the list of outbounds for the logged-in user.
