@@ -1,0 +1,50 @@
+# Phase 8 — integration test CI.
+#
+# Brings up the test/docker-compose.yml stack against a freshly built panel
+# image and runs every scenario in test/scenarios/.
+name: integration-test
+
+on:
+  pull_request:
+    paths:
+      - 'web/**'
+      - 'sub/**'
+      - 'database/**'
+      - 'panel/**'
+      - 'node/**'
+      - 'test/**'
+      - 'Dockerfile'
+      - '.github/workflows/integration-test.yml'
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build panel image
+        run: |
+          docker build -t sharx-ui-sharx:test \
+            --build-arg SINGBOX_REF=extended \
+            --build-arg NEXT_PUBLIC_BASE_PATH=/testprefix/ \
+            .
+
+      - name: Bring up test stack
+        run: |
+          cd test
+          docker compose up -d
+          # Wait for panel container readiness; scenario 01-panel-up.sh polls
+          # the actual /testprefix/ endpoint with its own deadline.
+          sleep 5
+
+      - name: Run scenarios
+        run: |
+          cd test
+          bash run-scenarios.sh
+
+      - name: Dump panel logs on failure
+        if: failure()
+        run: |
+          cd test
+          docker compose logs --tail 200 panel

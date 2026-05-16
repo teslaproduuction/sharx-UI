@@ -1,0 +1,67 @@
+# Phase 8 — local integration test stack.
+#
+# Brings up: panel + caddy + sing-box + xray + decoy-mock + a "client tester"
+# (mihomo client mode is mature and lets us drive end-to-end tunnel checks
+# against every inbound the panel exposes). Sing-box CLI tester covers AnyTLS
+# /Naive/TUIC paths that mihomo client doesn't speak.
+#
+# Use:
+#   cd test
+#   docker compose up -d
+#   ./run-scenarios.sh
+#
+# Each scenario script lives under test/scenarios/<name>.sh and exits non-zero
+# on failure; CI (.github/workflows/integration-test.yml) loops over them.
+version: "3.9"
+
+networks:
+  sharxnet:
+    driver: bridge
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: sharx_test
+      POSTGRES_USER: sharx
+      POSTGRES_PASSWORD: sharx_test_pwd
+    networks: [sharxnet]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "sharx", "-d", "sharx_test"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  panel:
+    image: sharx-ui-sharx:test
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      XUI_DB_TYPE: postgres
+      XUI_DB_HOST: postgres
+      XUI_DB_USER: sharx
+      XUI_DB_PASSWORD: sharx_test_pwd
+      XUI_DB_NAME: sharx_test
+      XUI_WEB_BASE_PATH: /
+      PANEL_SECRET_PREFIX: testprefix
+    networks: [sharxnet]
+    ports:
+      - "127.0.0.1:2053:2053"
+      - "127.0.0.1:2096:2096"
+
+  decoy:
+    # Static "blog" page the Caddy decoy reverse-proxies to during DPI tests.
+    image: nginx:alpine
+    volumes:
+      - ./fixtures/decoy:/usr/share/nginx/html:ro
+    networks: [sharxnet]
+
+  client:
+    # Mihomo in client mode — connects to panel inbounds and runs HTTP probes
+    # against generate_204 to verify each tunnel works end-to-end.
+    image: metacubex/mihomo:latest
+    depends_on: [panel]
+    volumes:
+      - ./fixtures/mihomo:/root/.config/mihomo:ro
+    networks: [sharxnet]
+    entrypoint: ["sleep", "infinity"]
