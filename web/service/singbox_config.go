@@ -80,10 +80,14 @@ func (s *SingboxConfigService) BuildSingboxConfigForNode(nodeID int) (SingboxNod
 			}
 		}
 	}
-	return s.buildFromInbounds(nodeInbounds)
+	return s.buildFromInboundsForNode(nodeInbounds, nodeID)
 }
 
 func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (SingboxNodePayload, error) {
+	return s.buildFromInboundsForNode(inbounds, 0)
+}
+
+func (s *SingboxConfigService) buildFromInboundsForNode(inbounds []*model.Inbound, nodeID int) (SingboxNodePayload, error) {
 	v2rayPort := 62788
 	if v, err := s.settingService.getString("singboxV2RayAPIPort"); err == nil {
 		if n, err := strconv.Atoi(strings.TrimSpace(v)); err == nil && n > 0 {
@@ -154,7 +158,7 @@ func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (Sin
 	// specific outbound + a 127.0.0.1:listen_port mixed bridge + a route rule
 	// pinning bridge → outbound. Collected here so the empty-config check
 	// below considers both inbounds + outbound sidecars.
-	outboundFrags, bridgeFrags, ruleFrags := collectOutboundFragmentsForNode(0)
+	outboundFrags, bridgeFrags, ruleFrags := collectOutboundFragmentsForNode(nodeID)
 
 	if len(collected) == 0 && len(outboundFrags) == 0 {
 		// Empty payload tells the node manager to stop sing-box.
