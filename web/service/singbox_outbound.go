@@ -218,6 +218,25 @@ func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, e
 	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
 		return nil, errors.New("mieru_client needs username + password")
 	}
+	// hiddify-sing-box mieru client schema requires explicit network ([tcp]|[udp])
+	// — without it the validator rejects with "Transport of Server Port is not
+	// defined!". Default to TCP unless operator passes `network` explicitly.
+	network := []string{"tcp"}
+	if v, ok := raw["network"].([]any); ok && len(v) > 0 {
+		network = nil
+		for _, n := range v {
+			if s, ok := n.(string); ok && strings.TrimSpace(s) != "" {
+				network = append(network, strings.ToLower(s))
+			}
+		}
+	} else if v, _ := raw["transport"].(string); strings.TrimSpace(v) != "" {
+		switch strings.ToUpper(strings.TrimSpace(v)) {
+		case "UDP":
+			network = []string{"udp"}
+		case "TCP+UDP", "BOTH":
+			network = []string{"tcp", "udp"}
+		}
+	}
 	out := map[string]any{
 		"type":        "mieru",
 		"tag":         tag,
@@ -225,10 +244,8 @@ func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, e
 		"server_port": port,
 		"username":    username,
 		"password":    password,
+		"network":     network,
 	}
-	// Mieru outbound doesn't expose `transport` (client picks based on server).
-	// `multiplexing` lives in outbound for mieru client; mtu lives on the
-	// underlying transport so we pass through both when set.
 	if v, _ := raw["multiplexing"].(string); strings.TrimSpace(v) != "" {
 		out["multiplexing"] = v
 	}
