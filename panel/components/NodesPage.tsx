@@ -8,6 +8,7 @@ import {
   Circle,
   CircleDot,
   Copy,
+  Eye,
   HelpCircle,
   Network,
   Plus,
@@ -374,6 +375,42 @@ export function NodesPage() {
   const [deleteTarget, setDeleteTarget] = useState<NodeRow | null>(null);
   const [deleteSubmitting, setDeleteSubmitting] = useState(false);
   const [draftDeleteBusy, setDraftDeleteBusy] = useState(false);
+
+  const [nodeConfigPreview, setNodeConfigPreview] = useState<null | {
+    node: { id: number; name: string };
+    xray: unknown;
+    xrayProfileHash: string;
+    telemt: Array<{ inboundId: number; tag: string; toml: string }>;
+    singbox: { config: unknown; configHash: string };
+  }>(null);
+  const [nodeConfigTab, setNodeConfigTab] = useState<"xray" | "singbox" | "telemt">("xray");
+  const [nodeConfigLoading, setNodeConfigLoading] = useState(false);
+
+  const openNodeConfigPreview = async (row: NodeRow) => {
+    setNodeConfigLoading(true);
+    setNodeConfigPreview({
+      node: { id: row.id, name: row.name },
+      xray: null,
+      xrayProfileHash: "",
+      telemt: [],
+      singbox: { config: null, configHash: "" },
+    });
+    setNodeConfigTab("xray");
+    const r = await getJson<{
+      node: { id: number; name: string };
+      xray: unknown;
+      xrayProfileHash: string;
+      telemt: Array<{ inboundId: number; tag: string; toml: string }>;
+      singbox: { config: unknown; configHash: string };
+    }>(panel(`node/preview-config/${row.id}`));
+    setNodeConfigLoading(false);
+    if (r.success && r.obj) {
+      setNodeConfigPreview(r.obj);
+    } else {
+      toast.error(r.msg || t("fail"));
+      setNodeConfigPreview(null);
+    }
+  };
   const [form, setForm] = useState({
     nameFlag: "",
     name: "",
@@ -1467,6 +1504,16 @@ export function NodesPage() {
                         <Button
                           type="button"
                           variant="ghost"
+                          className="!p-1.5 text-[var(--fg-muted)] hover:text-[var(--fg)]"
+                          onClick={() => void openNodeConfigPreview(r)}
+                          title={t("pages.nodes.previewConfig", { defaultValue: "View config envelope" })}
+                          aria-label={t("pages.nodes.previewConfig", { defaultValue: "View config envelope" })}
+                        >
+                          <Eye size={16} />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="ghost"
                           className="!p-1.5 text-[var(--fg-muted)] hover:text-[var(--danger)]"
                           onClick={() => setDeleteTarget(r)}
                           title={t("pages.nodes.deleteNode")}
@@ -2064,6 +2111,90 @@ export function NodesPage() {
             {deleteTarget.name} — {deleteTarget.address}
           </p>
         ) : null}
+      </Modal>
+
+      <Modal
+        open={nodeConfigPreview != null}
+        onClose={() => setNodeConfigPreview(null)}
+        title={
+          nodeConfigPreview
+            ? t("pages.nodes.previewModalTitle", {
+                name: nodeConfigPreview.node.name,
+                id: nodeConfigPreview.node.id,
+                defaultValue: `Config envelope — ${nodeConfigPreview.node.name} #${nodeConfigPreview.node.id}`,
+              })
+            : ""
+        }
+        width={900}
+      >
+        {nodeConfigLoading ? (
+          <div className="grid min-h-48 place-items-center"><Spinner size={28} /></div>
+        ) : nodeConfigPreview ? (
+          <div className="space-y-3">
+            <div className="flex flex-wrap items-center gap-2">
+              {(["xray", "singbox", "telemt"] as const).map((k) => (
+                <button
+                  key={k}
+                  type="button"
+                  onClick={() => setNodeConfigTab(k)}
+                  className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${
+                    nodeConfigTab === k
+                      ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]"
+                      : "border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)]"
+                  }`}
+                >
+                  {k}
+                  {k === "telemt" && nodeConfigPreview.telemt.length > 0 ? (
+                    <span className="ml-1 opacity-70">({nodeConfigPreview.telemt.length})</span>
+                  ) : null}
+                </button>
+              ))}
+              {nodeConfigTab === "xray" && nodeConfigPreview.xrayProfileHash ? (
+                <span className="text-[11px] font-mono text-[var(--fg-muted)]">
+                  profile: {nodeConfigPreview.xrayProfileHash.slice(0, 16)}…
+                </span>
+              ) : null}
+              {nodeConfigTab === "singbox" && nodeConfigPreview.singbox.configHash ? (
+                <span className="text-[11px] font-mono text-[var(--fg-muted)]">
+                  hash: {nodeConfigPreview.singbox.configHash.slice(0, 16)}…
+                </span>
+              ) : null}
+            </div>
+            {nodeConfigTab === "xray" ? (
+              <pre className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
+                {JSON.stringify(nodeConfigPreview.xray, null, 2) || "{}"}
+              </pre>
+            ) : nodeConfigTab === "singbox" ? (
+              <pre className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
+                {nodeConfigPreview.singbox.config
+                  ? JSON.stringify(nodeConfigPreview.singbox.config, null, 2)
+                  : "{}"}
+              </pre>
+            ) : nodeConfigPreview.telemt.length === 0 ? (
+              <p className="text-sm text-[var(--fg-muted)]">
+                {t("pages.cores.emptyTelemt", { defaultValue: "No Telemt inbounds." })}
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {nodeConfigPreview.telemt.map((p) => (
+                  <div key={p.inboundId} className="space-y-1">
+                    <p className="text-[11px] font-mono text-[var(--fg)]">
+                      #{p.inboundId} · {p.tag}
+                    </p>
+                    <pre className="max-h-[35vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
+                      {p.toml}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : null}
+        <div className="mt-3 flex justify-end">
+          <Button variant="secondary" onClick={() => setNodeConfigPreview(null)}>
+            {t("close")}
+          </Button>
+        </div>
       </Modal>
     </PageScaffold>
   );
