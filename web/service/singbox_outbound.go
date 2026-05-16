@@ -237,14 +237,27 @@ func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, e
 			network = []string{"tcp", "udp"}
 		}
 	}
+	// hiddify-sing-box mieru client uses portBindings (server-side validator,
+	// reused on the client) so emit them per network entry. listen_port is
+	// not relevant here (outbound side); we keep server_port for transparency
+	// even though mieru actually reads portBindings.
+	clientBindings := make([]map[string]any, 0, len(network))
+	for _, n := range network {
+		switch n {
+		case "tcp":
+			clientBindings = append(clientBindings, map[string]any{"port": port, "protocol": "TCP"})
+		case "udp":
+			clientBindings = append(clientBindings, map[string]any{"port": port, "protocol": "UDP"})
+		}
+	}
 	out := map[string]any{
-		"type":        "mieru",
-		"tag":         tag,
-		"server":      server,
-		"server_port": port,
-		"username":    username,
-		"password":    password,
-		"network":     network,
+		"type":         "mieru",
+		"tag":          tag,
+		"server":       server,
+		"server_port":  port,
+		"username":     username,
+		"password":     password,
+		"portBindings": clientBindings,
 	}
 	if v, _ := raw["multiplexing"].(string); strings.TrimSpace(v) != "" {
 		out["multiplexing"] = v
