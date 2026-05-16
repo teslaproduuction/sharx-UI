@@ -221,6 +221,12 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
         icon: <FileJson className="size-[18px] shrink-0 opacity-90" />,
         label: t("menu.coresInspector", { defaultValue: "Cores Inspector" }),
       },
+      {
+        key: p("panel/cloudflare"),
+        href: linkP("panel/cloudflare"),
+        icon: <Cloud className="size-[18px] shrink-0 opacity-90" />,
+        label: t("menu.cloudflare", { defaultValue: "Cloudflare" }),
+      },
       { kind: "settings" as const },
       { kind: "xray" as const },
       {
