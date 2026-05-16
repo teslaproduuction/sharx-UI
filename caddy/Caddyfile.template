@@ -44,6 +44,17 @@ ${SITE_ADDRESS} {
         reverse_proxy ${PANEL_BACKEND_HOST}:${SUB_BACKEND_PORT}
     }
 
+    # Fallback for Next.js bundles built without NEXT_PUBLIC_BASE_PATH: the HTML
+    # references /_next/* and /favicon.ico at site root, not under the secret
+    # prefix. Forward those to the backend directly so the panel still renders
+    # if the image was built without the prefix baked in.
+    handle /_next/* {
+        reverse_proxy ${PANEL_BACKEND_HOST}:${PANEL_BACKEND_PORT}
+    }
+    handle /favicon.ico {
+        reverse_proxy ${PANEL_BACKEND_HOST}:${PANEL_BACKEND_PORT}
+    }
+
     # Decoy = transparent reverse-proxy to a real third-party site (Hiddify pattern).
     # Any request that does not match the secret prefix is mirrored to PANEL_DECOY_URL.
     # Headers are stripped so user cookies/auth do not leak to the decoy upstream.

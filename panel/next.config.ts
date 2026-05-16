@@ -7,10 +7,8 @@ const panelDir = path.dirname(fileURLToPath(import.meta.url));
 
 const raw = (process.env.NEXT_PUBLIC_BASE_PATH || "").trim();
 /** Must match `webBasePath` from SharX (Go). Empty = site root. No trailing slash (Next rules). */
-const nextBasePath =
-  raw && raw !== "/"
-    ? (raw.startsWith("/") ? raw : `/${raw}`).replace(/\/$/, "")
-    : undefined;
+const stripped = raw.replace(/^\/+/, "").replace(/\/+$/, "");
+const nextBasePath = stripped ? `/${stripped}` : undefined;
 
 const nextConfig: NextConfig = {
   output: "export",

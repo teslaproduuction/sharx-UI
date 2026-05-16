@@ -103,6 +103,11 @@ services:
       - caddy_data:/data
       - caddy_config:/config
       - caddy_logs:/var/log/caddy
+      # Mount the Caddyfile template so edits don't require rebuilding the
+      # caddy image (which fails on hosts where xcaddy can't reach the Go
+      # proxy). render-caddyfile.sh in the entrypoint envsubst's this into
+      # /etc/caddy/Caddyfile at container start.
+      - ./caddy/Caddyfile.template:/etc/caddy/Caddyfile.template:ro
     environment:
       PANEL_DOMAIN: ${PANEL_DOMAIN:-}
       PANEL_SECRET_PREFIX: ${PANEL_SECRET_PREFIX:-}

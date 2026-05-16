@@ -379,6 +379,10 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 	if err := MergeSessionIPBlockRoutingIntoConfig(xrayConfig, nil); err != nil {
 		logger.Warningf("session IP block routing merge (local config): %v", err)
 	}
+	// Phase 3 — pull DB-managed outbounds (sidecar-auto-created socks-out,
+	// WARP wireguard, hand-added) into the running config. Without this,
+	// routing rules referencing them never match.
+	_ = MergeOutboundsIntoXrayConfig(xrayConfig)
 	// Phase 4 — splice OutboundChain rows into routing.balancers + observatory.
 	// Errors are swallowed inside MergeChainsIntoXrayConfig (one bad row never
 	// breaks the whole config push).
