@@ -81,6 +81,12 @@ func NewInboundController(g *gin.RouterGroup) *InboundController {
 // without waiting on the cron need-restart ticker. Native Xray protocols just flip the flag
 // and let the existing periodic check pick up the change.
 func (a *InboundController) syncWorkerAfterInboundMutation(needRestart bool, inboundProtocol model.Protocol) {
+	// Always audit-record sing-box CRUDs into the batch-reload queue, even when
+	// needRestart=false (settings unchanged at the Xray-config level still mean
+	// admin touched the row, which is what the queue surfaces to the UI banner).
+	if model.IsSingboxInboundProtocol(inboundProtocol) {
+		_ = (&service.SingboxPendingService{}).Enqueue(0, "inbound:"+string(inboundProtocol), "{}")
+	}
 	if !needRestart {
 		return
 	}
@@ -89,11 +95,6 @@ func (a *InboundController) syncWorkerAfterInboundMutation(needRestart bool, inb
 		a.xrayService.RestartXrayAsync(false)
 		return
 	case model.IsSingboxInboundProtocol(inboundProtocol):
-		// Audit-record this CRUD into the batch-reload queue (Phase 2 follow-up:
-		// when a singbox_apply_immediate=false setting is added, the apply step
-		// will drain this queue on a timer instead of SIGHUPing immediately).
-		// For now we still apply immediately so behavior matches pre-queue.
-		_ = (&service.SingboxPendingService{}).Enqueue(0, "inbound:"+string(inboundProtocol), "{}")
 		a.xrayService.RestartXrayAsync(false)
 		return
 	}
