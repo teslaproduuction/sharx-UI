@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Copy, RefreshCw, ShieldCheck, Globe, Clock, AlertTriangle } from "lucide-react";
+import { useTranslation } from "react-i18next";
 
 import { getJson, postJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
@@ -44,6 +45,7 @@ function formatCountdown(totalSeconds: number): string {
 }
 
 export function PanelSecurityTab() {
+  const { t } = useTranslation();
   const toast = useToast();
   const [status, setStatus] = useState<PanelSecurityStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -70,11 +72,11 @@ export function PanelSecurityTab() {
       setStatus(res.obj);
       setDecoyDraft(res.obj.decoyURL || "");
     } catch (err) {
-      toast.error(`Failed to load panel security status: ${(err as Error).message}`);
+      toast.error(t("pages.settings.panelMasking.statusLoadFailed", { err: (err as Error).message, defaultValue: `Failed to load panel security status: ${(err as Error).message}` }));
     } finally {
       setLoading(false);
     }
-  }, [toast]);
+  }, [toast, t]);
 
   useEffect(() => {
     void reload();
@@ -101,21 +103,23 @@ export function PanelSecurityTab() {
       );
       if (!res?.success) throw new Error("rotate failed");
       const newPrefix = res.obj?.secretPrefix ?? "";
-      toast.success(
-        `New secret prefix generated. Restart Caddy ('${RELOAD_HINT_CMD}') and re-login via /${newPrefix}/.`,
-      );
+      toast.success(t("pages.settings.panelMasking.rotateSuccess", {
+        prefix: newPrefix,
+        cmd: RELOAD_HINT_CMD,
+        defaultValue: `New secret prefix generated. Restart Caddy ('${RELOAD_HINT_CMD}') and re-login via /${newPrefix}/.`,
+      }));
       await reload();
     } catch (err) {
-      toast.error(`Rotate prefix failed: ${(err as Error).message}`);
+      toast.error(t("pages.settings.panelMasking.rotateFailed", { err: (err as Error).message, defaultValue: `Rotate prefix failed: ${(err as Error).message}` }));
     } finally {
       setRotating(false);
       setRotateConfirmOpen(false);
     }
-  }, [reload, toast]);
+  }, [reload, toast, t]);
 
   const onSaveDecoy = useCallback(async () => {
     if (!decoyDraft.startsWith("https://")) {
-      toast.error("Decoy URL must start with https://");
+      toast.error(t("pages.settings.panelMasking.decoyHttpsErr", { defaultValue: "Decoy URL must start with https://" }));
       return;
     }
     setSavingDecoy(true);
@@ -125,14 +129,17 @@ export function PanelSecurityTab() {
         { url: decoyDraft },
       );
       if (!res?.success) throw new Error("save failed");
-      toast.success(`Decoy URL saved. Restart Caddy ('${RELOAD_HINT_CMD}') to apply.`);
+      toast.success(t("pages.settings.panelMasking.decoySaveSuccess", {
+        cmd: RELOAD_HINT_CMD,
+        defaultValue: `Decoy URL saved. Restart Caddy ('${RELOAD_HINT_CMD}') to apply.`,
+      }));
       await reload();
     } catch (err) {
-      toast.error(`Save decoy URL failed: ${(err as Error).message}`);
+      toast.error(t("pages.settings.panelMasking.decoySaveFailed", { err: (err as Error).message, defaultValue: `Save decoy URL failed: ${(err as Error).message}` }));
     } finally {
       setSavingDecoy(false);
     }
-  }, [decoyDraft, reload, toast]);
+  }, [decoyDraft, reload, toast, t]);
 
   const onActivateNow = useCallback(async () => {
     setActivatingNow(true);
@@ -142,20 +149,20 @@ export function PanelSecurityTab() {
         {},
       );
       if (!res?.success) throw new Error("activate failed");
-      toast.success("Mascaraed mode activated — root '/' now also routes to the decoy.");
+      toast.success(t("pages.settings.panelMasking.activateSuccess", { defaultValue: "Mascaraed mode activated — root '/' now also routes to the decoy." }));
       await reload();
     } catch (err) {
-      toast.error(`Activate mascaraed failed: ${(err as Error).message}`);
+      toast.error(t("pages.settings.panelMasking.activateFailed", { err: (err as Error).message, defaultValue: `Activate mascaraed failed: ${(err as Error).message}` }));
     } finally {
       setActivatingNow(false);
     }
-  }, [reload, toast]);
+  }, [reload, toast, t]);
 
   const onCopyPrefix = useCallback(async () => {
     if (!status?.secretPrefix) return;
     await copyTextToClipboard(status.secretPrefix);
-    toast.success("Secret prefix copied to clipboard.");
-  }, [status, toast]);
+    toast.success(t("pages.settings.panelMasking.prefixCopied", { defaultValue: "Secret prefix copied to clipboard." }));
+  }, [status, toast, t]);
 
   if (loading && !status) {
     return (
@@ -174,28 +181,27 @@ export function PanelSecurityTab() {
         title={
           <span className="flex items-center gap-2">
             <ShieldCheck className="size-4" />
-            Caddy front-door masking is active
+            {t("pages.settings.panelMasking.bannerTitle", { defaultValue: "Caddy front-door masking is active" })}
           </span>
         }
-        description={
-          <>
-            Panel reachable only at <code>/&lt;secret-prefix&gt;/</code>. Every other path
-            transparently mirrors the configured decoy URL (Hiddify pattern). Active probes
-            for <code>/admin</code>, <code>/x-ui/</code>, <code>/wp-admin</code> etc. see
-            the upstream site, not SharX.
-          </>
-        }
+        description={t("pages.settings.panelMasking.bannerDesc", {
+          defaultValue: "Panel reachable only at /<secret-prefix>/. Every other path transparently mirrors the configured decoy URL.",
+        })}
       />
 
       {/* Secret prefix */}
       <Surface>
         <div className="flex items-center gap-2 mb-2">
           <ShieldCheck className="size-4" />
-          <h3 className="text-sm font-semibold">Panel secret URL prefix</h3>
+          <h3 className="text-sm font-semibold">
+            {t("pages.settings.panelMasking.prefixSection", { defaultValue: "Panel secret URL prefix" })}
+          </h3>
         </div>
         <p className="text-xs opacity-75 mb-3">
-          Random 16-byte path that hides the panel UI. Full URL:{" "}
-          <code>https://&lt;your-domain&gt;/{status.secretPrefix}/</code>
+          {t("pages.settings.panelMasking.prefixDesc", {
+            prefix: status.secretPrefix,
+            defaultValue: `Random 16-byte path that hides the panel UI. Full URL: https://<your-domain>/${status.secretPrefix}/`,
+          })}
         </p>
         <div className="flex flex-wrap gap-2">
           <Input
@@ -205,7 +211,7 @@ export function PanelSecurityTab() {
           />
           <Button variant="secondary" onClick={onCopyPrefix} disabled={!status.secretPrefix}>
             <Copy className="size-3.5 mr-1.5" />
-            Copy
+            {t("pages.settings.panelMasking.copyButton", { defaultValue: "Copy" })}
           </Button>
           <Button
             variant="danger"
@@ -214,13 +220,15 @@ export function PanelSecurityTab() {
             loading={rotating}
           >
             <RefreshCw className="size-3.5 mr-1.5" />
-            Rotate
+            {t("pages.settings.panelMasking.rotateButton", { defaultValue: "Rotate" })}
           </Button>
         </div>
         <p className="mt-3 text-xs flex items-start gap-1.5 text-amber-300">
           <AlertTriangle className="size-3.5 mt-0.5 shrink-0" />
-          Rotating invalidates ALL admin sessions. After rotate, restart Caddy
-          (<code>{RELOAD_HINT_CMD}</code>) and re-login at the new URL.
+          {t("pages.settings.panelMasking.rotateWarn", {
+            cmd: RELOAD_HINT_CMD,
+            defaultValue: `Rotating invalidates ALL admin sessions. After rotate, restart Caddy (${RELOAD_HINT_CMD}) and re-login at the new URL.`,
+          })}
         </p>
       </Surface>
 
@@ -228,19 +236,21 @@ export function PanelSecurityTab() {
       <Surface>
         <div className="flex items-center gap-2 mb-2">
           <Globe className="size-4" />
-          <h3 className="text-sm font-semibold">Decoy URL</h3>
+          <h3 className="text-sm font-semibold">
+            {t("pages.settings.panelMasking.decoySection", { defaultValue: "Decoy URL" })}
+          </h3>
         </div>
         <p className="text-xs opacity-75 mb-3">
-          Caddy transparently reverse-proxies all unrecognized paths to this URL. Pick a
-          plausible third-party site that returns sensible content for arbitrary paths.
-          Examples: <code>https://news.ycombinator.com</code>, <code>https://en.wikipedia.org</code>.
+          {t("pages.settings.panelMasking.decoyDesc", {
+            defaultValue: "Caddy transparently reverse-proxies all unrecognized paths to this URL. Pick a plausible third-party site.",
+          })}
         </p>
         <div className="flex flex-wrap gap-2">
           <Input
             type="url"
             value={decoyDraft}
             onChange={(e) => setDecoyDraft(e.target.value)}
-            placeholder="https://news.ycombinator.com"
+            placeholder={t("pages.settings.panelMasking.decoyPlaceholder", { defaultValue: "https://news.ycombinator.com" })}
             className="font-mono text-sm flex-1 min-w-[200px]"
           />
           <Button
@@ -249,11 +259,13 @@ export function PanelSecurityTab() {
             disabled={savingDecoy || !decoyDraft || decoyDraft === status.decoyURL}
             loading={savingDecoy}
           >
-            Save
+            {t("pages.settings.panelMasking.decoySave", { defaultValue: "Save" })}
           </Button>
         </div>
         {decoyDraft && !decoyDraft.startsWith("https://") && (
-          <p className="mt-2 text-xs text-red-300">Must start with https://</p>
+          <p className="mt-2 text-xs text-red-300">
+            {t("pages.settings.panelMasking.decoyHttpsErr", { defaultValue: "Must start with https://" })}
+          </p>
         )}
       </Surface>
 
@@ -261,13 +273,15 @@ export function PanelSecurityTab() {
       <Surface>
         <div className="flex items-center gap-2 mb-2">
           <Clock className="size-4" />
-          <h3 className="text-sm font-semibold">Mascaraed mode</h3>
+          <h3 className="text-sm font-semibold">
+            {t("pages.settings.panelMasking.mascaraedSection", { defaultValue: "Mascaraed mode" })}
+          </h3>
         </div>
         <p className="text-xs opacity-75 mb-3">
-          After install, the bare root path <code>/</code> serves the SharX welcome page
-          for <strong>{status.mascaraedAfterHours}h</strong> so admins can complete setup.
-          Once the timer expires, root <code>/</code> also routes to the decoy and the
-          panel becomes invisible without the secret prefix.
+          {t("pages.settings.panelMasking.mascaraedDesc", {
+            hours: status.mascaraedAfterHours,
+            defaultValue: `After install, the bare root path / serves the SharX welcome page for ${status.mascaraedAfterHours}h so admins can complete setup.`,
+          })}
         </p>
 
         {mascaraedNowActive ? (
@@ -276,7 +290,7 @@ export function PanelSecurityTab() {
             title={
               <span className="flex items-center gap-2 text-emerald-300">
                 <ShieldCheck className="size-4" />
-                Mascaraed mode is ACTIVE — root path mirrors the decoy.
+                {t("pages.settings.panelMasking.mascaraedActiveBanner", { defaultValue: "Mascaraed mode is ACTIVE — root path mirrors the decoy." })}
               </span>
             }
           />
@@ -287,9 +301,10 @@ export function PanelSecurityTab() {
               title={
                 <span className="flex items-center gap-2">
                   <Clock className="size-4" />
-                  Active in <span className="font-mono font-semibold">
-                    {formatCountdown(remainingSeconds)}
-                  </span>
+                  {t("pages.settings.panelMasking.mascaraedCountdown", {
+                    time: formatCountdown(remainingSeconds),
+                    defaultValue: `Active in ${formatCountdown(remainingSeconds)}`,
+                  })}
                 </span>
               }
             />
@@ -300,7 +315,7 @@ export function PanelSecurityTab() {
                 disabled={activatingNow}
                 loading={activatingNow}
               >
-                Activate mascaraed mode now
+                {t("pages.settings.panelMasking.activateNow", { defaultValue: "Activate mascaraed mode now" })}
               </Button>
             </div>
           </>
@@ -313,24 +328,24 @@ export function PanelSecurityTab() {
         title={
           <span className="flex items-center gap-2">
             <AlertTriangle className="size-4" />
-            Apply changes
+            {t("pages.settings.panelMasking.applyTitle", { defaultValue: "Apply changes" })}
           </span>
         }
-        description={
-          <>
-            Phase 1 is a baseline — rotate / decoy URL changes require a Caddy reload to
-            take effect. Run on the host: <code>{RELOAD_HINT_CMD}</code>. Phase 5 will
-            automate this via the Caddy admin API at <code>{status.caddyAdminURL}</code>.
-          </>
-        }
+        description={t("pages.settings.panelMasking.applyDesc", {
+          cmd: RELOAD_HINT_CMD,
+          admin: status.caddyAdminURL,
+          defaultValue: `Phase 1 is a baseline — rotate / decoy URL changes require a Caddy reload to take effect. Run on the host: ${RELOAD_HINT_CMD}. Phase 5 will automate this via the Caddy admin API at ${status.caddyAdminURL}.`,
+        })}
       />
 
       <ConfirmDialog
         open={rotateConfirmOpen}
-        title="Rotate panel secret prefix?"
-        description="All admin sessions will be invalidated. The current panel URL will stop working. You'll need to restart Caddy and re-login via the new URL."
-        confirmLabel="Rotate"
-        cancelLabel="Cancel"
+        title={t("pages.settings.panelMasking.rotateConfirmTitle", { defaultValue: "Rotate panel secret prefix?" })}
+        description={t("pages.settings.panelMasking.rotateConfirmDesc", {
+          defaultValue: "All admin sessions will be invalidated. The current panel URL will stop working. You'll need to restart Caddy and re-login via the new URL.",
+        })}
+        confirmLabel={t("pages.settings.panelMasking.rotateButton", { defaultValue: "Rotate" })}
+        cancelLabel={t("cancel")}
         danger
         loading={rotating}
         onCancel={() => setRotateConfirmOpen(false)}
