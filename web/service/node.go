@@ -2396,6 +2396,21 @@ func NewApplyWorkerConfigMeta(workerJSON []byte, coreProfileHashHex string) *App
 	}
 }
 
+// buildSingboxPayloadForNode renders the per-node sing-box config that ApplyConfigToNode
+// embeds into the apply-config envelope so workers can spawn their singleton sing-box
+// sidecar without a separate push. Errors are swallowed (returned as empty payload)
+// so a sing-box build failure cannot block the Xray apply-config call.
+func (s *NodeService) buildSingboxPayloadForNode(node *model.Node) (SingboxNodePayload, error) {
+	if node == nil || node.Id <= 0 {
+		return SingboxNodePayload{}, nil
+	}
+	cfgSvc := SingboxConfigService{
+		inboundService: InboundService{},
+		settingService: SettingService{},
+	}
+	return cfgSvc.BuildSingboxConfigForNode(node.Id)
+}
+
 // ApplyConfigToNode sends XRAY JSON and optional Telemt TOML payloads to a node.
 // When telemt is non-nil, the array is always sent (empty slice stops all Telemt sidecars on the worker).
 // meta may be nil; when set, coreProfileHash and expectedConfigSha256 are included in the apply-config body.
@@ -2417,6 +2432,15 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 	}
 	if telemt != nil {
 		requestBody["telemt"] = *telemt
+	}
+	// Phase 2 — sing-box singleton sidecar config for this worker. Built from
+	// every enabled sing-box-managed inbound (mieru/anytls/naive/tuic) currently
+	// assigned to this node, plus every enabled OutboundSidecar (Phase 3).
+	if payload, sbxErr := s.buildSingboxPayloadForNode(node); sbxErr == nil && !payload.IsEmpty() {
+		requestBody["singbox"] = map[string]any{
+			"cfg":        payload.Cfg,
+			"configHash": payload.ConfigHash,
+		}
 	}
 	if meta != nil {
 		if meta.CoreProfileHash != "" {

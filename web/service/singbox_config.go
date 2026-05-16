@@ -50,12 +50,37 @@ func (s *SingboxConfigService) BuildSingboxConfigStandalone() (SingboxNodePayloa
 	return s.buildFromInbounds(inbounds)
 }
 
-// BuildSingboxConfigForNode is the multi-node variant — same as standalone for now;
-// future revision will filter by InboundNodeMapping when sing-box inbounds become
-// node-assignable in the UI.
+// BuildSingboxConfigForNode is the multi-node variant. Filters enabled sing-box-
+// managed inbounds by their nodeIds[] assignment so each worker only receives
+// the inbounds it should host. nodeID = 0 → fall back to standalone.
 func (s *SingboxConfigService) BuildSingboxConfigForNode(nodeID int) (SingboxNodePayload, error) {
-	// TODO Phase 4: filter inbounds by node assignment via InboundNodeMapping.
-	return s.BuildSingboxConfigStandalone()
+	if nodeID <= 0 {
+		return s.BuildSingboxConfigStandalone()
+	}
+	all, err := s.inboundService.GetAllInbounds()
+	if err != nil {
+		return SingboxNodePayload{}, err
+	}
+	var nodeInbounds []*model.Inbound
+	for _, inb := range all {
+		if inb == nil || !inb.Enable {
+			continue
+		}
+		if !model.IsSingboxInboundProtocol(inb.Protocol) {
+			continue
+		}
+		bindings, berr := (&NodeService{}).GetInboundNodeBindingViews(inb.Id)
+		if berr != nil {
+			continue
+		}
+		for _, b := range bindings {
+			if b.NodeId == nodeID {
+				nodeInbounds = append(nodeInbounds, inb)
+				break
+			}
+		}
+	}
+	return s.buildFromInbounds(nodeInbounds)
 }
 
 func (s *SingboxConfigService) buildFromInbounds(inbounds []*model.Inbound) (SingboxNodePayload, error) {
