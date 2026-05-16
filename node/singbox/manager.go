@@ -268,13 +268,54 @@ func (m *Manager) Apply(p Payload) error {
 		return nil
 	}
 
-	// Hot reload — SIGHUP on a running sing-box rereads config.json.
-	// Connection breakage is documented in master-plan v3.2 ("Принятые компромиссы B").
-	if err := syscall.Kill(m.pid, syscall.SIGHUP); err != nil {
-		return fmt.Errorf("singbox: SIGHUP pid=%d: %w", m.pid, err)
+	// Hot reload was SIGHUP, but hiddify-sing-box's internal Box.Close path NPEs
+	// in protocol/naive/inbound.go Close → STDServerConfig Close → fswatch
+	// (watcher.go:97) when reloading certain config shapes that mix a naive
+	// INBOUND with a TLS-bearing cascade outbound. Stop + restart sidesteps
+	// the bug at the cost of an extra ~1s of downtime per Apply (acceptable —
+	// SIGHUP already breaks connections anyway, the only loss is the startup
+	// reuse of warm TLS sessions).
+	pid := m.pid
+	logger.Infof("singbox: hot-restart (stop+spawn) pid=%d → new cfgHash=%s***", pid, hhex[:8])
+	m.closeStatsLocked()
+	if err := m.cmd.Process.Signal(syscall.SIGTERM); err == nil {
+		done := make(chan struct{})
+		go func() { _ = m.cmd.Wait(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			_ = m.cmd.Process.Kill()
+			<-done
+		}
 	}
+	m.cmd = nil
+	m.pid = 0
+	cmd := exec.Command(bin, "run", "-c", cfgPath)
+	cmd.Dir = root
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("singbox: restart spawn: %w", err)
+	}
+	m.cmd = cmd
+	m.pid = cmd.Process.Pid
 	m.cfgHash = hhex
-	logger.Infof("singbox: SIGHUP reload pid=%d cfgHash=%s***", m.pid, hhex[:8])
+	logger.Infof("singbox: restarted pid=%d cfgHash=%s***", m.pid, hhex[:8])
+	go func(c *exec.Cmd, npid int) {
+		err := c.Wait()
+		m.mu.Lock()
+		stillOurs := m.pid == npid
+		m.mu.Unlock()
+		if err != nil && stillOurs {
+			logger.Warningf("singbox: process exited unexpectedly pid=%d err=%v", npid, err)
+			m.mu.Lock()
+			m.cmd = nil
+			m.pid = 0
+			m.cfgHash = ""
+			m.mu.Unlock()
+		}
+	}(cmd, m.pid)
 	m.commitReplay(p)
 	return nil
 }
