@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, Trash2 } from "lucide-react";
+import { ArrowLeftRight, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -83,6 +83,23 @@ export default function Page() {
     else toast.error(r.msg || t("fail"));
   };
 
+  const [tests, setTests] = useState<Record<number, { ok: boolean; latencyMs: number; error?: string } | "busy">>({});
+
+  const testOne = async (id: number) => {
+    setTests((m) => ({ ...m, [id]: "busy" }));
+    type R = { ok: boolean; latencyMs: number; error?: string; source: string };
+    const r = await postJson<R>(panel(`outbound/test/${id}`), {}, true);
+    if (r.success && r.obj) {
+      setTests((m) => ({ ...m, [id]: { ok: r.obj!.ok, latencyMs: r.obj!.latencyMs, error: r.obj!.error } }));
+    } else {
+      setTests((m) => ({ ...m, [id]: { ok: false, latencyMs: 0, error: r.msg || "test failed" } }));
+    }
+  };
+
+  const testAll = async () => {
+    for (const r of rows) await testOne(r.id);
+  };
+
   return (
     <PageScaffold compact>
       <PageHeader
@@ -97,6 +114,10 @@ export default function Page() {
         <div className="flex gap-2">
           <Button onClick={() => { setImportOpen(true); setImportText(""); setParsed([]); }}>
             {t("pages.outbounds.importButton", { defaultValue: "Import from URI" })}
+          </Button>
+          <Button variant="secondary" onClick={() => void testAll()} disabled={rows.length === 0}>
+            <Zap className="mr-1 size-4 inline" />
+            {t("pages.outbounds.testAllButton", { defaultValue: "Test all" })}
           </Button>
         </div>
       </Surface>
@@ -117,6 +138,7 @@ export default function Page() {
                 <th className="p-3">{t("pages.outbounds.colRemark", { defaultValue: "Remark" })}</th>
                 <th className="p-3">{t("pages.outbounds.colTag", { defaultValue: "Tag" })}</th>
                 <th className="p-3">{t("pages.outbounds.colProtocol", { defaultValue: "Protocol" })}</th>
+                <th className="p-3">{t("pages.outbounds.colHealth", { defaultValue: "Health" })}</th>
                 <th className="p-3">{t("pages.outbounds.colActions", { defaultValue: "Actions" })}</th>
               </tr>
             </thead>
@@ -126,10 +148,31 @@ export default function Page() {
                   <td className="p-3 text-xs">{r.remark || "—"}</td>
                   <td className="p-3 font-mono text-xs">{r.tag}</td>
                   <td className="p-3 text-xs">{r.protocol}</td>
+                  <td className="p-3 text-xs">
+                    {(() => {
+                      const s = tests[r.id];
+                      if (s === "busy") return <span className="text-[var(--fg-subtle)]">…</span>;
+                      if (!s) return <span className="text-[var(--fg-subtle)]">—</span>;
+                      return s.ok ? (
+                        <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400">
+                          {s.latencyMs}ms
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-400" title={s.error || ""}>
+                          fail
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="p-3">
-                    <Button variant="danger" className="!p-2" onClick={() => del(r.id)}>
-                      <Trash2 className="size-4" />
-                    </Button>
+                    <div className="flex gap-1">
+                      <Button variant="secondary" className="!p-2" onClick={() => void testOne(r.id)} title={t("pages.outbounds.testButton", { defaultValue: "Test" })}>
+                        <Zap className="size-4" />
+                      </Button>
+                      <Button variant="danger" className="!p-2" onClick={() => del(r.id)}>
+                        <Trash2 className="size-4" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}
