@@ -140,13 +140,17 @@ type HistoryOfSeeders struct {
 }
 
 // SingboxPendingChange is one queued CRUD on a sing-box-managed inbound or
-// its assigned users. See web/service/singbox_pending.go and
-// migrations/0045_singbox_pending_changes.sql.
+// its assigned users. See web/service/singbox_pending.go.
+//
+// The DB table is created by migration 0044_singbox_inbound_support.sql
+// (column `payload`, NOT `payload_json`; node_id is FK to nodes(id) with
+// NULL = standalone). Migration 0045 is a no-op kept for version-numbering
+// continuity.
 type SingboxPendingChange struct {
 	Id          int64  `json:"id" gorm:"column:id;primaryKey;autoIncrement"`
-	NodeId      int    `json:"nodeId" gorm:"column:node_id;index"`
+	NodeId      *int   `json:"nodeId,omitempty" gorm:"column:node_id;index"`
 	ChangeType  string `json:"changeType" gorm:"column:change_type"`
-	PayloadJSON string `json:"payload" gorm:"column:payload_json;type:text"`
+	PayloadJSON string `json:"payload" gorm:"column:payload;type:text"`
 	CreatedAt   int64  `json:"createdAt" gorm:"column:created_at"`
 	AppliedAt   *int64 `json:"appliedAt,omitempty" gorm:"column:applied_at"`
 }
