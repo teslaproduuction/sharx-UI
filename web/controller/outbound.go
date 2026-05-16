@@ -33,6 +33,29 @@ func (a *OutboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/del/:id", a.delOutbound)
 	g.POST("/update/:id", a.updateOutbound)
 	g.POST("/parseUri", a.parseUri)
+	g.POST("/test/:id", a.testOutbound)
+}
+
+// testOutbound runs a TCP reachability probe against the outbound's target
+// host:port from the panel host. Cheap "is it open" check — does not exercise
+// the protocol handshake. For full-stack health, rely on chain observatory.
+func (a *OutboundController) testOutbound(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid id", err)
+		return
+	}
+	ob, err := a.outboundService.GetOutbound(id)
+	if err != nil {
+		jsonMsg(c, "Failed to load outbound", err)
+		return
+	}
+	res, err := service.TestOutbound(ob, 4000)
+	if err != nil {
+		jsonMsg(c, "test failed", err)
+		return
+	}
+	jsonObj(c, res, nil)
 }
 
 // parseUri accepts a multi-line list of share-link URIs and returns a parsed

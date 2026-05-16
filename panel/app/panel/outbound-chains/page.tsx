@@ -1,6 +1,6 @@
 "use client";
 
-import { GitBranch, Trash2 } from "lucide-react";
+import { GitBranch, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -37,14 +37,43 @@ export default function Page() {
   const [members, setMembers] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
 
+  const [outboundIdByTag, setOutboundIdByTag] = useState<Record<string, number>>({});
+  const [memberTests, setMemberTests] = useState<Record<string, { ok: boolean; latencyMs: number; error?: string } | "busy">>({});
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await getJson<Chain[]>(panel("outbound-chain/list"));
-    const ob = await getJson<Array<{ tag: string }>>(panel("outbound/list"));
+    const ob = await getJson<Array<{ id: number; tag: string }>>(panel("outbound/list"));
     setLoading(false);
     if (r.success && Array.isArray(r.obj)) setRows(r.obj);
-    if (ob.success && Array.isArray(ob.obj)) setOutboundTags(ob.obj.map((x) => x.tag).filter(Boolean));
+    if (ob.success && Array.isArray(ob.obj)) {
+      setOutboundTags(ob.obj.map((x) => x.tag).filter(Boolean));
+      const map: Record<string, number> = {};
+      for (const x of ob.obj) {
+        if (x.tag) map[x.tag] = x.id;
+      }
+      setOutboundIdByTag(map);
+    }
   }, []);
+
+  const testMembers = async () => {
+    for (const tag of members) {
+      const id = outboundIdByTag[tag];
+      if (!id) {
+        setMemberTests((m) => ({ ...m, [tag]: { ok: false, latencyMs: 0, error: "no outbound id" } }));
+        continue;
+      }
+      setMemberTests((m) => ({ ...m, [tag]: "busy" }));
+      type R = { ok: boolean; latencyMs: number; error?: string };
+      const r = await postJson<R>(panel(`outbound/test/${id}`), {}, true);
+      setMemberTests((m) => ({
+        ...m,
+        [tag]: r.success && r.obj
+          ? { ok: r.obj.ok, latencyMs: r.obj.latencyMs, error: r.obj.error }
+          : { ok: false, latencyMs: 0, error: r.msg || "fail" },
+      }));
+    }
+  };
 
   useEffect(() => { void load(); }, [load]);
 
@@ -193,13 +222,20 @@ export default function Page() {
             </div>
           </div>
           <div className="rounded-lg border border-[var(--border)] p-3">
-            <label className="mb-2 block text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldMembers", { defaultValue: "Members (Xray outbound tags)" })}</label>
+            <div className="mb-2 flex items-center justify-between">
+              <label className="text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldMembers", { defaultValue: "Members (Xray outbound tags)" })}</label>
+              <Button variant="secondary" onClick={() => void testMembers()} disabled={members.length === 0}>
+                <Zap className="mr-1 size-3 inline" />
+                {t("pages.outboundChains.testMembersButton", { defaultValue: "Test members" })}
+              </Button>
+            </div>
             {outboundTags.length === 0 ? (
               <p className="text-xs text-[var(--fg-subtle)]">{t("pages.outboundChains.membersEmpty", { defaultValue: "No outbound tags found. Create an OutboundSidecar or WARP account first." })}</p>
             ) : (
               <div className="flex flex-wrap gap-2">
                 {outboundTags.map((tag) => {
                   const on = members.includes(tag);
+                  const tr = memberTests[tag];
                   return (
                     <button
                       key={tag}
@@ -208,6 +244,11 @@ export default function Page() {
                       onClick={() => setMembers((cur) => on ? cur.filter((x) => x !== tag) : [...cur, tag])}
                     >
                       {tag}
+                      {on && tr ? (
+                        <span className="ml-1 opacity-80">
+                          {tr === "busy" ? "…" : tr.ok ? `${tr.latencyMs}ms` : "✗"}
+                        </span>
+                      ) : null}
                     </button>
                   );
                 })}
