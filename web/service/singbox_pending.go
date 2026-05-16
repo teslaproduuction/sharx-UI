@@ -21,17 +21,19 @@ import (
 // SingboxPendingService manages the singbox_pending_changes queue.
 type SingboxPendingService struct{}
 
-// Enqueue records one pending change. node_id may be 0 to signal a standalone
-// (panel-host sing-box) change — Drain treats 0 as "the local sidecar".
+// Enqueue records one pending change. nodeID = 0 → standalone (panel-host
+// sing-box) → stored as NULL in DB so the FK to nodes(id) is satisfied.
 func (s *SingboxPendingService) Enqueue(nodeID int, changeType string, payloadJSON string) error {
 	if changeType == "" {
 		return nil
 	}
 	row := model.SingboxPendingChange{
-		NodeId:      nodeID,
 		ChangeType:  changeType,
 		PayloadJSON: payloadJSON,
 		CreatedAt:   time.Now().UnixMilli(),
+	}
+	if nodeID > 0 {
+		row.NodeId = &nodeID
 	}
 	return database.GetDB().Create(&row).Error
 }
