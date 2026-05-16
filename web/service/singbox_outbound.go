@@ -226,9 +226,9 @@ func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, e
 		"username":    username,
 		"password":    password,
 	}
-	if v, _ := raw["transport"].(string); strings.TrimSpace(v) != "" {
-		out["transport"] = strings.ToUpper(v)
-	}
+	// Mieru outbound doesn't expose `transport` (client picks based on server).
+	// `multiplexing` lives in outbound for mieru client; mtu lives on the
+	// underlying transport so we pass through both when set.
 	if v, _ := raw["multiplexing"].(string); strings.TrimSpace(v) != "" {
 		out["multiplexing"] = v
 	}
