@@ -446,7 +446,12 @@ func (s *XrayService) RestartXray(isForce bool) error {
 
 	if multiMode {
 		StopLocalTelemtStandalone()
-		StopLocalSingboxStandalone()
+		// Sing-box is NOT stopped on multi-node — the panel host runs sing-box
+		// as a cascade hub serving inbounds/sidecars with empty NodeIds. The
+		// per-mode filter inside BuildSingboxConfigStandalone keeps it limited
+		// to hub-scoped items; workers still get their own subset via
+		// apply-config envelope.
+		TryApplyLocalSingboxStandalone(s)
 		return s.restartXrayMultiMode(isForce)
 	}
 
