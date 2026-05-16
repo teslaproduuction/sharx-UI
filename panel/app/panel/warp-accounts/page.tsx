@@ -8,11 +8,6 @@ import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import { Button, IconTile, Input, Spinner, useToast } from "@/components/ui";
 
-// Phase 3-B — Cloudflare WARP accounts.
-// Minimal first-pass: list + Add (anonymous register against CF API) +
-// Apply WARP+ license + Delete + view Xray outbound JSON. Full RoutingBuilder
-// integration (target chain, node assignment) lands in a follow-up.
-
 type WarpAccount = {
   id: number;
   name: string;
@@ -55,43 +50,44 @@ export default function Page() {
   const onAdd = async () => {
     const trimmed = name.trim();
     if (!trimmed) {
-      toast.error(t("nameRequired", { defaultValue: "Name is required" }));
+      toast.error(t("pages.warpAccounts.nameRequired", { defaultValue: "Name is required" }));
       return;
     }
     setBusy(true);
     const r = await postJson(panel("warp-account/register"), { name: trimmed }, true);
     setBusy(false);
     if (r.success) {
-      toast.success(t("success", { defaultValue: "Registered" }));
+      toast.success(t("pages.warpAccounts.registeredToast", { defaultValue: "Registered" }));
       void load();
     } else {
-      toast.error(r.msg || t("fail"));
+      toast.error(r.msg || t("fail", { defaultValue: "Failed" }));
     }
   };
 
   const onDelete = async (id: number) => {
-    if (!confirm(`Delete WARP account #${id}? CF device will be removed.`)) return;
+    const msg = t("pages.warpAccounts.deleteConfirm", { id, defaultValue: `Delete WARP account #${id}? CF device will be removed.` });
+    if (!confirm(msg)) return;
     const r = await postJson(panel(`warp-account/del/${id}`), {}, true);
     if (r.success) {
       void load();
     } else {
-      toast.error(r.msg || t("fail"));
+      toast.error(r.msg || t("fail", { defaultValue: "Failed" }));
     }
   };
 
   const onApplyLicense = async (id: number) => {
     const lic = (licenseInputs[id] || "").trim();
     if (!lic) {
-      toast.error("License key required");
+      toast.error(t("pages.warpAccounts.licenseRequired", { defaultValue: "License key required" }));
       return;
     }
     const r = await postJson(panel(`warp-account/license/${id}`), { license: lic }, true);
     if (r.success) {
-      toast.success("License applied");
+      toast.success(t("pages.warpAccounts.licenseApplied", { defaultValue: "License applied" }));
       setLicenseInputs((m) => ({ ...m, [id]: "" }));
       void load();
     } else {
-      toast.error(r.msg || t("fail"));
+      toast.error(r.msg || t("fail", { defaultValue: "Failed" }));
     }
   };
 
@@ -101,7 +97,7 @@ export default function Page() {
       setJsonViewerText(r.obj.json);
       setJsonViewerId(id);
     } else {
-      toast.error(r.msg || t("fail"));
+      toast.error(r.msg || t("fail", { defaultValue: "Failed" }));
     }
   };
 
@@ -114,18 +110,15 @@ export default function Page() {
       />
       <Surface padding="md" className="space-y-3">
         <p className="text-xs text-[var(--fg-muted)]">
-          Anonymous Cloudflare WARP registrations. Each row produces an Xray-native
-          wireguard outbound tagged{" "}
-          <code className="font-mono text-[var(--fg)]">warp-&lt;name&gt;</code> that
-          you can target from RoutingBuilder. WARP+ license unlocks unlimited speed.
+          {t("pages.warpAccounts.subtitle", { defaultValue: "Anonymous Cloudflare WARP registrations. Each row produces an Xray-native wireguard outbound tagged warp-<name> that you can target from RoutingBuilder. WARP+ license unlocks unlimited speed." })}
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <div className="flex-1 min-w-[200px]">
-            <label className="mb-1 block text-xs text-[var(--fg-muted)]">Name</label>
-            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="warp-uk1" />
+            <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.warpAccounts.nameLabel", { defaultValue: "Name" })}</label>
+            <Input value={name} onChange={(e) => setName(e.target.value)} placeholder={t("pages.warpAccounts.namePlaceholder", { defaultValue: "warp-uk1" })} />
           </div>
           <Button onClick={onAdd} disabled={busy}>
-            {busy ? "Registering…" : "Add WARP"}
+            {busy ? t("pages.warpAccounts.registering", { defaultValue: "Registering…" }) : t("pages.warpAccounts.addButton", { defaultValue: "Add WARP" })}
           </Button>
         </div>
       </Surface>
@@ -139,8 +132,7 @@ export default function Page() {
             <div className="flex flex-col items-center gap-3 text-center">
               <IconTile icon={Cloud} tone="info" size="lg" />
               <p className="text-sm text-[var(--fg-muted)]">
-                No WARP accounts yet. Click &quot;Add WARP&quot; to register one against
-                the Cloudflare anonymous-device endpoint.
+                {t("pages.warpAccounts.emptyState", { defaultValue: 'No WARP accounts yet. Click "Add WARP" to register one against the Cloudflare anonymous-device endpoint.' })}
               </p>
             </div>
           </div>
@@ -149,12 +141,12 @@ export default function Page() {
             <table className="w-full min-w-max border-collapse text-left text-sm">
               <thead>
                 <tr className="border-b border-[var(--border)] text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
-                  <th className="p-3">Name</th>
-                  <th className="p-3">IPv4</th>
-                  <th className="p-3">Peer</th>
-                  <th className="p-3">Plus</th>
-                  <th className="p-3">License</th>
-                  <th className="p-3">Actions</th>
+                  <th className="p-3">{t("pages.warpAccounts.colName", { defaultValue: "Name" })}</th>
+                  <th className="p-3">{t("pages.warpAccounts.colIPv4", { defaultValue: "IPv4" })}</th>
+                  <th className="p-3">{t("pages.warpAccounts.colPeer", { defaultValue: "Peer" })}</th>
+                  <th className="p-3">{t("pages.warpAccounts.colPlus", { defaultValue: "Plus" })}</th>
+                  <th className="p-3">{t("pages.warpAccounts.colLicense", { defaultValue: "License" })}</th>
+                  <th className="p-3">{t("pages.warpAccounts.colActions", { defaultValue: "Actions" })}</th>
                 </tr>
               </thead>
               <tbody>
@@ -168,33 +160,33 @@ export default function Page() {
                     <td className="p-3 font-mono text-xs">{row.peerEndpoint}</td>
                     <td className="p-3">
                       {row.isPlus ? (
-                        <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] text-green-500">PLUS</span>
+                        <span className="rounded-full bg-green-500/15 px-2 py-0.5 text-[10px] text-green-500">{t("pages.warpAccounts.plusLabel", { defaultValue: "PLUS" })}</span>
                       ) : (
-                        <span className="text-[10px] text-[var(--fg-subtle)]">free</span>
+                        <span className="text-[10px] text-[var(--fg-subtle)]">{t("pages.warpAccounts.freeLabel", { defaultValue: "free" })}</span>
                       )}
                     </td>
                     <td className="p-3">
                       <div className="flex gap-1">
                         <Input
                           className="font-mono text-xs w-40"
-                          placeholder="WARP+ license"
+                          placeholder={t("pages.warpAccounts.licensePlaceholder", { defaultValue: "WARP+ license" })}
                           value={licenseInputs[row.id] ?? ""}
                           onChange={(e) =>
                             setLicenseInputs((m) => ({ ...m, [row.id]: e.target.value }))
                           }
                         />
                         <Button variant="secondary" onClick={() => onApplyLicense(row.id)}>
-                          Apply
+                          {t("pages.warpAccounts.applyLicenseButton", { defaultValue: "Apply" })}
                         </Button>
                       </div>
                     </td>
                     <td className="p-3">
                       <div className="flex gap-1">
                         <Button variant="secondary" onClick={() => onShowJSON(row.id)}>
-                          JSON
+                          {t("pages.warpAccounts.showJsonButton", { defaultValue: "JSON" })}
                         </Button>
                         <Button variant="danger" onClick={() => onDelete(row.id)}>
-                          Del
+                          {t("pages.warpAccounts.deleteButton", { defaultValue: "Del" })}
                         </Button>
                       </div>
                     </td>
@@ -209,10 +201,10 @@ export default function Page() {
         <Surface padding="md" className="space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-[var(--fg)]">
-              Xray outbound JSON — warp-account #{jsonViewerId}
+              {t("pages.warpAccounts.jsonViewerTitle", { id: jsonViewerId, defaultValue: `Xray outbound JSON — warp-account #${jsonViewerId}` })}
             </p>
             <Button variant="secondary" onClick={() => setJsonViewerId(null)}>
-              Close
+              {t("pages.warpAccounts.closeButton", { defaultValue: "Close" })}
             </Button>
           </div>
           <pre className="max-h-96 overflow-auto rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
