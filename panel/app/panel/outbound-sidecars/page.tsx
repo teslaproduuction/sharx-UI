@@ -29,13 +29,23 @@ type PreviewFragments = {
   routeRule: unknown;
 };
 
-const KIND_OPTIONS = ["anytls_client", "mieru_client", "tuic_client", "hy2_client"];
+const KIND_OPTIONS = ["anytls_client", "mieru_client", "tuic_client", "hy2_client", "wireguard_client"];
 
 const KIND_FIELDS: Record<string, string[]> = {
-  anytls_client:  ["server", "server_port", "password", "tls.server_name", "tls.insecure"],
-  mieru_client:   ["server", "server_port", "username", "password"],
-  tuic_client:    ["server", "server_port", "uuid", "password", "tls.server_name", "congestion_control"],
-  hy2_client:     ["server", "server_port", "password", "tls.server_name"],
+  anytls_client:    ["server", "server_port", "password", "tls.server_name", "tls.insecure"],
+  mieru_client:     ["server", "server_port", "username", "password"],
+  tuic_client:      ["server", "server_port", "uuid", "password", "tls.server_name", "congestion_control"],
+  hy2_client:       ["server", "server_port", "password", "tls.server_name"],
+  // wireguard_client: vanilla WG fields + optional Amnezia obfuscation block
+  // (jc/jmin/jmax + s1-s4 + h1-h4) for tunneling through a self-hosted AWG
+  // server in DPI-heavy regions. amnezia.* fields are optional; empty → plain WG.
+  wireguard_client: [
+    "server", "server_port", "private_key", "peer_public_key",
+    "address", "reserved", "mtu",
+    "amnezia.jc", "amnezia.jmin", "amnezia.jmax",
+    "amnezia.s1", "amnezia.s2", "amnezia.s3", "amnezia.s4",
+    "amnezia.h1", "amnezia.h2", "amnezia.h3", "amnezia.h4",
+  ],
 };
 
 const blankConfig = (kind: string): Record<string, unknown> => {
@@ -48,6 +58,17 @@ const blankConfig = (kind: string): Record<string, unknown> => {
       return { server: "", server_port: 443, uuid: "", password: "", tls: { server_name: "", alpn: ["h3"] }, congestion_control: "bbr" };
     case "hy2_client":
       return { server: "", server_port: 443, password: "", tls: { server_name: "" } };
+    case "wireguard_client":
+      return {
+        server: "",
+        server_port: 51820,
+        private_key: "",
+        peer_public_key: "",
+        address: "10.0.0.2/32",
+        reserved: "",
+        mtu: 1408,
+        amnezia: { jc: 0, jmin: 0, jmax: 0, s1: 0, s2: 0, s3: 0, s4: 0, h1: 0, h2: 0, h3: 0, h4: 0 },
+      };
     default:
       return {};
   }
@@ -78,7 +99,13 @@ function writePath(obj: Record<string, unknown>, path: string, val: string): Rec
   const last = segs[segs.length - 1];
   if (val === "true") cur[last] = true;
   else if (val === "false") cur[last] = false;
-  else if (last === "server_port" || last === "port") cur[last] = parseInt(val, 10) || 0;
+  else if (
+    last === "server_port" || last === "port" || last === "mtu" ||
+    // Amnezia obfuscation params are all unsigned integers (junk-packet
+    // counts + magic-header values). Coerce so sing-box doesn't reject the
+    // config with a "cannot unmarshal string into int" error.
+    ["jc","jmin","jmax","s1","s2","s3","s4","h1","h2","h3","h4"].includes(last)
+  ) cur[last] = parseInt(val, 10) || 0;
   else cur[last] = val;
   return out;
 }

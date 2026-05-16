@@ -75,6 +75,8 @@ func BuildSingboxOutboundForSidecar(sc *model.OutboundSidecar) (SingboxOutboundF
 		ob, err = buildTUICClientOutbound(tag, raw)
 	case "hy2_client":
 		ob, err = buildHy2ClientOutbound(tag, raw)
+	case "wireguard_client":
+		ob, err = buildWireGuardClientOutbound(tag, raw)
 	default:
 		return SingboxOutboundFragments{}, fmt.Errorf("kind %q not implemented", sc.Kind)
 	}
@@ -344,6 +346,71 @@ func buildHy2ClientOutbound(tag string, raw map[string]any) (map[string]any, err
 	}
 	if down, ok := raw["down_mbps"].(float64); ok && down > 0 {
 		out["down_mbps"] = int(down)
+	}
+	return out, nil
+}
+
+// buildWireGuardClientOutbound emits a hiddify-sing-box `endpoints[]` entry
+// of type=wireguard with optional Amnezia obfuscation parameters. Used as a
+// cascade member to tunnel through a self-hosted AmneziaWG server in DPI-
+// heavy regions (the AWG junk-packet / magic-header obfuscation defeats
+// signature-based WG blocks). Not compatible with Cloudflare WARP — CF
+// servers only speak vanilla WireGuard and reject the AWG handshake.
+//
+// Required fields: server, server_port, private_key, peer_public_key.
+// Optional: address (assigned IPv4 inside the tunnel, default 10.0.0.2/32),
+// mtu, reserved (3-byte b64 for WARP-style reserved bits), preshared_key.
+// AWG params live under `amnezia` (jc/jmin/jmax/s1-s4/h1-h4/i1-i5/j1-j3/itime).
+func buildWireGuardClientOutbound(tag string, raw map[string]any) (map[string]any, error) {
+	server, port, err := requireServer(raw)
+	if err != nil {
+		return nil, err
+	}
+	priv, _ := raw["private_key"].(string)
+	peerPub, _ := raw["peer_public_key"].(string)
+	if strings.TrimSpace(priv) == "" || strings.TrimSpace(peerPub) == "" {
+		return nil, errors.New("wireguard_client needs private_key + peer_public_key")
+	}
+	addr := []any{"10.0.0.2/32"}
+	if v, ok := raw["address"].([]any); ok && len(v) > 0 {
+		addr = v
+	} else if s, ok := raw["address"].(string); ok && strings.TrimSpace(s) != "" {
+		addr = []any{s}
+	}
+	peer := map[string]any{
+		"address":    server,
+		"port":       port,
+		"public_key": peerPub,
+	}
+	if v, _ := raw["preshared_key"].(string); strings.TrimSpace(v) != "" {
+		peer["pre_shared_key"] = v
+	}
+	if v, _ := raw["reserved"].(string); strings.TrimSpace(v) != "" {
+		peer["reserved"] = v
+	}
+	if v, ok := raw["allowed_ips"].([]any); ok && len(v) > 0 {
+		peer["allowed_ips"] = v
+	} else {
+		peer["allowed_ips"] = []any{"0.0.0.0/0", "::/0"}
+	}
+	out := map[string]any{
+		"type":        "wireguard",
+		"tag":         tag,
+		"address":     addr,
+		"private_key": priv,
+		"peers":       []any{peer},
+	}
+	if v, ok := raw["mtu"].(float64); ok && v > 0 {
+		out["mtu"] = int(v)
+	}
+	if v, _ := raw["udp_timeout"].(string); strings.TrimSpace(v) != "" {
+		out["udp_timeout"] = v
+	}
+	// Pass amnezia block through verbatim — schema is upstream-controlled and
+	// will likely grow new fields; whitelisting would force a rebuild on every
+	// hiddify bump. We trust the operator to supply valid values.
+	if v, ok := raw["amnezia"].(map[string]any); ok && len(v) > 0 {
+		out["amnezia"] = v
 	}
 	return out, nil
 }

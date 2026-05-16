@@ -30,6 +30,7 @@ var SupportedKinds = []string{
 	"mieru_client",
 	"tuic_client",
 	"hy2_client",
+	"wireguard_client",
 }
 
 func isSupportedKind(k string) bool {
