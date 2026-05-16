@@ -2,6 +2,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ func (a *NodeController) initRouter(g *gin.RouterGroup) {
 	g.POST("/stopXray/:id", a.stopXrayOnNode)
 	g.POST("/restartXray/:id", a.restartXrayOnNode)
 	g.POST("/restartTelemt/:id", a.restartTelemtOnNode)
+	g.GET("/preview-config/:id", a.previewNodeConfig)
 	g.GET("/secret", a.getPairingSecret) // Panel-wide SECRET_KEY for node docker-compose
 	g.GET("/geography", a.getNodesGeography)
 	g.GET("/client-traffic-per-node", a.getClientTrafficPerNode)
@@ -74,6 +76,52 @@ func (a *NodeController) getClientTrafficPerNode(c *gin.Context) {
 		return
 	}
 	jsonObj(c, out, nil)
+}
+
+// previewNodeConfig returns the same envelope the panel would push to the
+// node right now (xray config + per-inbound telemt TOMLs + sing-box payload).
+// Read-only — lets the admin verify what each node receives without SSH-ing
+// into the worker or waiting for the next reload.
+func (a *NodeController) previewNodeConfig(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid id", fmt.Errorf("bad id"))
+		return
+	}
+	node, err := a.nodeService.GetNode(id)
+	if err != nil {
+		jsonMsg(c, "Failed to load node", err)
+		return
+	}
+	xraySvc := service.XrayService{}
+	xrayJSON, profileHash, xerr := xraySvc.BuildWorkerXrayConfigForNodeWithMeta(node)
+	if xerr != nil {
+		jsonMsg(c, "Failed to build xray config", xerr)
+		return
+	}
+	var xrayObj any
+	_ = json.Unmarshal(xrayJSON, &xrayObj)
+
+	ibs, _ := xraySvc.InboundsForWorkerNode(node)
+	telemt, _ := service.BuildTelemtPayloadsForNode(node, ibs)
+
+	singboxSvc := service.SingboxConfigService{}
+	sbx, _ := singboxSvc.BuildSingboxConfigForNode(node.Id)
+	var sbxObj any
+	if sbx.Cfg != "" {
+		_ = json.Unmarshal([]byte(sbx.Cfg), &sbxObj)
+	}
+
+	jsonObj(c, gin.H{
+		"node":            node,
+		"xray":            xrayObj,
+		"xrayProfileHash": profileHash,
+		"telemt":          telemt,
+		"singbox": gin.H{
+			"config":     sbxObj,
+			"configHash": sbx.ConfigHash,
+		},
+	}, nil)
 }
 
 // getPairingSecret returns the shared SECRET_KEY (base64 JSON) that every pairing-mode node

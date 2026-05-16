@@ -2222,7 +2222,7 @@ export function InboundsPage() {
                         ? t("pages.inbounds.viewTelemtTomlPreview", {
                             defaultValue: "Telemt config",
                           })
-                        : form.protocol === "mieru"
+                        : ["mieru", "anytls", "naive_server", "tuic"].includes(form.protocol)
                           ? t("pages.inbounds.viewSingboxConfigPreview", {
                               defaultValue: "Sing-box config",
                             })
@@ -2250,7 +2250,7 @@ export function InboundsPage() {
                         defaultValue:
                           "Generated Telemt config.toml (same as deployed to the node or local data/telemt on standalone). [access.users] is empty until you save the inbound and assign clients; after that it reflects the database.",
                       })
-                    : form.protocol === "mieru"
+                    : ["mieru", "anytls", "naive_server", "tuic"].includes(form.protocol)
                       ? t("pages.inbounds.singboxConfigPreviewHint", {
                           defaultValue:
                             "Single sing-box inbound object as it will be merged into the aggregated /app/data/singbox/config.json blob the panel SIGHUPs to the singleton sidecar. portBindings, users and tcp_fast_open / sniff defaults reflect the form below.",
