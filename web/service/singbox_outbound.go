@@ -218,16 +218,46 @@ func buildMieruClientOutbound(tag string, raw map[string]any) (map[string]any, e
 	if strings.TrimSpace(username) == "" || strings.TrimSpace(password) == "" {
 		return nil, errors.New("mieru_client needs username + password")
 	}
-	out := map[string]any{
-		"type":        "mieru",
-		"tag":         tag,
-		"server":      server,
-		"server_port": port,
-		"username":    username,
-		"password":    password,
+	// hiddify-sing-box mieru client schema requires explicit network ([tcp]|[udp])
+	// — without it the validator rejects with "Transport of Server Port is not
+	// defined!". Default to TCP unless operator passes `network` explicitly.
+	network := []string{"tcp"}
+	if v, ok := raw["network"].([]any); ok && len(v) > 0 {
+		network = nil
+		for _, n := range v {
+			if s, ok := n.(string); ok && strings.TrimSpace(s) != "" {
+				network = append(network, strings.ToLower(s))
+			}
+		}
+	} else if v, _ := raw["transport"].(string); strings.TrimSpace(v) != "" {
+		switch strings.ToUpper(strings.TrimSpace(v)) {
+		case "UDP":
+			network = []string{"udp"}
+		case "TCP+UDP", "BOTH":
+			network = []string{"tcp", "udp"}
+		}
 	}
-	if v, _ := raw["transport"].(string); strings.TrimSpace(v) != "" {
-		out["transport"] = strings.ToUpper(v)
+	// hiddify-sing-box mieru client uses portBindings (server-side validator,
+	// reused on the client) so emit them per network entry. listen_port is
+	// not relevant here (outbound side); we keep server_port for transparency
+	// even though mieru actually reads portBindings.
+	clientBindings := make([]map[string]any, 0, len(network))
+	for _, n := range network {
+		switch n {
+		case "tcp":
+			clientBindings = append(clientBindings, map[string]any{"port": port, "protocol": "TCP"})
+		case "udp":
+			clientBindings = append(clientBindings, map[string]any{"port": port, "protocol": "UDP"})
+		}
+	}
+	out := map[string]any{
+		"type":         "mieru",
+		"tag":          tag,
+		"server":       server,
+		"server_port":  port,
+		"username":     username,
+		"password":     password,
+		"portBindings": clientBindings,
 	}
 	if v, _ := raw["multiplexing"].(string); strings.TrimSpace(v) != "" {
 		out["multiplexing"] = v
