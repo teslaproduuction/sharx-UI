@@ -40,14 +40,54 @@ type SingboxConfigService struct {
 	settingService SettingService
 }
 
-// BuildSingboxConfigStandalone aggregates every enabled sing-box-managed inbound
-// in the panel-local DB into a single sing-box config blob (single-node mode).
+// BuildSingboxConfigStandalone aggregates enabled sing-box-managed inbounds
+// for the panel host.
+//
+// In standalone mode → every enabled sing-box inbound (one host serves all).
+// In multi-node mode → only inbounds + sidecars NOT assigned to any worker
+// (NodeIds empty). The panel host then acts as "cascade hub" — RU entry +
+// outbound to IN worker, while workers run their own per-node subset via
+// apply-config envelope.
 func (s *SingboxConfigService) BuildSingboxConfigStandalone() (SingboxNodePayload, error) {
-	inbounds, err := s.inboundService.GetAllInbounds()
+	allInbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
 		return SingboxNodePayload{}, fmt.Errorf("singbox: load inbounds: %w", err)
 	}
-	return s.buildFromInbounds(inbounds)
+	multi, _ := s.settingService.GetMultiNodeMode()
+	if !multi {
+		return s.buildFromInbounds(allInbounds)
+	}
+	// Multi-node: keep only inbounds with no node assignment.
+	hubInbounds := make([]*model.Inbound, 0, len(allInbounds))
+	nodeSvc := NodeService{}
+	for _, inb := range allInbounds {
+		if inb == nil || !inb.Enable {
+			continue
+		}
+		if !model.IsSingboxInboundProtocol(inb.Protocol) {
+			continue
+		}
+		bindings, berr := nodeSvc.GetInboundNodeBindingViews(inb.Id)
+		if berr != nil {
+			continue
+		}
+		if len(bindings) == 0 {
+			hubInbounds = append(hubInbounds, inb)
+		}
+	}
+	// Pass nodeID=0 → collectOutboundFragmentsForNode includes all sidecars
+	// (it filters by sidecarAssignedToNode only when nodeID>0). To get the
+	// "hub" semantic, pre-filter sidecars below by leveraging the empty-
+	// NodeIds convention via collectOutboundFragmentsForHub.
+	return s.buildFromInboundsForHub(hubInbounds)
+}
+
+// buildFromInboundsForHub is buildFromInbounds with the outbound collector
+// restricted to sidecars whose NodeIds list is empty (panel-host only).
+func (s *SingboxConfigService) buildFromInboundsForHub(inbounds []*model.Inbound) (SingboxNodePayload, error) {
+	// Reuse the per-node path with a sentinel meaning "hub" — we use -1 so it
+	// never matches a real worker NodeId.
+	return s.buildFromInboundsForNode(inbounds, -1)
 }
 
 // BuildSingboxConfigForNode is the multi-node variant. Filters enabled sing-box-

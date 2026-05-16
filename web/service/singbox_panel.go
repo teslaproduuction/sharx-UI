@@ -78,19 +78,22 @@ func LocalSingboxConfigHash() string {
 }
 
 // ApplyLocalSingboxStandalone rebuilds the aggregated sing-box config from DB
-// and pushes it into the local manager (which writes config.json + SIGHUPs the child).
-// In multi-node mode, this function is a no-op — workers receive the config via
-// the apply-config envelope (Phase 2 follow-up commit).
+// and pushes it into the local manager.
+//
+// Behavior by mode:
+//   - Standalone (multi-node OFF): include every enabled sing-box inbound +
+//     OutboundSidecar — there's only one host.
+//   - Multi-node (multi-node ON): the panel host acts as the "cascade hub" —
+//     it runs only the inbounds + sidecars that are NOT assigned to any worker
+//     (NodeIds empty). Items assigned to workers travel via apply-config
+//     envelope. Empty config → stop the local sidecar.
+//
+// This lets operators put the entry inbound (e.g. vless on the RU panel host)
+// + the cascade outbound (mieru-client → IN worker) on the panel and route
+// traffic RU→IN without registering the panel as its own worker container.
 func ApplyLocalSingboxStandalone(xs *XrayService) error {
 	if xs == nil {
 		xs = &XrayService{settingService: SettingService{}, inboundService: InboundService{}, nodeService: NodeService{}}
-	}
-	multi, err := xs.settingService.GetMultiNodeMode()
-	if err != nil {
-		multi = false
-	}
-	if multi {
-		return nil
 	}
 	cfgSvc := SingboxConfigService{
 		inboundService: xs.inboundService,
