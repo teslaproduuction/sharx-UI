@@ -5,7 +5,9 @@ import {
   BookOpen,
   Building2,
   ChevronDown,
+  Cloud,
   Database,
+  GitBranch,
   LayoutDashboard,
   LogOut,
   Menu,
@@ -190,6 +192,27 @@ export function PanelShell({ children }: { children: React.ReactNode }) {
         href: linkP("panel/groups"),
         icon: <Building2 className="size-[18px] shrink-0 opacity-90" />,
         label: t("menu.groups"),
+      },
+      // Phase 3/3-B/4 — sing-box cascade members (sidecar bridges), WARP egress
+      // accounts, and Xray balancers. Three thin entries; full submenu polish
+      // lands when usage justifies it.
+      {
+        key: p("panel/outbound-sidecars"),
+        href: linkP("panel/outbound-sidecars"),
+        icon: <Network className="size-[18px] shrink-0 opacity-90" />,
+        label: t("menu.outboundSidecars", { defaultValue: "Sidecars" }),
+      },
+      {
+        key: p("panel/warp-accounts"),
+        href: linkP("panel/warp-accounts"),
+        icon: <Cloud className="size-[18px] shrink-0 opacity-90" />,
+        label: t("menu.warpAccounts", { defaultValue: "WARP" }),
+      },
+      {
+        key: p("panel/outbound-chains"),
+        href: linkP("panel/outbound-chains"),
+        icon: <GitBranch className="size-[18px] shrink-0 opacity-90" />,
+        label: t("menu.outboundChains", { defaultValue: "Chains" }),
       },
       { kind: "settings" as const },
       { kind: "xray" as const },
