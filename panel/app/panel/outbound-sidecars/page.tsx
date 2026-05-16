@@ -246,7 +246,7 @@ export default function Page() {
               <Input type="number" value={listenPort} onChange={(e) => setListenPort(parseInt(e.target.value, 10) || 0)} />
             </div>
             <div className="flex items-center gap-2 pt-5">
-              <Switch checked={enable} onChange={(e) => setEnable(e.target.checked)} />
+              <Switch checked={enable} onChange={setEnable} />
               <span className="text-xs">Enabled</span>
             </div>
           </div>
