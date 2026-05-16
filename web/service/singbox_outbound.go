@@ -36,9 +36,11 @@ type SingboxOutboundFragments struct {
 	RouteRule     json.RawMessage
 }
 
-// buildSingboxOutboundForSidecar dispatches by kind. Returns ErrKindNotSupported
+// BuildSingboxOutboundForSidecar dispatches by kind. Returns ErrKindNotSupported
 // when the sidecar.kind is unknown — callers should skip + log.
-func buildSingboxOutboundForSidecar(sc *model.OutboundSidecar) (SingboxOutboundFragments, error) {
+// Exported so the HTTP "preview" handler can render fragments for a candidate
+// sidecar payload before it is saved.
+func BuildSingboxOutboundForSidecar(sc *model.OutboundSidecar) (SingboxOutboundFragments, error) {
 	if sc == nil {
 		return SingboxOutboundFragments{}, errors.New("nil sidecar")
 	}
@@ -373,7 +375,7 @@ func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, b
 		if nodeID == -1 && len(sc.NodeIds) > 0 {
 			continue
 		}
-		frag, err := buildSingboxOutboundForSidecar(sc)
+		frag, err := BuildSingboxOutboundForSidecar(sc)
 		if err != nil {
 			logger.Warningf("singbox outbound: skip sidecar id=%d (%s): %v", sc.Id, sc.Name, err)
 			continue

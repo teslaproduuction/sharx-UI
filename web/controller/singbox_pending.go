@@ -7,6 +7,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -19,6 +20,7 @@ type SingboxPendingController struct {
 	BaseController
 	svc          service.SingboxPendingService
 	xrayService  service.XrayService
+	cfgService   service.SingboxConfigService
 }
 
 // NewSingboxPendingController wires routes.
@@ -31,6 +33,26 @@ func NewSingboxPendingController(g *gin.RouterGroup) *SingboxPendingController {
 func (c *SingboxPendingController) initRouter(g *gin.RouterGroup) {
 	g.GET("/pending-count", c.pendingCount)
 	g.POST("/apply-pending", c.applyPending)
+	g.GET("/live-config", c.liveConfig)
+}
+
+// liveConfig returns the aggregated sing-box config the panel would push to
+// the local sidecar right now (built from current DB state — same code path
+// as the actual SIGHUP/spawn). Read-only; for "show me what's running" UI.
+func (c *SingboxPendingController) liveConfig(ctx *gin.Context) {
+	payload, err := c.cfgService.BuildSingboxConfigStandalone()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	var parsed any
+	if len(payload.Cfg) > 0 {
+		_ = json.Unmarshal([]byte(payload.Cfg), &parsed)
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{
+		"config":     parsed,
+		"configHash": payload.ConfigHash,
+	}})
 }
 
 func (c *SingboxPendingController) pendingCount(ctx *gin.Context) {

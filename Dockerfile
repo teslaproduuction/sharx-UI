@@ -2,6 +2,11 @@
 # Stage: Next.js static panel
 # ========================================================
 FROM node:22-alpine AS panelui
+WORKDIR /app
+# panel/scripts/gen-locales.mjs reads ../../web/translation/*.toml at prebuild
+# to flatten into public/locales/*.json. The translation TOMLs live outside
+# panel/, so they need to be present in the build context.
+COPY web/translation/ ./web/translation/
 WORKDIR /app/panel
 # Must match XUI / SharX `webBasePath` (e.g. / or /prefix). `next.config` `basePath` + client `linkP()`.
 ARG NEXT_PUBLIC_BASE_PATH=/

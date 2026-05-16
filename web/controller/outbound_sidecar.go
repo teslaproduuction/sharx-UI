@@ -7,6 +7,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -37,6 +38,7 @@ func (c *OutboundSidecarController) initRouter(g *gin.RouterGroup) {
 	g.POST("/update/:id", c.update)
 	g.POST("/del/:id", c.del)
 	g.GET("/kinds", c.kinds)
+	g.POST("/preview", c.preview)
 }
 
 func (c *OutboundSidecarController) list(ctx *gin.Context) {
@@ -112,6 +114,36 @@ func (c *OutboundSidecarController) del(ctx *gin.Context) {
 
 func (c *OutboundSidecarController) kinds(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": service.SupportedKinds})
+}
+
+// preview accepts a candidate sidecar payload (not persisted) and returns the
+// three sing-box fragments (outbound, bridge inbound, route rule) that would
+// be spliced into the running config. Lets the UI render a "what you'll get"
+// preview before saving, which surfaces malformed configs (missing required
+// fields per kind) without a round-trip through Create + SIGHUP.
+func (c *OutboundSidecarController) preview(ctx *gin.Context) {
+	var sc model.OutboundSidecar
+	if err := ctx.ShouldBindJSON(&sc); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	if sc.ListenPort <= 0 {
+		sc.ListenPort = 43000
+	}
+	if strings.TrimSpace(sc.Name) == "" {
+		sc.Name = "preview"
+	}
+	sc.Enable = true
+	frag, err := service.BuildSingboxOutboundForSidecar(&sc)
+	if err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{
+		"outbound":      json.RawMessage(frag.Outbound),
+		"bridgeInbound": json.RawMessage(frag.BridgeInbound),
+		"routeRule":     json.RawMessage(frag.RouteRule),
+	}})
 }
 
 // _ silences the unused-import warning on `strings` until we add validation.
