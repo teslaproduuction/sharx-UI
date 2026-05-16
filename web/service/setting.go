@@ -152,6 +152,11 @@ var defaultValueMap = map[string]string{
 	"singboxLogLevel":               "warn",              // valid: trace|debug|info|warn|error|fatal|panic
 	"singboxApplyIntervalHours":     "4",                 // batch reload cron interval — SIGHUP kills active connections so changes are batched
 	"singboxApplyImmediateOnDisable": "true",             // when admin disables a user, override the batch and SIGHUP now
+	// Sing-box overrides — admin-editable JSON spliced into the auto-built
+	// config at render time. Keys honored: log, dns, experimental, route_extras
+	// (extra route.rules appended to the auto-built bridge rules). All keys
+	// optional; absent keys use the auto-built defaults.
+	"singboxOverrides": "{}",
 }
 
 var allowedUIPreferenceKeys = map[string]bool{
@@ -990,6 +995,35 @@ func (s *SettingService) GetLdapInboundTags() (string, error) {
 
 func (s *SettingService) GetLdapAutoCreate() (bool, error) {
 	return s.getBool("ldapAutoCreate")
+}
+
+// GetSingboxOverrides returns the admin-editable JSON spliced into the auto-
+// built sing-box config. Empty / unset → "{}".
+func (s *SettingService) GetSingboxOverrides() (string, error) {
+	v, err := s.getString("singboxOverrides")
+	if err != nil {
+		return "{}", err
+	}
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return "{}", nil
+	}
+	return v, nil
+}
+
+// SetSingboxOverrides validates that the supplied string parses as JSON object
+// (or empty) and persists it. Invalid JSON is rejected with a clear error so
+// the panel UI can surface it before the next sing-box build picks up garbage.
+func (s *SettingService) SetSingboxOverrides(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		raw = "{}"
+	}
+	var probe map[string]any
+	if err := json.Unmarshal([]byte(raw), &probe); err != nil {
+		return fmt.Errorf("singboxOverrides: not a JSON object: %w", err)
+	}
+	return s.saveSetting("singboxOverrides", raw)
 }
 
 func (s *SettingService) GetLdapAutoDelete() (bool, error) {

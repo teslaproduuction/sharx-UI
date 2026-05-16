@@ -3,12 +3,13 @@
 import { Copy, FileJson, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { getJson } from "@/lib/api";
+import { getJson, postJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
 import { Button, Spinner, useToast } from "@/components/ui";
 
 type SingboxResp = { config: unknown; configHash: string };
+type SingboxOverridesResp = { overrides: string };
 type TelemtPayload = { inboundId: number; tag: string; toml: string };
 
 type Tab = "xray" | "singbox" | "telemt";
@@ -22,6 +23,9 @@ export default function Page() {
   const [singbox, setSingbox] = useState<SingboxResp | null>(null);
   const [telemt, setTelemt] = useState<TelemtPayload[]>([]);
   const [error, setError] = useState<string>("");
+  const [overrides, setOverrides] = useState<string>("{}");
+  const [overridesDirty, setOverridesDirty] = useState(false);
+  const [overridesSaving, setOverridesSaving] = useState(false);
 
   const load = useCallback(async (which: Tab) => {
     setLoading(true);
@@ -35,6 +39,13 @@ export default function Page() {
         const r = await getJson<SingboxResp>(panel("cores/singbox"));
         if (r.success && r.obj) setSingbox(r.obj);
         else setError(r.msg || t("pages.cores.fetchFailed", { defaultValue: "Failed to fetch" }));
+        const ov = await getJson<SingboxOverridesResp>(panel("singbox/overrides"));
+        if (ov.success && ov.obj) {
+          let pretty = ov.obj.overrides || "{}";
+          try { pretty = JSON.stringify(JSON.parse(pretty), null, 2); } catch { /* keep raw */ }
+          setOverrides(pretty);
+          setOverridesDirty(false);
+        }
       } else {
         const r = await getJson<TelemtPayload[]>(panel("cores/telemt"));
         if (r.success && Array.isArray(r.obj)) setTelemt(r.obj);
@@ -52,6 +63,23 @@ export default function Page() {
     toast.success(t("pages.cores.copiedToast", { defaultValue: "Copied" }));
   };
 
+  const saveOverrides = async () => {
+    try { JSON.parse(overrides); } catch {
+      toast.error(t("pages.cores.invalidJson", { defaultValue: "Invalid JSON" }));
+      return;
+    }
+    setOverridesSaving(true);
+    const r = await postJson(panel("singbox/overrides"), { overrides }, true);
+    setOverridesSaving(false);
+    if (r.success) {
+      toast.success(t("pages.cores.savedToast", { defaultValue: "Saved — sing-box will reload" }));
+      setOverridesDirty(false);
+      void load("singbox");
+    } else {
+      toast.error(r.msg || t("pages.cores.fetchFailed", { defaultValue: "Failed" }));
+    }
+  };
+
   const xrayJson = xray ? JSON.stringify(xray, null, 2) : "";
   const singboxJson = singbox?.config ? JSON.stringify(singbox.config, null, 2) : "";
 
@@ -64,7 +92,7 @@ export default function Page() {
       />
       <Surface padding="md" className="space-y-3">
         <p className="text-xs text-[var(--fg-muted)]">
-          {t("pages.cores.subtitle", { defaultValue: "Read-only dumps of the live config the panel would push to each core right now." })}
+          {t("pages.cores.subtitle", { defaultValue: "Inspect cores." })}
         </p>
         <div className="flex flex-wrap items-center gap-2">
           {(["xray", "singbox", "telemt"] as const).map((k) => (
@@ -109,29 +137,60 @@ export default function Page() {
             </pre>
           </>
         ) : tab === "singbox" ? (
-          <>
+          <div className="space-y-5">
             <p className="text-[11px] text-[var(--fg-subtle)]">
-              {t("pages.cores.singboxHint", { defaultValue: "Singleton sing-box config." })}
+              {t("pages.cores.singboxHint", { defaultValue: "Singleton sing-box." })}
             </p>
-            {singbox?.configHash ? (
-              <p className="text-[11px] font-mono text-[var(--fg-muted)]">
-                {t("pages.cores.configHash", { defaultValue: "Hash" })}: {singbox.configHash.slice(0, 16)}…
-              </p>
-            ) : null}
-            <div className="flex justify-end">
-              <Button variant="secondary" onClick={() => copy(singboxJson)} disabled={!singboxJson}>
-                <Copy className="mr-1 size-4 inline" />
-                {t("pages.cores.copyButton", { defaultValue: "Copy" })}
-              </Button>
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                  {t("pages.cores.liveSection", { defaultValue: "Live config" })}
+                </p>
+                <div className="flex items-center gap-2">
+                  {singbox?.configHash ? (
+                    <span className="text-[11px] font-mono text-[var(--fg-muted)]">
+                      {t("pages.cores.configHash", { defaultValue: "Hash" })}: {singbox.configHash.slice(0, 16)}…
+                    </span>
+                  ) : null}
+                  <Button variant="secondary" onClick={() => copy(singboxJson)} disabled={!singboxJson}>
+                    <Copy className="mr-1 size-4 inline" />
+                    {t("pages.cores.copyButton", { defaultValue: "Copy" })}
+                  </Button>
+                </div>
+              </div>
+              <pre className="max-h-[50vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
+                {singboxJson || "{}"}
+              </pre>
             </div>
-            <pre className="max-h-[70vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
-              {singboxJson || "{}"}
-            </pre>
-          </>
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--fg-subtle)]">
+                  {t("pages.cores.overridesSection", { defaultValue: "Overrides (JSON)" })}
+                </p>
+                <Button
+                  onClick={() => void saveOverrides()}
+                  disabled={overridesSaving || !overridesDirty}
+                >
+                  {overridesSaving
+                    ? t("pages.cores.savingButton", { defaultValue: "Saving…" })
+                    : t("pages.cores.saveButton", { defaultValue: "Save + reload" })}
+                </Button>
+              </div>
+              <p className="mb-2 text-[11px] text-[var(--fg-subtle)]">
+                {t("pages.cores.overridesHint", { defaultValue: "JSON object with optional keys." })}
+              </p>
+              <textarea
+                value={overrides}
+                onChange={(e) => { setOverrides(e.target.value); setOverridesDirty(true); }}
+                spellCheck={false}
+                className="block w-full min-h-[200px] resize-y rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)] outline-none focus:border-[var(--accent)]"
+              />
+            </div>
+          </div>
         ) : (
           <>
             <p className="text-[11px] text-[var(--fg-subtle)]">
-              {t("pages.cores.telemtHint", { defaultValue: "Per-instance Telemt TOML files." })}
+              {t("pages.cores.telemtHint", { defaultValue: "Per-instance Telemt TOML." })}
             </p>
             {telemt.length === 0 ? (
               <p className="text-sm text-[var(--fg-muted)]">

@@ -84,7 +84,7 @@ import {
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
 import { CompareModeFilterField, type CompareOp } from "@/components/CompareModeFilterField";
-import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
+import { PageScaffold, PageHeader, SectionHelpModal, SingboxPendingBanner, Surface } from "@/components/panel";
 import {
   Button,
   CheckboxField,
@@ -721,6 +721,9 @@ export function InboundsPage() {
   const [deleting, setDeleting] = useState(false);
   const [toggleEnableBusyId, setToggleEnableBusyId] = useState<number | null>(null);
 
+  const [previewById, setPreviewById] = useState<null | { id: number; kind: string; protocol: string; config: unknown }>(null);
+  const [previewByIdLoading, setPreviewByIdLoading] = useState(false);
+
   const [modalOpen, setModalOpen] = useState(false);
   const [inboundModalView, setInboundModalView] = useState<"form" | "json">(
     "form",
@@ -843,6 +846,20 @@ export function InboundsPage() {
     setStep("basics");
     setFetchingInbound(false);
     setModalOpen(true);
+  };
+
+  const openConfigPreview = async (id: number) => {
+    setPreviewByIdLoading(true);
+    setPreviewById({ id, kind: "", protocol: "", config: null });
+    type R = { kind: string; protocol: string; config: unknown };
+    const r = await getJson<R>(panel(`api/inbounds/previewById/${id}`));
+    setPreviewByIdLoading(false);
+    if (r.success && r.obj) {
+      setPreviewById({ id, ...r.obj });
+    } else {
+      toast.error(r.msg || t("fail"));
+      setPreviewById(null);
+    }
   };
 
   const openEdit = async (id: number) => {
@@ -1802,6 +1819,7 @@ export function InboundsPage() {
           </>
         }
       />
+      <SingboxPendingBanner />
       <Reveal>
       {rows.length > 0 ? (
         <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -2046,6 +2064,15 @@ export function InboundsPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <div className="flex flex-wrap gap-1">
+                          <Button
+                            variant="secondary"
+                            className="!p-2"
+                            onClick={() => void openConfigPreview(r.id)}
+                            aria-label={t("pages.inbounds.previewConfig", { defaultValue: "View config" })}
+                            title={t("pages.inbounds.previewConfig", { defaultValue: "View config" })}
+                          >
+                            <Eye size={16} />
+                          </Button>
                           <Button
                             variant="danger"
                             className="!p-2"
@@ -5826,6 +5853,49 @@ export function InboundsPage() {
         danger
         loading={deleting}
       />
+
+      <Modal
+        open={previewById != null}
+        onClose={() => setPreviewById(null)}
+        title={
+          previewById
+            ? t("pages.inbounds.previewModalTitle", {
+                kind: previewById.kind || previewById.protocol,
+                id: previewById.id,
+                defaultValue: `Config — ${previewById.kind || previewById.protocol} #${previewById.id}`,
+              })
+            : ""
+        }
+        width={760}
+      >
+        {previewByIdLoading ? (
+          <div className="grid min-h-32 place-items-center"><Spinner size={28} /></div>
+        ) : previewById ? (
+          <pre className="max-h-[65vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono text-[var(--fg)]">
+            {previewById.kind === "telemt"
+              ? String(previewById.config || "")
+              : JSON.stringify(previewById.config, null, 2)}
+          </pre>
+        ) : null}
+        <div className="mt-3 flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              if (!previewById) return;
+              const text = previewById.kind === "telemt"
+                ? String(previewById.config || "")
+                : JSON.stringify(previewById.config, null, 2);
+              void navigator.clipboard.writeText(text);
+              toast.success(t("pages.cores.copiedToast", { defaultValue: "Copied" }));
+            }}
+          >
+            {t("copy")}
+          </Button>
+          <Button variant="secondary" onClick={() => setPreviewById(null)}>
+            {t("close")}
+          </Button>
+        </div>
+      </Modal>
     </PageScaffold>
   );
 }

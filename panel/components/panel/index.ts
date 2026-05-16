@@ -2,6 +2,7 @@ export { PageScaffold } from "./PageScaffold";
 export { PageHeader } from "./PageHeader";
 export { SectionHelpModal } from "./SectionHelpModal";
 export { Surface } from "./Surface";
+export { SingboxPendingBanner } from "./SingboxPendingBanner";
 export { StatusPill } from "./StatusPill";
 export { PanelShell } from "./PanelShell";
 export { PanelLayoutGate } from "./PanelLayoutGate";

@@ -269,6 +269,18 @@ func (s *SingboxConfigService) buildFromInboundsForNode(inbounds []*model.Inboun
 		"final": "direct",
 	}
 
+	// Splice admin-editable overrides last so they win over auto-built defaults.
+	// Supported keys: log, dns, experimental (deep-merged), route_extras
+	// (appended to route.rules). All optional; missing keys keep defaults.
+	if raw, err := s.settingService.getString("singboxOverrides"); err == nil && strings.TrimSpace(raw) != "" && raw != "{}" {
+		var ov map[string]any
+		if jErr := json.Unmarshal([]byte(raw), &ov); jErr == nil {
+			applySingboxOverrides(cfg, ov)
+		} else {
+			logger.Warningf("singbox: parse overrides JSON: %v", jErr)
+		}
+	}
+
 	out, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return SingboxNodePayload{}, fmt.Errorf("singbox: marshal cfg: %w", err)
@@ -278,6 +290,43 @@ func (s *SingboxConfigService) buildFromInboundsForNode(inbounds []*model.Inboun
 		Cfg:        string(out),
 		ConfigHash: hex.EncodeToString(sum[:]),
 	}, nil
+}
+
+// applySingboxOverrides splices admin-editable overrides into the auto-built
+// sing-box config. Honored keys:
+//   - log: replaces the auto-built log block entirely.
+//   - dns: set as cfg.dns (no merge — admin owns the whole block).
+//   - experimental: deep-merged onto auto-built experimental (so admin can add
+//     extras like cache_file without losing v2ray_api/clash_api).
+//   - route_extras: array of rule objects appended to cfg.route.rules so admin
+//     can add geo-based routing without redrawing the bridge plumbing.
+func applySingboxOverrides(cfg map[string]any, ov map[string]any) {
+	if v, ok := ov["log"]; ok && v != nil {
+		cfg["log"] = v
+	}
+	if v, ok := ov["dns"]; ok && v != nil {
+		cfg["dns"] = v
+	}
+	if v, ok := ov["experimental"]; ok {
+		if extra, ok2 := v.(map[string]any); ok2 {
+			if existing, ok3 := cfg["experimental"].(map[string]any); ok3 {
+				for k, val := range extra {
+					existing[k] = val
+				}
+			} else {
+				cfg["experimental"] = extra
+			}
+		}
+	}
+	if v, ok := ov["route_extras"]; ok {
+		if extras, ok2 := v.([]any); ok2 && len(extras) > 0 {
+			if route, ok3 := cfg["route"].(map[string]any); ok3 {
+				if rules, ok4 := route["rules"].([]any); ok4 {
+					route["rules"] = append(rules, extras...)
+				}
+			}
+		}
+	}
 }
 
 // parsePortList accepts a Hiddify-style port specification "443,2999,3001-3010"

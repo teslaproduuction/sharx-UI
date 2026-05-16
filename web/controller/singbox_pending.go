@@ -34,6 +34,39 @@ func (c *SingboxPendingController) initRouter(g *gin.RouterGroup) {
 	g.GET("/pending-count", c.pendingCount)
 	g.POST("/apply-pending", c.applyPending)
 	g.GET("/live-config", c.liveConfig)
+	g.GET("/overrides", c.getOverrides)
+	g.POST("/overrides", c.setOverrides)
+}
+
+// getOverrides returns the admin-editable JSON spliced into the auto-built
+// sing-box config (singboxOverrides setting). Empty {} means no overrides.
+func (c *SingboxPendingController) getOverrides(ctx *gin.Context) {
+	svc := service.SettingService{}
+	raw, err := svc.GetSingboxOverrides()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{"overrides": raw}})
+}
+
+// setOverrides validates incoming JSON, persists it, and triggers a sing-box
+// rebuild so changes are reflected immediately (next SIGHUP/spawn).
+func (c *SingboxPendingController) setOverrides(ctx *gin.Context) {
+	var body struct {
+		Overrides string `json:"overrides"`
+	}
+	if err := ctx.ShouldBindJSON(&body); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	svc := service.SettingService{}
+	if err := svc.SetSingboxOverrides(body.Overrides); err != nil {
+		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	service.TryApplyLocalSingboxStandalone(nil)
+	ctx.JSON(http.StatusOK, gin.H{"success": true})
 }
 
 // liveConfig returns the aggregated sing-box config the panel would push to
