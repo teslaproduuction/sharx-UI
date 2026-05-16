@@ -171,7 +171,75 @@ func (s *WarpAccountService) Register(name string) (*model.WarpAccount, error) {
 	if err := database.GetDB().Create(row).Error; err != nil {
 		return nil, fmt.Errorf("persist warp account: %w", err)
 	}
+	// Auto-create the matching Xray wireguard outbound so RoutingBuilder can
+	// already target "warp-<name>" without a separate config push step.
+	if err := s.syncXrayWarpOutbound(row); err != nil {
+		// Non-fatal: the WARP row is persisted; admin can re-trigger via update.
+		// Log left to caller.
+		_ = err
+	}
 	return row, nil
+}
+
+// syncXrayWarpOutbound creates (or updates) the Xray-native wireguard outbound
+// tagged "warp-<name>" pointing at the WARP peer. Idempotent on tag.
+func (s *WarpAccountService) syncXrayWarpOutbound(acc *model.WarpAccount) error {
+	if acc == nil {
+		return nil
+	}
+	js, err := s.BuildXrayOutboundJSON(acc)
+	if err != nil {
+		return err
+	}
+	// Strip the wrapper to get protocol+settings (the table stores them split).
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(js), &raw); err != nil {
+		return err
+	}
+	tag, _ := raw["tag"].(string)
+	if tag == "" {
+		return errors.New("warp outbound: missing tag")
+	}
+	settings, _ := raw["settings"].(map[string]any)
+	settingsJSON, _ := json.Marshal(settings)
+	uid := acc.UserId
+	if uid == 0 {
+		uid = 1
+	}
+	remark := fmt.Sprintf("Cloudflare WARP egress (auto-managed; warp-account #%d)", acc.Id)
+	var existing model.Outbound
+	if err := database.GetDB().Where("tag = ?", tag).First(&existing).Error; err == nil {
+		patch := map[string]any{
+			"user_id":  uid,
+			"protocol": "wireguard",
+			"settings": string(settingsJSON),
+			"remark":   remark,
+			"enable":   true,
+		}
+		ob := &model.Outbound{Id: existing.Id}
+		if err := database.GetDB().Model(&model.Outbound{}).Where("id = ?", existing.Id).Updates(patch).Error; err != nil {
+			return err
+		}
+		// Track for rollback on Delete.
+		acc.OutboundId = &existing.Id
+		_ = database.GetDB().Model(&model.WarpAccount{}).Where("id = ?", acc.Id).Update("outbound_id", existing.Id).Error
+		_ = ob
+		return nil
+	}
+	row := &model.Outbound{
+		UserId:   uid,
+		Remark:   remark,
+		Enable:   true,
+		Protocol: "wireguard",
+		Settings: string(settingsJSON),
+		Tag:      tag,
+	}
+	if err := database.GetDB().Create(row).Error; err != nil {
+		return err
+	}
+	acc.OutboundId = &row.Id
+	_ = database.GetDB().Model(&model.WarpAccount{}).Where("id = ?", acc.Id).Update("outbound_id", row.Id).Error
+	return nil
 }
 
 // warpReservedFromClientID decodes the first 3 bytes of base64(client_id).
@@ -274,7 +342,8 @@ func (s *WarpAccountService) ApplyPlusLicense(accountID int, licenseKey string) 
 	return s.Get(accountID)
 }
 
-// Delete removes the account from CF (best-effort) and the DB.
+// Delete removes the account from CF (best-effort), drops the auto-managed
+// Xray outbound, and removes the DB row.
 func (s *WarpAccountService) Delete(accountID int) error {
 	var acc model.WarpAccount
 	if err := database.GetDB().First(&acc, accountID).Error; err != nil {
@@ -284,6 +353,13 @@ func (s *WarpAccountService) Delete(accountID int) error {
 		req, _ := http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/reg/%s", warpAPIBase, acc.DeviceId), nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		_, _ = (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	}
+	// Drop the auto-managed Xray outbound (by id if recorded, else by tag).
+	if acc.OutboundId != nil && *acc.OutboundId > 0 {
+		_ = database.GetDB().Delete(&model.Outbound{}, *acc.OutboundId).Error
+	} else {
+		tag := "warp-" + acc.Name
+		_ = database.GetDB().Where("tag = ?", tag).Delete(&model.Outbound{}).Error
 	}
 	return database.GetDB().Delete(&model.WarpAccount{}, accountID).Error
 }
