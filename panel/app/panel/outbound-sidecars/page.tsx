@@ -321,6 +321,30 @@ export default function Page() {
           <div className="rounded-lg border border-[var(--border)] p-3">
             <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundSidecars.fieldNodes", { defaultValue: "Nodes (multi-select; empty = panel-host hub)" })}</label>
             <div className="flex flex-wrap gap-2">
+              {(() => {
+                const on = nodeIds.length === 0 || nodeIds.includes(0);
+                return (
+                  <button
+                    key="panel-host"
+                    type="button"
+                    className={`rounded-full border px-2 py-0.5 text-[11px] ${on ? "border-[var(--accent)] bg-[var(--accent)] text-[var(--accent-fg)]" : "border-[var(--border)] text-[var(--fg-muted)]"}`}
+                    onClick={() => setNodeIds((cur) => {
+                      const has0 = cur.includes(0);
+                      const onlyPanelImplicit = cur.length === 0;
+                      if (has0 || onlyPanelImplicit) {
+                        // Was on (explicit 0 or implicit empty) → turn off panel-host.
+                        // If no other selections, force at least one explicit worker to avoid
+                        // confusing "empty = panel-host" ambiguity. Easier: leave empty (= panel-host).
+                        return cur.filter((x) => x !== 0);
+                      }
+                      return [0, ...cur];
+                    })}
+                    title={t("pages.outboundSidecars.panelHostHint", { defaultValue: "Run on the panel host (cascade hub). Empty selection means the same thing implicitly." })}
+                  >
+                    {t("pages.outboundSidecars.panelHostOption", { defaultValue: "panel-host" })}
+                  </button>
+                );
+              })()}
               {nodes.length === 0 ? (
                 <span className="text-xs text-[var(--fg-subtle)]">{t("pages.outboundSidecars.nodesEmpty", { defaultValue: "No worker nodes registered — sidecar runs on panel host." })}</span>
               ) : nodes.map((n) => {

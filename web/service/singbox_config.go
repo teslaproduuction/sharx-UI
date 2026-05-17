@@ -71,7 +71,17 @@ func (s *SingboxConfigService) BuildSingboxConfigStandalone() (SingboxNodePayloa
 		if berr != nil {
 			continue
 		}
-		if len(bindings) == 0 {
+		// Panel-host inbound = no bindings (legacy) OR explicit binding to
+		// nodeId=0 (new convention: operator selected "panel-host" in the
+		// node multi-select alongside other workers).
+		hub := len(bindings) == 0
+		for _, b := range bindings {
+			if b.NodeId == 0 {
+				hub = true
+				break
+			}
+		}
+		if hub {
 			hubInbounds = append(hubInbounds, inb)
 		}
 	}
