@@ -84,7 +84,48 @@ func (a *NodeController) getClientTrafficPerNode(c *gin.Context) {
 // into the worker or waiting for the next reload.
 func (a *NodeController) previewNodeConfig(c *gin.Context) {
 	id, err := strconv.Atoi(c.Param("id"))
-	if err != nil || id <= 0 {
+	if err != nil {
+		jsonMsg(c, "invalid id", fmt.Errorf("bad id"))
+		return
+	}
+
+	// id=0 is the synthetic "panel-host" node — same physical box as the
+	// panel, runs the standalone xray/sing-box/telemt builds. Returns the
+	// same payload shape as a worker so the UI tabs stay symmetric.
+	if id == 0 {
+		xraySvc := service.XrayService{}
+		xrayCfg, xerr := xraySvc.GetXrayConfig()
+		if xerr != nil {
+			jsonMsg(c, "Failed to build xray config", xerr)
+			return
+		}
+		singboxSvc := service.SingboxConfigService{}
+		sbx, _ := singboxSvc.BuildSingboxConfigStandalone()
+		var sbxObj any
+		if sbx.Cfg != "" {
+			_ = json.Unmarshal([]byte(sbx.Cfg), &sbxObj)
+		}
+		telemt, _ := service.BuildTelemtPayloadsStandalone()
+		jsonObj(c, gin.H{
+			"node": gin.H{
+				"id":           0,
+				"name":         "panel-host",
+				"address":      "localhost",
+				"status":       "online",
+				"isPanelHost":  true,
+			},
+			"xray":            xrayCfg,
+			"xrayProfileHash": "",
+			"telemt":          telemt,
+			"singbox": gin.H{
+				"config":     sbxObj,
+				"configHash": sbx.ConfigHash,
+			},
+		}, nil)
+		return
+	}
+
+	if id < 0 {
 		jsonMsg(c, "invalid id", fmt.Errorf("bad id"))
 		return
 	}
