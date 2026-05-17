@@ -268,7 +268,23 @@ export default function Page() {
                   <td className="p-3 font-mono text-xs text-[var(--fg)]">{r.name}</td>
                   <td className="p-3 text-xs">{r.kind}</td>
                   <td className="p-3 font-mono text-xs">127.0.0.1:{r.listenPort}</td>
-                  <td className="p-3 text-xs">{(r.nodeIds && r.nodeIds.length > 0) ? r.nodeIds.join(",") : "hub"}</td>
+                  <td className="p-3 text-xs">
+                    {(() => {
+                      const ids = (r.nodeIds || []).filter((n) => n !== 0);
+                      const hasHub = (r.nodeIds || []).length === 0 || (r.nodeIds || []).includes(0);
+                      if (multiNode && ids.length === 0) {
+                        return (
+                          <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300" title="Multi-node mode: assign at least one worker">
+                            orphan
+                          </span>
+                        );
+                      }
+                      const parts: string[] = [];
+                      if (hasHub) parts.push(multiNode ? "" : "panel-host");
+                      if (ids.length) parts.push(...ids.map(String));
+                      return parts.filter(Boolean).join(",") || "—";
+                    })()}
+                  </td>
                   <td className="p-3 text-xs">{r.enable ? "yes" : "no"}</td>
                   <td className="p-3">
                     <div className="flex gap-1">
