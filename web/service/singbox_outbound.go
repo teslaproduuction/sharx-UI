@@ -433,14 +433,23 @@ func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, b
 			continue
 		}
 		// nodeID > 0  → worker context: only sidecars assigned to this worker.
-		// nodeID == -1 → panel-host "hub" context (multi-node mode): only
-		//                sidecars NOT assigned to any worker (NodeIds empty).
+		// nodeID == -1 → panel-host "hub" context (multi-node mode): sidecars
+		//                with no NodeIds OR with explicit panel-host marker 0.
 		// nodeID == 0 → standalone: include every sidecar.
 		if nodeID > 0 && !sidecarAssignedToNode(sc, nodeID) {
 			continue
 		}
-		if nodeID == -1 && len(sc.NodeIds) > 0 {
-			continue
+		if nodeID == -1 {
+			panelHostOnly := len(sc.NodeIds) == 0
+			for _, nid := range sc.NodeIds {
+				if nid == 0 {
+					panelHostOnly = true
+					break
+				}
+			}
+			if !panelHostOnly {
+				continue
+			}
 		}
 		frag, err := BuildSingboxOutboundForSidecar(sc)
 		if err != nil {
