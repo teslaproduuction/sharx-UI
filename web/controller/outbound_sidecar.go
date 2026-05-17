@@ -74,6 +74,13 @@ func (c *OutboundSidecarController) add(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	// Multi-mode: workers also need the updated sing-box config (they hold
+	// the sidecar runtime, not the panel host). RestartXrayAsync triggers
+	// restartXrayMultiMode which pushes per-node envelopes including the
+	// rebuilt sing-box payload. Standalone-mode: the local-apply call below
+	// is the only path needed.
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	service.TryApplyLocalSingboxStandalone(nil)
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": sc})
 }
@@ -94,6 +101,13 @@ func (c *OutboundSidecarController) update(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	// Multi-mode: workers also need the updated sing-box config (they hold
+	// the sidecar runtime, not the panel host). RestartXrayAsync triggers
+	// restartXrayMultiMode which pushes per-node envelopes including the
+	// rebuilt sing-box payload. Standalone-mode: the local-apply call below
+	// is the only path needed.
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	service.TryApplyLocalSingboxStandalone(nil)
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": sc})
 }
@@ -108,6 +122,13 @@ func (c *OutboundSidecarController) del(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	// Multi-mode: workers also need the updated sing-box config (they hold
+	// the sidecar runtime, not the panel host). RestartXrayAsync triggers
+	// restartXrayMultiMode which pushes per-node envelopes including the
+	// rebuilt sing-box payload. Standalone-mode: the local-apply call below
+	// is the only path needed.
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	service.TryApplyLocalSingboxStandalone(nil)
 	ctx.JSON(http.StatusOK, gin.H{"success": true})
 }
