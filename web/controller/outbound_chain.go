@@ -66,6 +66,11 @@ func (c *OutboundChainController) add(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	// Chain entries land in routing.balancers + observatory.subjectSelector
+	// at xray-config build time. Restart picks them up on the panel host
+	// (standalone) or pushes them out to all workers (multi-mode).
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": ch})
 }
 
@@ -85,6 +90,8 @@ func (c *OutboundChainController) update(ctx *gin.Context) {
 		ctx.JSON(http.StatusBadRequest, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": ch})
 }
 
@@ -98,6 +105,8 @@ func (c *OutboundChainController) del(ctx *gin.Context) {
 		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
 		return
 	}
+	xs := service.XrayService{}
+	xs.RestartXrayAsync(false)
 	ctx.JSON(http.StatusOK, gin.H{"success": true})
 }
 
