@@ -129,13 +129,17 @@ export default function Page() {
   const [preview, setPreview] = useState<PreviewFragments | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
 
+  const [multiNode, setMultiNode] = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const r = await getJson<Sidecar[]>(panel("outbound-sidecar/list"));
     const nr = await getJson<Node[]>(panel("node/list"));
+    const sr = await postJson<Record<string, unknown>>(panel("setting/all"), {}, true);
     setLoading(false);
     if (r.success && Array.isArray(r.obj)) setRows(r.obj);
     if (nr.success && Array.isArray(nr.obj)) setNodes(nr.obj);
+    if (sr.success && sr.obj) setMultiNode(Boolean(sr.obj.multiNodeMode));
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -321,7 +325,7 @@ export default function Page() {
           <div className="rounded-lg border border-[var(--border)] p-3">
             <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundSidecars.fieldNodes", { defaultValue: "Nodes (multi-select; empty = panel-host hub)" })}</label>
             <div className="flex flex-wrap gap-2">
-              {(() => {
+              {!multiNode ? (() => {
                 const on = nodeIds.length === 0 || nodeIds.includes(0);
                 return (
                   <button
@@ -332,9 +336,6 @@ export default function Page() {
                       const has0 = cur.includes(0);
                       const onlyPanelImplicit = cur.length === 0;
                       if (has0 || onlyPanelImplicit) {
-                        // Was on (explicit 0 or implicit empty) → turn off panel-host.
-                        // If no other selections, force at least one explicit worker to avoid
-                        // confusing "empty = panel-host" ambiguity. Easier: leave empty (= panel-host).
                         return cur.filter((x) => x !== 0);
                       }
                       return [0, ...cur];
@@ -344,7 +345,13 @@ export default function Page() {
                     {t("pages.outboundSidecars.panelHostOption", { defaultValue: "panel-host" })}
                   </button>
                 );
-              })()}
+              })() : (
+                <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-300">
+                  {t("pages.outboundSidecars.multiNodePanelHostHidden", {
+                    defaultValue: "Multi-node mode: panel-host runs no workload. Assign a worker.",
+                  })}
+                </span>
+              )}
               {nodes.length === 0 ? (
                 <span className="text-xs text-[var(--fg-subtle)]">{t("pages.outboundSidecars.nodesEmpty", { defaultValue: "No worker nodes registered — sidecar runs on panel host." })}</span>
               ) : nodes.map((n) => {

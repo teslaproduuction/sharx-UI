@@ -1178,17 +1178,22 @@ export function NodesPage() {
   };
 
   // Synthetic panel-host row pinned to the top so the operator always sees
-  // VPS1 (panel + workers hybrid) as the first node. Id=0 is a sentinel —
-  // backend recognizes it in previewNodeConfig and routes to the standalone
-  // builders. Edit/Delete are hidden client-side; Eye works.
+  // VPS with the panel as the first node. Id=0 is a sentinel — backend
+  // recognizes it in previewNodeConfig and routes to the standalone builders.
+  // Edit/Delete are hidden client-side; Eye works.
+  //
+  // In multi-node mode the panel host is a pure orchestrator (no xray /
+  // sing-box / telemt) per the user-decision in Phase 9. The row stays so
+  // operators understand the topology, but the workload-state badges render
+  // as "orchestrator (no workload)" via xrayState="orchestrator".
   const panelHostRow: NodeRow = {
     id: 0,
     name: "panel-host",
     address: "localhost",
     status: "online",
     enable: true,
-    xrayState: "running",
-    telemtState: "running",
+    xrayState: multiNode ? "orchestrator" : "running",
+    telemtState: multiNode ? "orchestrator" : "running",
     lastCheck: Math.floor(Date.now() / 1000),
     responseTime: 0,
   };
@@ -1373,7 +1378,9 @@ export function NodesPage() {
                       {r.name}
                       {r.id === 0 ? (
                         <span className="ml-2 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] text-[var(--accent)]">
-                          {t("pages.nodes.panelHostBadge", { defaultValue: "panel host" })}
+                          {multiNode
+                            ? t("pages.nodes.panelHostOrchestratorBadge", { defaultValue: "panel host (orchestrator, no workload)" })
+                            : t("pages.nodes.panelHostBadge", { defaultValue: "panel host" })}
                         </span>
                       ) : null}
                     </td>

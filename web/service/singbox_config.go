@@ -49,14 +49,22 @@ type SingboxConfigService struct {
 // outbound to IN worker, while workers run their own per-node subset via
 // apply-config envelope.
 func (s *SingboxConfigService) BuildSingboxConfigStandalone() (SingboxNodePayload, error) {
+	multi, _ := s.settingService.GetMultiNodeMode()
+	if multi {
+		// Multi-node hybrid model: the panel host is a pure orchestrator and
+		// runs NO workload — every inbound + sidecar must be bound to a worker
+		// node. Returning an empty payload tells the caller to stop the local
+		// sing-box child if one is still running from a prior standalone
+		// session. Cascade hubs that previously lived on the panel host should
+		// now be assigned to a worker (e.g. the RU exit node) via the Node
+		// selector in the Sidecar / Inbound modals.
+		return SingboxNodePayload{}, nil
+	}
 	allInbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
 		return SingboxNodePayload{}, fmt.Errorf("singbox: load inbounds: %w", err)
 	}
-	multi, _ := s.settingService.GetMultiNodeMode()
-	if !multi {
-		return s.buildFromInbounds(allInbounds)
-	}
+	return s.buildFromInbounds(allInbounds)
 	// Multi-node: keep only inbounds with no node assignment.
 	hubInbounds := make([]*model.Inbound, 0, len(allInbounds))
 	nodeSvc := NodeService{}
