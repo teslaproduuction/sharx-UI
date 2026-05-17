@@ -93,6 +93,30 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 	// panel, runs the standalone xray/sing-box/telemt builds. Returns the
 	// same payload shape as a worker so the UI tabs stay symmetric.
 	if id == 0 {
+		settingSvc := service.SettingService{}
+		multi, _ := settingSvc.GetMultiNodeMode()
+		if multi {
+			// Multi-node hybrid: panel host runs no workload. Show empties so
+			// the operator doesn't think there's a hidden config being pushed.
+			jsonObj(c, gin.H{
+				"node": gin.H{
+					"id":          0,
+					"name":        "panel-host",
+					"address":     "localhost",
+					"status":      "online",
+					"isPanelHost": true,
+					"role":        "orchestrator",
+				},
+				"xray":            nil,
+				"xrayProfileHash": "",
+				"telemt":          []any{},
+				"singbox": gin.H{
+					"config":     nil,
+					"configHash": "",
+				},
+			}, nil)
+			return
+		}
 		xraySvc := service.XrayService{}
 		xrayCfg, xerr := xraySvc.GetXrayConfig()
 		if xerr != nil {
@@ -108,11 +132,12 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 		telemt, _ := service.BuildTelemtPayloadsStandalone()
 		jsonObj(c, gin.H{
 			"node": gin.H{
-				"id":           0,
-				"name":         "panel-host",
-				"address":      "localhost",
-				"status":       "online",
-				"isPanelHost":  true,
+				"id":          0,
+				"name":        "panel-host",
+				"address":     "localhost",
+				"status":      "online",
+				"isPanelHost": true,
+				"role":        "standalone",
 			},
 			"xray":            xrayCfg,
 			"xrayProfileHash": "",

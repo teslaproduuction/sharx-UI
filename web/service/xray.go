@@ -449,13 +449,23 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	}
 
 	if multiMode {
+		// Multi-node hybrid model (per user-decision): panel host is a pure
+		// orchestrator. All local children (telemt + sing-box + xray itself)
+		// are stopped; every workload is pushed to worker nodes via the
+		// per-node apply-config envelope. Cascade hubs that previously lived
+		// on the panel host must be reassigned to a worker (e.g. RU exit node).
 		StopLocalTelemtStandalone()
-		// Sing-box is NOT stopped on multi-node — the panel host runs sing-box
-		// as a cascade hub serving inbounds/sidecars with empty NodeIds. The
-		// per-mode filter inside BuildSingboxConfigStandalone keeps it limited
-		// to hub-scoped items; workers still get their own subset via
-		// apply-config envelope.
+		// BuildSingboxConfigStandalone returns an empty payload when multi-
+		// mode is on, so Apply will stop the local sing-box if any is left
+		// over from a prior standalone session.
 		TryApplyLocalSingboxStandalone(s)
+		// Stop the panel-host Xray too — workers run their own Xray instance
+		// per the node-API push. Leaving a panel-host Xray idle is harmless
+		// today but doubles the surface area for restart races.
+		if s.IsXrayRunning() {
+			s.CloseAPIConnections()
+			p.Stop()
+		}
 		return s.restartXrayMultiMode(isForce)
 	}
 
