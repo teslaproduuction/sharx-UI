@@ -1177,13 +1177,30 @@ export function NodesPage() {
     return t("pages.nodes.authLegacy");
   };
 
+  // Synthetic panel-host row pinned to the top so the operator always sees
+  // VPS1 (panel + workers hybrid) as the first node. Id=0 is a sentinel —
+  // backend recognizes it in previewNodeConfig and routes to the standalone
+  // builders. Edit/Delete are hidden client-side; Eye works.
+  const panelHostRow: NodeRow = {
+    id: 0,
+    name: "panel-host",
+    address: "localhost",
+    status: "online",
+    enable: true,
+    xrayState: "running",
+    telemtState: "running",
+    lastCheck: Math.floor(Date.now() / 1000),
+    responseTime: 0,
+  };
+
   const sortedAndFilteredRows = useMemo(() => {
     const q = nameFilter.trim().toLowerCase();
     const byId = [...rows].sort((a, b) => {
       if (a.id !== b.id) return a.id - b.id;
       return a.name.localeCompare(b.name);
     });
-    return byId.filter((r) => {
+    const withSelf = [panelHostRow, ...byId];
+    return withSelf.filter((r) => {
       if (q) {
         const name = (r.name || "").toLowerCase();
         const address = (r.address || "").toLowerCase();
@@ -1329,9 +1346,9 @@ export function NodesPage() {
                     tabIndex={0}
                     className={`border-b border-[var(--border)] text-[var(--fg-muted)] hover:bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] ${
                       r.enable === false ? "opacity-[0.7]" : ""
-                    } cursor-pointer`}
-                    onClick={() => void openEdit(r)}
-                    onKeyDown={(e) => {
+                    } ${r.id === 0 ? "" : "cursor-pointer"}`}
+                    onClick={r.id === 0 ? undefined : () => void openEdit(r)}
+                    onKeyDown={r.id === 0 ? undefined : (e) => {
                       if (e.key === "Enter" || e.key === " ") {
                         e.preventDefault();
                         void openEdit(r);
@@ -1352,7 +1369,14 @@ export function NodesPage() {
                         }}
                       />
                     </td>
-                    <td className="p-3 text-[var(--fg)]">{r.name}</td>
+                    <td className="p-3 text-[var(--fg)]">
+                      {r.name}
+                      {r.id === 0 ? (
+                        <span className="ml-2 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] text-[var(--accent)]">
+                          {t("pages.nodes.panelHostBadge", { defaultValue: "panel host" })}
+                        </span>
+                      ) : null}
+                    </td>
                     <td className="p-3 font-mono text-xs">{r.address}</td>
                     <td className="p-3 text-xs">{authModeLabel(r.authMode)}</td>
                     <td className="p-3">
@@ -1511,16 +1535,18 @@ export function NodesPage() {
                         >
                           <Eye size={16} />
                         </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          className="!p-1.5 text-[var(--fg-muted)] hover:text-[var(--danger)]"
-                          onClick={() => setDeleteTarget(r)}
-                          title={t("pages.nodes.deleteNode")}
-                          aria-label={t("pages.nodes.deleteNode")}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
+                        {r.id !== 0 ? (
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            className="!p-1.5 text-[var(--fg-muted)] hover:text-[var(--danger)]"
+                            onClick={() => setDeleteTarget(r)}
+                            title={t("pages.nodes.deleteNode")}
+                            aria-label={t("pages.nodes.deleteNode")}
+                          >
+                            <Trash2 size={16} />
+                          </Button>
+                        ) : null}
                       </div>
                     </td>
                   </tr>
