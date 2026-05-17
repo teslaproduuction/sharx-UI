@@ -172,6 +172,11 @@ updateSidecarTrigger = "Run update now"
 updateSidecarTriggering = "Running…"
 xrayGeoFiles = "Geo-files"
 xrayToggle = "Toggle Xray sections"
+outboundSidecars = "Outbound Sidecars"
+outboundChains = "Outbound Chains"
+warpAccounts = "WARP Accounts"
+coresInspector = "Cores Inspector"
+cloudflare = "Cloudflare"
 
 [pages.login]
 hello = "سلام"
@@ -613,6 +618,13 @@ wsPath = "WS path"
 xhttpAddHeader = "Add"
 xhttpHint = "XHTTP (SplitHTTP) — same fields as 3x-ui / Xray xhttpSettings (request headers, mode, padding, session, uplink)."
 xrayCorePreviewHint = "Single inbound object as it is merged into the Xray core config (listen, port, tag, protocol, settings, streamSettings, sniffing). Panel API request format is not shown here."
+previewConfig = "View config"
+previewModalTitle = "Config — {{kind}} #{{id}}"
+pendingBanner = "{{count}} sing-box change(s) pending — apply to reload (active sessions will reset)."
+pendingApply = "Apply now"
+pendingApplying = "Applying…"
+pendingApplied = "Applied — sing-box reloaded"
+pendingApplyFailed = "Apply failed"
 
   [pages.inbounds.periodicTrafficReset]
   never = "هرگز"
@@ -848,26 +860,26 @@ grafanaDashboard = "Grafana Dashboard"
 grafanaDashboardDesc = "Download ready-to-use Grafana dashboard JSON file"
 grafanaMetricsEndpoint = "Prometheus Metrics Endpoint"
 grafanaMetricsEndpointDesc = """
-Metrics are available at: /panel/metrics
-
-To configure Grafana/Prometheus scraping:
-1. Add a Prometheus data source in Grafana pointing to your SharX panel
-2. Configure scrape job with target: http://your-panel-host:port/panel/metrics
-3. Import the downloaded dashboard JSON file
-
-Example Prometheus scrape config:
-- job_name: 'sharx'
-  scrape_interval: 30s
-  static_configs:
-    - targets: ['your-panel-host:port']
+Metrics are available at: /panel/metrics\r
+\r
+To configure Grafana/Prometheus scraping:\r
+1. Add a Prometheus data source in Grafana pointing to your SharX panel\r
+2. Configure scrape job with target: http://your-panel-host:port/panel/metrics\r
+3. Import the downloaded dashboard JSON file\r
+\r
+Example Prometheus scrape config:\r
+- job_name: 'sharx'\r
+  scrape_interval: 30s\r
+  static_configs:\r
+    - targets: ['your-panel-host:port']\r
       metrics_path: '/panel/metrics'"""
 grafanaIntegrationEnabled = "Grafana Integration Enabled"
 grafanaIntegrationEnabledDesc = """
-When Grafana integration is enabled:
-• All logs (x-ui, xray, and node logs) will be sent to Loki
-• Local file logging will be disabled
-• All log levels (DEBUG, INFO, WARNING, ERROR) will be enabled
-• Metrics will be exported in Prometheus format
+When Grafana integration is enabled:\r
+• All logs (x-ui, xray, and node logs) will be sent to Loki\r
+• Local file logging will be disabled\r
+• All log levels (DEBUG, INFO, WARNING, ERROR) will be enabled\r
+• Metrics will be exported in Prometheus format\r
 • Metrics can be scraped from /panel/metrics endpoint"""
 subpageConfigUuid = "Config UUID"
 subpageConfigName = "Display name"
@@ -999,6 +1011,7 @@ remarkModelDragHint = "Drag to reorder"
   ldap = "LDAP"
   grafana = "Grafana"
   admin = "Admin & restart"
+  panelSecurity = "Panel masking"
 
   [pages.settings.sections]
   generalInterface = "Interface"
@@ -1146,6 +1159,37 @@ remarkModelDragHint = "Drag to reorder"
   brandText = "Brand Text"
   brandTextDesc = "Text to display next to the logo"
   brandTextPlaceholder = "Brand name or text"
+
+  [pages.settings.panelMasking]
+  bannerTitle = "Caddy front-door masking is active"
+  bannerDesc = "Panel reachable only at /<secret-prefix>/. Every other path transparently mirrors the configured decoy URL (Hiddify pattern). Active probes for /admin, /x-ui/, /wp-admin etc. see the upstream site, not SharX."
+  prefixSection = "Panel secret URL prefix"
+  prefixDesc = "Random 16-byte path that hides the panel UI. Full URL: https://<your-domain>/{{prefix}}/"
+  copyButton = "Copy"
+  rotateButton = "Rotate"
+  rotateWarn = "Rotating invalidates ALL admin sessions. After rotate, restart Caddy ({{cmd}}) and re-login at the new URL."
+  prefixCopied = "Secret prefix copied to clipboard."
+  decoySection = "Decoy URL"
+  decoyDesc = "Caddy transparently reverse-proxies all unrecognized paths to this URL. Pick a plausible third-party site that returns sensible content for arbitrary paths. Examples: https://news.ycombinator.com, https://en.wikipedia.org."
+  decoyPlaceholder = "https://news.ycombinator.com"
+  decoySave = "Save"
+  decoyHttpsErr = "Must start with https://"
+  mascaraedSection = "Mascaraed mode"
+  mascaraedDesc = "After install, the bare root path / serves the SharX welcome page for {{hours}}h so admins can complete setup. Once the timer expires, root / also routes to the decoy and the panel becomes invisible without the secret prefix."
+  mascaraedActiveBanner = "Mascaraed mode is ACTIVE — root path mirrors the decoy."
+  mascaraedCountdown = "Active in {{time}}"
+  activateNow = "Activate mascaraed mode now"
+  applyTitle = "Apply changes"
+  applyDesc = "Phase 1 is a baseline — rotate / decoy URL changes require a Caddy reload to take effect. Run on the host: {{cmd}}. Phase 5 will automate this via the Caddy admin API at {{admin}}."
+  rotateConfirmTitle = "Rotate panel secret prefix?"
+  rotateConfirmDesc = "All admin sessions will be invalidated. The current panel URL will stop working. You'll need to restart Caddy and re-login via the new URL."
+  rotateSuccess = "New secret prefix generated. Restart Caddy ({{cmd}}) and re-login via /{{prefix}}/."
+  rotateFailed = "Rotate prefix failed: {{err}}"
+  decoySaveSuccess = "Decoy URL saved. Restart Caddy ({{cmd}}) to apply."
+  decoySaveFailed = "Save decoy URL failed: {{err}}"
+  activateSuccess = "Mascaraed mode activated — root '/' now also routes to the decoy."
+  activateFailed = "Activate mascaraed failed: {{err}}"
+  statusLoadFailed = "Failed to load panel security status: {{err}}"
 
 [pages.xray]
 title = "پیکربندی ایکس‌ری"
@@ -1694,6 +1738,8 @@ xrayRestartSuccess = "Xray restarted on node"
 xrayRestartError = "Failed to restart Xray on node"
 telemtRestartSuccess = "Telemt restarted on node"
 telemtRestartError = "Failed to restart Telemt on node"
+previewConfig = "View config envelope"
+previewModalTitle = "Config envelope — {{name}} #{{id}}"
 
   [pages.nodes.geography]
   title = "Node geography"
@@ -2139,6 +2185,25 @@ clientDisplay = "{{count}} clients"
 
 [pages.outbounds]
 title = "Outbounds"
+subtitle = "Xray outbound entries (cascade members, WARP egress, raw imports). Use Import to paste vless/vmess/trojan/ss/socks/http share links."
+importButton = "Import from URI"
+importTitle = "Import outbound URIs"
+importHint = "One URI per line. Supported: vless:// vmess:// trojan:// ss:// socks:// http(s)://"
+parseButton = "Parse"
+parsing = "Parsing…"
+saving = "Saving…"
+saveAllButton = "Save {{count}}"
+empty = "No outbounds."
+colRemark = "Remark"
+colTag = "Tag"
+colProtocol = "Protocol"
+colHealth = "Health"
+colActions = "Actions"
+testButton = "Test"
+testAllButton = "Test all"
+deleteConfirm = "Delete outbound #{{id}}?"
+nothingToSave = "Nothing valid to save"
+imported = "Imported {{added}}, failed {{failed}}"
 
 [pages.outboundsNodes]
 title = "Node Outbounds"
@@ -2239,6 +2304,155 @@ text = "در تلگرام: تنظیمات → پیشرفته → نوع اتصا
   [pages.publicSub.mtproto]
   addProxy = "افزودن پروکسی"
 
+[pages.outboundSidecars]
+title = "Outbound Sidecars"
+subtitle = "Cascade members. Each row spawns a sing-box client outbound + 127.0.0.1:listen_port bridge + auto-created Xray socks-out tagged <name>-local. Empty Nodes list = panel host (cascade hub)."
+addButton = "Add sidecar"
+editTitle = "Edit sidecar #{{id}}"
+addTitle = "Add sidecar"
+deleteConfirm = "Delete sidecar #{{id}}? Auto-created Xray outbound row will be removed too."
+emptyState = "No sidecars yet."
+colName = "Name"
+colKind = "Kind"
+colBridge = "Bridge"
+colNodes = "Nodes"
+colEnable = "Enable"
+colActions = "Actions"
+fieldName = "Name"
+fieldKind = "Kind"
+fieldListenPort = "Listen port (local bridge)"
+fieldEnabled = "Enabled"
+fieldNodes = "Nodes (multi-select; empty = panel-host hub)"
+nodesEmpty = "No worker nodes registered — sidecar runs on panel host."
+targetSection = "Target ({{kind}})"
+previewButton = "Preview config"
+previewTitle = "Sing-box client outbound config"
+nameRequired = "Name required"
+createdToast = "Created"
+updatedToast = "Updated"
+failedToast = "Failed"
+
+[pages.outboundChains]
+title = "Outbound Chains"
+subtitle = 'Xray routing.balancers entries. Strategy "leastPing" picks the lowest-latency member via observatory probes. Members are any Xray outbound tag (cascade bridge, WARP, native VLESS/Trojan).'
+addButton = "+ Add chain"
+addTitle = "Add chain"
+editTitle = "Edit chain #{{id}}"
+deleteConfirm = "Delete chain #{{id}}?"
+emptyState = "No chains."
+colName = "Name"
+colStrategy = "Strategy"
+colMembers = "Members"
+colInterval = "Interval (s)"
+colEnable = "Enable"
+colActions = "Actions"
+fieldName = "Name (becomes balancerTag)"
+fieldStrategy = "Strategy"
+fieldProbeUrl = "Probe URL"
+fieldProbeInterval = "Probe interval (seconds)"
+fieldEnabled = "Enabled"
+fieldMembers = "Members (Xray outbound tags)"
+membersEmpty = "No outbound tags found. Create an OutboundSidecar or WARP account first."
+nameRequired = "Name required"
+membersRequired = "Pick at least one member outbound"
+createdToast = "Created"
+updatedToast = "Updated"
+failedToast = "Failed"
+
+[pages.cores]
+title = "Cores Inspector"
+subtitle = "Inspect — and for sing-box also override — the live config of each core (xray/singbox/telemt)."
+tabXray = "Xray"
+tabSingbox = "Sing-box"
+tabTelemt = "Telemt"
+xrayHint = "Aggregated xray config from template + DB inbounds + outbound merge + chain balancers + session-IP routing. Edit via the dedicated Xray Configs page."
+singboxHint = "Singleton sing-box config — auto-built from inbounds + cascade sidecars. Use the Overrides block below to inject custom log/dns/experimental/route_extras without forking the builder."
+telemtHint = "Per-instance Telemt TOML files (one process per Telemt inbound). Edit via the corresponding inbound's modal."
+emptyTelemt = "No Telemt inbounds enabled."
+configHash = "Hash"
+refreshButton = "Refresh"
+copyButton = "Copy"
+copiedToast = "Copied"
+fetchFailed = "Failed to fetch"
+liveSection = "Live config"
+overridesSection = "Overrides (JSON)"
+overridesHint = "JSON object with optional keys: log, dns, experimental (deep-merged), route_extras (rule[] appended). Empty {} → no overrides."
+saveButton = "Save + reload"
+savingButton = "Saving…"
+savedToast = "Saved — sing-box will reload"
+invalidJson = "Invalid JSON"
+
+[pages.cloudflare]
+title = "Cloudflare"
+subtitle = "CF API credentials + managed domains. Mode direct = A record only; cdn = orange-cloud proxy; worker = relay script; auto_cdn_ip = clean IP rotation."
+credentialsSection = "API Credentials"
+domainsSection = "Domains"
+addCredButton = "Add token"
+addCredTitle = "Add CF API token"
+addDomainButton = "Add domain"
+addDomainTitle = "Add domain"
+fieldName = "Name"
+fieldToken = "API token (CF dash → My Profile → API Tokens)"
+fieldCredential = "Credential"
+fieldDomainName = "Domain (FQDN)"
+fieldMode = "Mode"
+fieldOriginIp = "Origin IP"
+tokenScopeHint = "Token needs Zone:Read + DNS:Edit + Workers Scripts:Edit. Token is encrypted at rest (AES-GCM)."
+credEmpty = "No credentials. Add a CF API token to start."
+credRequired = "Name + token required"
+credSaved = "Credential saved"
+domainRequired = "Domain name + credential required"
+domainSaved = "Domain saved"
+domainsEmpty = "No domains yet."
+verifyButton = "Verify"
+verified = "Verified"
+syncZonesButton = "Sync zones"
+zonesSynced = "Synced {{count}} zones"
+delCredConfirm = "Delete credential #{{id}}?"
+delDomainConfirm = "Delete domain #{{id}}?"
+colName = "Name"
+colAccountId = "CF account"
+colScope = "Scope"
+colDomain = "Domain"
+colMode = "Mode"
+colOrigin = "Origin IP"
+colStatus = "Status"
+colActions = "Actions"
+
+  [pages.cloudflare.modeHint]
+  direct = "A record only, no CF proxy."
+  cdn = "Proxied A record (orange cloud). CF hides origin IP."
+  worker = "Worker script relays WS/gRPC to origin."
+  auto_cdn_ip = "Rotate clean CF IPs from a curated list."
+
+[pages.warpAccounts]
+title = "WARP Accounts"
+subtitle = "Anonymous Cloudflare WARP registrations. Each row produces an Xray-native wireguard outbound tagged warp-<name> that you can target from RoutingBuilder. WARP+ license unlocks unlimited speed."
+addButton = "Add WARP"
+registering = "Registering…"
+deleteConfirm = "Delete WARP account #{{id}}? CF device will be removed."
+emptyState = 'No WARP accounts yet. Click "Add WARP" to register one against the Cloudflare anonymous-device endpoint.'
+nameLabel = "Name"
+namePlaceholder = "warp-uk1"
+colName = "Name"
+colIPv4 = "IPv4"
+colPeer = "Peer"
+colPlus = "Plus"
+colLicense = "License"
+colActions = "Actions"
+plusLabel = "PLUS"
+freeLabel = "free"
+licensePlaceholder = "WARP+ license"
+applyLicenseButton = "Apply"
+showJsonButton = "JSON"
+deleteButton = "Del"
+nameRequired = "Name is required"
+registeredToast = "Registered"
+licenseRequired = "License key required"
+licenseApplied = "License applied"
+jsonViewerTitle = "Xray outbound JSON — warp-account #{{id}}"
+closeButton = "Close"
+
 [tgbot]
 keyboardClosed = "❌ صفحه کلید بسته شد!"
 noResult = "❗ نتیجه ای یافت نشد!"
@@ -2263,47 +2477,47 @@ online = "🟢 آنلاین"
   [tgbot.commands]
   unknown = "❗ دستور ناشناخته"
   pleaseChoose = """
-👇 لطفاً انتخاب کنید:\r
+👇 لطفاً انتخاب کنید:\r\r
 """
   help = """
-🤖 به این ربات خوش آمدید! این ربات برای ارائه داده‌های خاص از سرور طراحی شده است و به شما امکان تغییرات لازم را می‌دهد.\r
-\r
+🤖 به این ربات خوش آمدید! این ربات برای ارائه داده‌های خاص از سرور طراحی شده است و به شما امکان تغییرات لازم را می‌دهد.\r\r
+\r\r
 """
   start = """
-👋 سلام <i>{{ .Firstname }}</i>.\r
+👋 سلام <i>{{ .Firstname }}</i>.\r\r
 """
   welcome = """
-🤖 به ربات مدیریت <b>{{ .Hostname }}</b> خوش آمدید.\r
+🤖 به ربات مدیریت <b>{{ .Hostname }}</b> خوش آمدید.\r\r
 """
   status = "✅ ربات در حالت عادی است!"
   usage = "❗ لطفاً یک متن برای جستجو وارد کنید!"
   getID = "🆔 شناسه شما: <code>{{ .ID }}</code>"
   helpAdminCommands = """
-برای راه‌اندازی مجدد Xray Core:\r
-<code>/restart</code>\r
-\r
-برای جستجوی ایمیل مشتری:\r
-<code>/usage [ایمیل]</code>\r
-\r
-برای جستجوی ورودی‌ها (با آمار مشتری):\r
-<code>/inbound [توضیحات]</code>\r
-\r
-شناسه گفتگوی تلگرام:\r
+برای راه‌اندازی مجدد Xray Core:\r\r
+<code>/restart</code>\r\r
+\r\r
+برای جستجوی ایمیل مشتری:\r\r
+<code>/usage [ایمیل]</code>\r\r
+\r\r
+برای جستجوی ورودی‌ها (با آمار مشتری):\r\r
+<code>/inbound [توضیحات]</code>\r\r
+\r\r
+شناسه گفتگوی تلگرام:\r\r
 <code>/id</code>"""
   helpClientCommands = """
-برای جستجوی آمار، از دستور زیر استفاده کنید:\r
-<code>/usage [ایمیل]</code>\r
-\r
-شناسه گفتگوی تلگرام:\r
+برای جستجوی آمار، از دستور زیر استفاده کنید:\r\r
+<code>/usage [ایمیل]</code>\r\r
+\r\r
+شناسه گفتگوی تلگرام:\r\r
 <code>/id</code>"""
   restartUsage = """
-\r
-\r
+\r\r
+\r\r
 <code>/restart</code>"""
   restartSuccess = "✅ عملیات با موفقیت انجام شد!"
   restartFailed = """
-❗ خطا در عملیات.\r
-\r
+❗ خطا در عملیات.\r\r
+\r\r
 <code>خطا: {{ .Error }}</code>."""
   xrayNotRunning = "❗ Xray Core در حال اجرا نیست."
   startDesc = "نمایش منوی اصلی"
@@ -2316,183 +2530,183 @@ online = "🟢 آنلاین"
   selectUserFailed = "❌ خطا در انتخاب کاربر!"
   userSaved = "✅ کاربر تلگرام ذخیره شد."
   loginSuccess = """
-✅ با موفقیت به پنل وارد شدید.\r
+✅ با موفقیت به پنل وارد شدید.\r\r
 """
   loginFailed = """
-❗️ ورود به پنل ناموفق‌بود \r
+❗️ ورود به پنل ناموفق‌بود \r\r
 """
   report = """
-🕰 گزارشات‌زمان‌بندی‌شده: {{ .RunTime }}\r
+🕰 گزارشات‌زمان‌بندی‌شده: {{ .RunTime }}\r\r
 """
   datetime = """
-⏰ تاریخ‌وزمان: {{ .DateTime }}\r
+⏰ تاریخ‌وزمان: {{ .DateTime }}\r\r
 """
   hostname = """
-💻 نام‌میزبان: {{ .Hostname }}\r
+💻 نام‌میزبان: {{ .Hostname }}\r\r
 """
   version = """
-🚀 نسخه‌پنل: {{ .Version }}\r
+🚀 نسخه‌پنل: {{ .Version }}\r\r
 """
   xrayVersion = """
-📡 نسخه‌هسته: {{ .XrayVersion }}\r
+📡 نسخه‌هسته: {{ .XrayVersion }}\r\r
 """
   ipv6 = """
-🌐 IPv6: {{ .IPv6 }}\r
+🌐 IPv6: {{ .IPv6 }}\r\r
 """
   ipv4 = """
-🌐 IPv4: {{ .IPv4 }}\r
+🌐 IPv4: {{ .IPv4 }}\r\r
 """
   ip = """
-🌐 آدرس‌آی‌پی: {{ .IP }}\r
+🌐 آدرس‌آی‌پی: {{ .IP }}\r\r
 """
   ips = """
-🔢 آدرس‌های آی‌پی:\r
-{{ .IPs }}\r
+🔢 آدرس‌های آی‌پی:\r\r
+{{ .IPs }}\r\r
 """
   serverUpTime = """
-⏳ مدت‌کارکردسیستم: {{ .UpTime }} {{ .Unit }}\r
+⏳ مدت‌کارکردسیستم: {{ .UpTime }} {{ .Unit }}\r\r
 """
   serverLoad = """
-📈 بارسیستم: {{ .Load1 }}, {{ .Load2 }}, {{ .Load3 }}\r
+📈 بارسیستم: {{ .Load1 }}, {{ .Load2 }}, {{ .Load3 }}\r\r
 """
   serverMemory = """
-📋 RAM: {{ .Current }}/{{ .Total }}\r
+📋 RAM: {{ .Current }}/{{ .Total }}\r\r
 """
   tcpCount = """
-🔹 TCP: {{ .Count }}\r
+🔹 TCP: {{ .Count }}\r\r
 """
   udpCount = """
-🔸 UDP: {{ .Count }}\r
+🔸 UDP: {{ .Count }}\r\r
 """
   traffic = """
-🚦 ترافیک: {{ .Total }} (↑{{ .Upload }},↓{{ .Download }})\r
+🚦 ترافیک: {{ .Total }} (↑{{ .Upload }},↓{{ .Download }})\r\r
 """
   xrayStatus = """
-ℹ️ وضعیت‌ایکس‌ری: {{ .State }}\r
+ℹ️ وضعیت‌ایکس‌ری: {{ .State }}\r\r
 """
   username = """
-👤 نام‌کاربری: {{ .Username }}\r
+👤 نام‌کاربری: {{ .Username }}\r\r
 """
   password = """
-👤 رمز عبور: {{ .Password }}\r
+👤 رمز عبور: {{ .Password }}\r\r
 """
   time = """
-⏰ زمان: {{ .Time }}\r
+⏰ زمان: {{ .Time }}\r\r
 """
   inbound = """
-📍 نام‌ورودی: {{ .Remark }}\r
+📍 نام‌ورودی: {{ .Remark }}\r\r
 """
   port = """
-🔌 پورت: {{ .Port }}\r
+🔌 پورت: {{ .Port }}\r\r
 """
   expire = """
-📅 تاریخ‌انقضا: {{ .Time }}\r
-\r
+📅 تاریخ‌انقضا: {{ .Time }}\r\r
+\r\r
 """
   expireIn = """
-📅 باقی‌ مانده‌ تا انقضا: {{ .Time }}\r
-\r
+📅 باقی‌ مانده‌ تا انقضا: {{ .Time }}\r\r
+\r\r
 """
   active = """
-💡 فعال: {{ .Enable }}\r
+💡 فعال: {{ .Enable }}\r\r
 """
   enabled = """
-🚨 وضعیت: {{ .Enable }}\r
+🚨 وضعیت: {{ .Enable }}\r\r
 """
   online = """
-🌐 وضعیت اتصال: {{ .Status }}\r
+🌐 وضعیت اتصال: {{ .Status }}\r\r
 """
   lastOnline = """
-🔙 آخرین فعالیت: {{ .Time }}\r
+🔙 آخرین فعالیت: {{ .Time }}\r\r
 """
   email = """
-📧 ایمیل: {{ .Email }}\r
+📧 ایمیل: {{ .Email }}\r\r
 """
   upload = """
-🔼 آپلود↑: {{ .Upload }}\r
+🔼 آپلود↑: {{ .Upload }}\r\r
 """
   download = """
-🔽 دانلود↓: {{ .Download }}\r
+🔽 دانلود↓: {{ .Download }}\r\r
 """
   total = """
-🔄 کل: {{ .UpDown }} / {{ .Total }}\r
+🔄 کل: {{ .UpDown }} / {{ .Total }}\r\r
 """
   TGUser = """
-👤 کاربر تلگرام: {{ .TelegramID }}\r
+👤 کاربر تلگرام: {{ .TelegramID }}\r\r
 """
   exhaustedMsg = """
-🚨 {{ .Type }} به‌اتمام‌رسیده‌است:\r
+🚨 {{ .Type }} به‌اتمام‌رسیده‌است:\r\r
 """
   exhaustedCount = """
-🚨 تعداد {{ .Type }} به‌اتمام‌رسیده‌است:\r
+🚨 تعداد {{ .Type }} به‌اتمام‌رسیده‌است:\r\r
 """
   onlinesCount = """
-🌐 کاربران‌آنلاین: {{ .Count }}\r
+🌐 کاربران‌آنلاین: {{ .Count }}\r\r
 """
   disabled = """
-🛑 غیرفعال: {{ .Disabled }}\r
+🛑 غیرفعال: {{ .Disabled }}\r\r
 """
   depleteSoon = """
-🔜 به‌زودی‌به‌پایان‌خواهدرسید: {{ .Deplete }}\r
-\r
+🔜 به‌زودی‌به‌پایان‌خواهدرسید: {{ .Deplete }}\r\r
+\r\r
 """
   backupTime = """
-🗄 زمان‌پشتیبان‌گیری: {{ .Time }}\r
+🗄 زمان‌پشتیبان‌گیری: {{ .Time }}\r\r
 """
   refreshedOn = """
-\r
-📋🔄 تازه‌سازی شده در: {{ .Time }}\r
-\r
+\r\r
+📋🔄 تازه‌سازی شده در: {{ .Time }}\r\r
+\r\r
 """
   yes = "✅ بله"
   no = "❌ خیر"
   clientCreated = """
-✅ <b>کلاینت ایجاد شد</b>
-
+✅ <b>کلاینت ایجاد شد</b>\r
+\r
 """
   clientUpdated = """
-🔄 <b>کلاینت به‌روزرسانی شد</b>
-
+🔄 <b>کلاینت به‌روزرسانی شد</b>\r
+\r
 """
   clientDeleted = """
-❌ <b>کلاینت حذف شد</b>
-
+❌ <b>کلاینت حذف شد</b>\r
+\r
 """
   clientDisabled = """
-⛔ <b>کلاینت غیرفعال شد</b>
-
+⛔ <b>کلاینت غیرفعال شد</b>\r
+\r
 """
   clientFirstConnection = """
-🟢 <b>اتصال اول کلاینت</b>
-
+🟢 <b>اتصال اول کلاینت</b>\r
+\r
 """
   clientStateChanged = """
-<b>Client State Changed</b>
+<b>Client State Changed</b>\r
 """
   status = """
-<b>وضعیت:</b> {{ .Status }}
+<b>وضعیت:</b> {{ .Status }}\r
 """
   clientEnabled = """
-<b>فعال:</b> {{ .Enabled }}
+<b>فعال:</b> {{ .Enabled }}\r
 """
   trafficLimit = """
-<b>محدودیت ترافیک:</b> {{ .Limit }}
+<b>محدودیت ترافیک:</b> {{ .Limit }}\r
 """
   expiryTime = """
-<b>زمان انقضا:</b> {{ .Time }}
+<b>زمان انقضا:</b> {{ .Time }}\r
 """
   trafficInfo = """
-<b>ترافیک:</b> 🔼 {{ .Upload }} / 🔽 {{ .Download }} / مجموع: {{ .Total }}
+<b>ترافیک:</b> 🔼 {{ .Upload }} / 🔽 {{ .Download }} / مجموع: {{ .Total }}\r
 """
   hwidEnabled = """
-<b>HWID:</b> فعال ({{ .Count }}/{{ .Max }})
+<b>HWID:</b> فعال ({{ .Count }}/{{ .Max }})\r
 """
   hwidDisabled = """
-<b>HWID:</b> غیرفعال
+<b>HWID:</b> غیرفعال\r
 """
   hwidLimitChanged = "محدودیت HWID: {{ .Old }} → {{ .New }}"
   changes = """
-<b>تغییرات:</b>
+<b>تغییرات:</b>\r
 """
   emailChanged = "ایمیل: {{ .Old }} → {{ .New }}"
   enabledChanged = "فعال: {{ .Old }} → {{ .New }}"
@@ -2505,75 +2719,75 @@ online = "🟢 آنلاین"
   hwidChanged = "HWID: {{ .Old }} → {{ .New }}"
   comment = "<b>نظر:</b> {{ .Comment }}"
   inboundCreated = """
-<b>Inbound Created</b>
-
+<b>Inbound Created</b>\r
+\r
 """
   inboundUpdated = """
-<b>Inbound Updated</b>
-
+<b>Inbound Updated</b>\r
+\r
 """
   inboundDeleted = """
-<b>Inbound Deleted</b>
-
+<b>Inbound Deleted</b>\r
+\r
 """
   inboundName = """
-<b>Name:</b> {{ .Name }}
+<b>Name:</b> {{ .Name }}\r
 """
   inboundProtocol = """
-<b>Protocol:</b> {{ .Protocol }}
+<b>Protocol:</b> {{ .Protocol }}\r
 """
   inboundPort = """
-<b>Port:</b> {{ .Port }}
+<b>Port:</b> {{ .Port }}\r
 """
   inboundEnabled = """
-<b>Enabled:</b> {{ .Enabled }}
+<b>Enabled:</b> {{ .Enabled }}\r
 """
   inboundListen = """
-<b>Listen:</b> {{ .Listen }}
+<b>Listen:</b> {{ .Listen }}\r
 """
   inboundNameChanged = "Name: {{ .Old }} → {{ .New }}"
   inboundPortChanged = "Port: {{ .Old }} → {{ .New }}"
   inboundProtocolChanged = "Protocol: {{ .Old }} → {{ .New }}"
   inboundEnabledChanged = "Enabled: {{ .Old }} → {{ .New }}"
   groupChanged = """
-<b>Group Changed</b>
-
+<b>Group Changed</b>\r
+\r
 """
   groupName = """
-<b>Name:</b> {{ .Name }}
+<b>Name:</b> {{ .Name }}\r
 """
   groupAction = """
-<b>Action:</b> {{ .Action }}
+<b>Action:</b> {{ .Action }}\r
 """
   groupClientsCount = """
-<b>Clients count:</b> {{ .Count }}
+<b>Clients count:</b> {{ .Count }}\r
 """
   groupClients = "<b>Clients:</b>"
   groupClientsMore = """
-... and {{ .Count }} more clients
+... and {{ .Count }} more clients\r
 """
   nodeOnline = """
-✅ <b>نود آنلاین</b>
-
+✅ <b>نود آنلاین</b>\r
+\r
 """
   nodeOffline = """
-❌ <b>نود آفلاین/خطا</b>
-
+❌ <b>نود آفلاین/خطا</b>\r
+\r
 """
   nodeName = """
-<b>نام:</b> {{ .Name }}
+<b>نام:</b> {{ .Name }}\r
 """
   nodeAddress = """
-<b>آدرس:</b> {{ .Address }}
+<b>آدرس:</b> {{ .Address }}\r
 """
   previousStatus = """
-<b>وضعیت قبلی:</b> {{ .Status }}
+<b>وضعیت قبلی:</b> {{ .Status }}\r
 """
   currentStatus = """
-<b>وضعیت فعلی:</b> {{ .Status }}
+<b>وضعیت فعلی:</b> {{ .Status }}\r
 """
   responseTime = """
-<b>زمان پاسخ:</b> {{ .Time }} میلی‌ثانیه
+<b>زمان پاسخ:</b> {{ .Time }} میلی‌ثانیه\r
 """
   unlimitedTraffic = "نامحدود"
   noExpiry = "بدون انقضا"
@@ -2582,72 +2796,72 @@ online = "🟢 آنلاین"
   received_email = "📧📥 ایمیل به‌روزرسانی شد."
   received_comment = "💬📥 نظر به‌روزرسانی شد."
   id_prompt = """
-🔑 شناسه پیش‌فرض: {{ .ClientId }}
-
+🔑 شناسه پیش‌فرض: {{ .ClientId }}\r
+\r
 شناسه خود را وارد کنید."""
   pass_prompt = """
-🔑 رمز عبور پیش‌فرض: {{ .ClientPassword }}
-
+🔑 رمز عبور پیش‌فرض: {{ .ClientPassword }}\r
+\r
 رمز عبور خود را وارد کنید."""
   email_prompt = """
-📧 ایمیل پیش‌فرض: {{ .ClientEmail }}
-
+📧 ایمیل پیش‌فرض: {{ .ClientEmail }}\r
+\r
 ایمیل خود را وارد کنید."""
   comment_prompt = """
-💬 نظر پیش‌فرض: {{ .ClientComment }}
-
+💬 نظر پیش‌فرض: {{ .ClientComment }}\r
+\r
 نظر خود را وارد کنید."""
   inbound_client_data_id = """
-🔄 ورودی: {{ .InboundRemark }}
-
-🔑 شناسه: {{ .ClientId }}
-📧 ایمیل: {{ .ClientEmail }}
-📊 ترافیک: {{ .ClientTraffic }}
-📅 تاریخ انقضا: {{ .ClientExp }}
-🌐 محدودیت IP: {{ .IpLimit }}
-💬 توضیح: {{ .ClientComment }}
-
+🔄 ورودی: {{ .InboundRemark }}\r
+\r
+🔑 شناسه: {{ .ClientId }}\r
+📧 ایمیل: {{ .ClientEmail }}\r
+📊 ترافیک: {{ .ClientTraffic }}\r
+📅 تاریخ انقضا: {{ .ClientExp }}\r
+🌐 محدودیت IP: {{ .IpLimit }}\r
+💬 توضیح: {{ .ClientComment }}\r
+\r
 اکنون می‌تونی مشتری را به ورودی اضافه کنی!"""
   inbound_client_data_pass = """
-🔄 ورودی: {{ .InboundRemark }}
-
-🔑 رمز عبور: {{ .ClientPass }}
-📧 ایمیل: {{ .ClientEmail }}
-📊 ترافیک: {{ .ClientTraffic }}
-📅 تاریخ انقضا: {{ .ClientExp }}
-🌐 محدودیت IP: {{ .IpLimit }}
-💬 توضیح: {{ .ClientComment }}
-
+🔄 ورودی: {{ .InboundRemark }}\r
+\r
+🔑 رمز عبور: {{ .ClientPass }}\r
+📧 ایمیل: {{ .ClientEmail }}\r
+📊 ترافیک: {{ .ClientTraffic }}\r
+📅 تاریخ انقضا: {{ .ClientExp }}\r
+🌐 محدودیت IP: {{ .IpLimit }}\r
+💬 توضیح: {{ .ClientComment }}\r
+\r
 اکنون می‌تونی مشتری را به ورودی اضافه کنی!"""
   cancel = """
-❌ فرآیند لغو شد! 
-
+❌ فرآیند لغو شد! \r
+\r
 می‌توانید هر زمان که خواستید /start را دوباره اجرا کنید. 🔄"""
   error_add_client = """
-⚠️ خطا:
-
+⚠️ خطا:\r
+\r
  {{ .error }}"""
   using_default_value = "باشه، از مقدار پیش‌فرض استفاده می‌کنم. 😊"
   incorrect_input = """
-ورودی شما معتبر نیست.
-عبارت‌ها باید بدون فاصله باشند.
-مثال صحیح: aaaaaa
+ورودی شما معتبر نیست.\r
+عبارت‌ها باید بدون فاصله باشند.\r
+مثال صحیح: aaaaaa\r
 مثال نادرست: aaa aaa 🚫"""
   AreYouSure = "مطمئنی؟ 🤔"
   SuccessResetTraffic = """
-📧 ایمیل: {{ .ClientEmail }}
+📧 ایمیل: {{ .ClientEmail }}\r
 🏁 نتیجه: ✅ موفقیت‌آمیز"""
   FailedResetTraffic = """
-📧 ایمیل: {{ .ClientEmail }}
-🏁 نتیجه: ❌ ناموفق 
-
+📧 ایمیل: {{ .ClientEmail }}\r
+🏁 نتیجه: ❌ ناموفق \r
+\r
 🛠️ خطا: [ {{ .ErrorMessage }} ]"""
   FinishProcess = "🔚 فرآیند بازنشانی ترافیک برای همه مشتریان به پایان رسید."
   twoFactorLoginCode = """
-🔐 <b>Panel login code</b>\r
-👤 {{ .Username }}\r
-🌐 {{ .IP }}\r
-<code>{{ .Code }}</code>\r
+🔐 <b>Panel login code</b>\r\r
+👤 {{ .Username }}\r\r
+🌐 {{ .IP }}\r\r
+<code>{{ .Code }}</code>\r\r
 """
   noDevices = "📱 No devices found"
   devicesList = "📱 Device list"
@@ -2722,9 +2936,9 @@ online = "🟢 آنلاین"
   enableSuccess = "✅ {{ .Email }} : با موفقیت فعال شد."
   disableSuccess = "✅ {{ .Email }} : با موفقیت غیرفعال شد."
   askToAddUserId = """
-پیکربندی شما یافت نشد!\r
-لطفاً از مدیر خود بخواهید که شناسه کاربر تلگرام خود را در پیکربندی (های) خود استفاده کند.\r
-\r
+پیکربندی شما یافت نشد!\r\r
+لطفاً از مدیر خود بخواهید که شناسه کاربر تلگرام خود را در پیکربندی (های) خود استفاده کند.\r\r
+\r\r
 شناسه کاربری شما: <code>{{ .TgUserID }}</code>"""
   chooseClient = "یک مشتری برای ورودی {{ .Inbound }} انتخاب کنید"
   chooseInbound = "یک ورودی انتخاب کنید"
@@ -2751,10 +2965,10 @@ step = "Step"
 of = "of"
 dashboardTitle = "1. Panel"
 dashboardDesc = """
-Main interface for managing the entire system. Through the panel we:
-
-• Configure and control nodes (servers with xray)
-• Manage clients
+Main interface for managing the entire system. Through the panel we:\r
+\r
+• Configure and control nodes (servers with xray)\r
+• Manage clients\r
 • Configure inbounds"""
 dashboardHint = "Panel is the control center. Here you create nodes, inbounds and assign clients."
 nodeTitle = "2. Node"
@@ -2762,45 +2976,45 @@ nodeDesc = "Separate Xray core with API for communication with the panel. The no
 nodeHint = "Node is the server core. The panel communicates with it via API to manage configs and connections."
 inboundTitle = "3. Inbound"
 inboundDesc = """
-Configuration or profile for a node.
-
-• Creates a connection to a node
+Configuration or profile for a node.\r
+\r
+• Creates a connection to a node\r
 • Subscribes to one or more nodes"""
 inboundHint = "Inbound is a connection profile. Through it, clients get access to the required nodes."
 clientTitle = "4. Client"
 clientDesc = """
-System user who can be assigned one or more inbounds.
-
-For example:
-• Inbound 1 → whitelist node
-• Inbound 2 → regular foreign server
-
+System user who can be assigned one or more inbounds.\r
+\r
+For example:\r
+• Inbound 1 → whitelist node\r
+• Inbound 2 → regular foreign server\r
+\r
 Client can use any or all inbounds assigned to them"""
 clientHint = "Client is a user. Assign inbounds to them so they can connect to the required nodes."
 hostTitle = "5. Hosts"
 hostDesc = """
-External addresses for connection.
-
-• Proxy balancer that hides direct node addresses
-• Can distribute load between multiple nodes
-• Replace node address with the required host in inbound
-
-Example:
+External addresses for connection.\r
+\r
+• Proxy balancer that hides direct node addresses\r
+• Can distribute load between multiple nodes\r
+• Replace node address with the required host in inbound\r
+\r
+Example:\r
 Inbound connects to a balancer host, which then distributes the connection to real nodes"""
 hostHint = "Hosts are virtual addresses. Use them for load balancing and hiding real servers."
 settingsTitle = "6. Panel Settings"
 settingsDesc = """
-Section for general panel configuration.
-
-• Enable/disable various features
+Section for general panel configuration.\r
+\r
+• Enable/disable various features\r
 • Configure panel appearance and behavior"""
 settingsHint = "Panel Settings — here you can manage features and panel configuration."
 xrayTitle = "7. Xray Configuration"
 xrayDesc = """
-Section for fine-tuning Xray core.
-
-• Routing
-• Connection parameters and traffic routing
+Section for fine-tuning Xray core.\r
+\r
+• Routing\r
+• Connection parameters and traffic routing\r
 • Additional advanced node configs"""
 xrayHint = "Xray Configuration — for advanced core configuration, routing management and other node parameters."
 
