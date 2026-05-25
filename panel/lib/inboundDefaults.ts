@@ -1347,7 +1347,8 @@ export function buildSettingsJson(
             updated_at: now,
           },
         ],
-        decryption: "none",
+        decryption: opts.vlessDecryption || "none",
+        encryption: opts.vlessEncryption || "none",
         fallbacks: fallbackRowsSettingsToJson(opts.vlessTrojanFallbacks ?? []),
       };
       return JSON.stringify(o);
@@ -1582,6 +1583,8 @@ export function mergeFirstClientIntoSettings(
     case "vless":
       first.id = typeof first.id === "string" && first.id ? first.id : newClientUUID();
       first.flow = patch.vlessFlow.trim();
+      root.decryption = patch.vlessDecryption || "none";
+      root.encryption = patch.vlessEncryption || "none";
       break;
     case "vmess":
       first.id = typeof first.id === "string" && first.id ? first.id : newClientUUID();
