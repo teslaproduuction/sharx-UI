@@ -1315,6 +1315,8 @@ export type FirstClientPatch = {
   mixedPassword?: string;
   /** VLESS/Trojan only; persisted as `settings.fallbacks`. */
   vlessTrojanFallbacks?: VlessTrojanFallbackFormRow[];
+  vlessEncryption?: string;
+  vlessDecryption?: string;
 };
 
 export function buildSettingsJson(
@@ -1479,6 +1481,8 @@ export function parseFirstClientFromSettings(
       if (protocol === "vless" || protocol === "trojan") {
         return {
           vlessTrojanFallbacks: parseVlessTrojanFallbackRowsFromSettings(settingsStr, protocol),
+          vlessDecryption: typeof root.decryption === "string" ? root.decryption : "none",
+          vlessEncryption: typeof root.encryption === "string" ? root.encryption : "none"
         };
       }
       return {};
@@ -1491,6 +1495,8 @@ export function parseFirstClientFromSettings(
     if (typeof c.auth === "string") out.hysteriaAuth = c.auth;
     else if (typeof c.password === "string" && (protocol === "hysteria" || protocol === "hysteria2"))
       out.hysteriaAuth = c.password;
+    if (typeof root.encryption === "string") out.vlessEncryption = root.encryption;
+    if (typeof root.decryption === "string") out.vlessDecryption = root.decryption;
     if (typeof root.method === "string") out.ssMethod = root.method;
     if (typeof root.password === "string") out.ssPassword = root.password;
     if (protocol === "vless" || protocol === "trojan") {
@@ -1599,7 +1605,15 @@ export function mergeFirstClientIntoSettings(
   }
 
   if (protocol === "vless" || protocol === "trojan") {
-    root.fallbacks = fallbackRowsSettingsToJson(patch.vlessTrojanFallbacks ?? []);
+      const fallbacks = fallbackRowsSettingsToJson(
+        patch.vlessTrojanFallbacks ?? []
+      );
+
+      if (fallbacks.length > 0) {
+         root.fallbacks = fallbacks;
+      } else {
+         delete root.fallbacks;
+      }
   }
 
   clients = [first, ...clients.slice(1)];

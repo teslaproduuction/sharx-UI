@@ -525,6 +525,8 @@ const defaultForm = () => ({
   enable: true,
   protocol: "vless" as InboundFormProtocol,
   vlessFlow: "",
+  vlessEncryption: "none",
+  vlessDecryption: "none",
   trojanPassword: randomPassword(12),
   hysteriaAuth: randomPassword(8),
   ssMethod: "aes-256-gcm",
@@ -707,6 +709,8 @@ export function InboundsPage() {
         enable: ib.enable,
         protocol: proto,
         vlessFlow: parsed.vlessFlow ?? "",
+        vlessEncryption: parsed.vlessEncryption ?? "",
+        vlessDecryption: parsed.vlessDecryption ?? "none",
         trojanPassword: parsed.trojanPassword ?? randomPassword(12),
         hysteriaAuth: parsed.hysteriaAuth ?? randomPassword(8),
         ssMethod: parsed.ssMethod ?? "aes-256-gcm",
@@ -980,6 +984,8 @@ export function InboundsPage() {
     const patch = {
       clientEmail: "",
       vlessFlow: form.vlessFlow,
+      vlessEncryption: form.vlessEncryption,
+      vlessDecryption: form.vlessDecryption,
       trojanPassword: form.trojanPassword,
       hysteriaAuth: form.hysteriaAuth,
       ssMethod: form.ssMethod,
@@ -4092,6 +4098,49 @@ export function InboundsPage() {
                   <option value="">{t("pages.inbounds.addInboundVlessFlowNone")}</option>
                   <option value="xtls-rprx-vision">xtls-rprx-vision</option>
                 </SelectNative>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium">
+                    Encryption
+                  </label>
+
+                  <Input
+                    value={form.vlessEncryption}
+                    placeholder="none"
+                    onChange={(e) =>
+                      setForm((f) => ({
+                        ...f,
+                        vlessEncryption: e.target.value,
+                      }))
+                    }
+                    disabled={Boolean(form.vlessTrojanFallbacks.length != 0)}
+                  >
+                  </Input>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-xs font-medium">
+                    Decryption
+                  </label>
+
+                  <div className="flex gap-2">
+                    <Input
+                      className="font-mono text-xs"
+                      placeholder="none"
+                      value={form.vlessDecryption}
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          vlessDecryption: e.target.value,
+                        }))
+                      }
+                      disabled={Boolean(form.vlessTrojanFallbacks.length != 0)}
+                    />
+                  </div>
+                </div>
+                </div>
               </div>
             ) : null}
 
@@ -4296,13 +4345,15 @@ export function InboundsPage() {
                 <Button
                   type="button"
                   variant="secondary"
-                  className="gap-2"
+                  className="gap-2 disabled:opacity-50"
                   onClick={() =>
                     setForm((f) => ({
                       ...f,
                       vlessTrojanFallbacks: [...f.vlessTrojanFallbacks, defaultVlessTrojanFallbackRow()],
                     }))
                   }
+                 disabled={Boolean(form.vlessDecryption != "none")}
+                 
                 >
                   <Plus className="h-4 w-4 shrink-0" aria-hidden />
                   {t("pages.inbounds.fallbacksAddRow", { defaultValue: "Add fallback" })}
