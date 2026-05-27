@@ -224,11 +224,11 @@ func CollectMetrics() string {
 
 			// Traffic per client
 			builder.WriteString(fmt.Sprintf("xui_client_traffic_bytes{client=\"%s\",direction=\"up\"} %d\n",
-				escapeLabelValue(client.Email), client.Up))
+				escapeLabelValue(client.Name), client.Up))
 			builder.WriteString(fmt.Sprintf("xui_client_traffic_bytes{client=\"%s\",direction=\"down\"} %d\n",
-				escapeLabelValue(client.Email), client.Down))
+				escapeLabelValue(client.Name), client.Down))
 			builder.WriteString(fmt.Sprintf("xui_client_traffic_bytes{client=\"%s\",direction=\"total\"} %d\n",
-				escapeLabelValue(client.Email), client.AllTime))
+				escapeLabelValue(client.Name), client.AllTime))
 
 			// Client state
 			clientState := 0
@@ -236,7 +236,7 @@ func CollectMetrics() string {
 				clientState = 1
 			}
 			builder.WriteString(fmt.Sprintf("xui_client_state{client=\"%s\"} %d\n",
-				escapeLabelValue(client.Email), clientState))
+				escapeLabelValue(client.Name), clientState))
 		}
 
 		builder.WriteString(fmt.Sprintf("# HELP xui_clients_enabled Number of enabled clients\n"))

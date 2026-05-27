@@ -176,22 +176,16 @@ func (m *Migrator) Migrate() error {
 		return fmt.Errorf("failed to load migrations: %w", err)
 	}
 
-	// Apply all migrations in order (they are idempotent, so safe to re-run)
-	// This ensures all migrations are always applied, even if they were partially applied before
+	// Apply only pending migrations in order (skip already-applied ones).
 	appliedCount := 0
 	for _, migration := range migrations {
-		// Always apply migration (it's idempotent)
-		// The migration itself will handle IF EXISTS/IF NOT EXISTS checks
+		if applied[migration.Version] {
+			continue
+		}
 		if err := m.ApplyMigration(migration); err != nil {
 			return fmt.Errorf("failed to apply migration %s: %w", migration.Name, err)
 		}
-
-		// Check if this was a new migration or a re-application
-		if !applied[migration.Version] {
-			appliedCount++
-		} else {
-			logger.Infof("DB migrations: re-applied %s (version %d) - ensuring consistency", migration.Name, migration.Version)
-		}
+		appliedCount++
 	}
 
 	if appliedCount > 0 {

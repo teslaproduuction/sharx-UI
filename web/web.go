@@ -272,6 +272,7 @@ func (s *Server) startTask() {
 
 	// Check client HWIDs from log file every 1 second for real-time updates
 	s.cron.AddJob("@every 1s", job.NewCheckClientHWIDJob())
+	s.cron.AddJob("@every 30s", job.NewCheckClientIPLimitJob())
 
 	// check client ips from log file every day
 	s.cron.AddJob("@daily", job.NewClearLogsJob())

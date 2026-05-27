@@ -334,6 +334,7 @@ func (s *Server) applyConfig(c *gin.Context) {
 		Telemt               json.RawMessage `json:"telemt"`
 		CoreProfileHash      string          `json:"coreProfileHash,omitempty"`
 		ExpectedConfigSha256 string          `json:"expectedConfigSha256,omitempty"`
+		LogRotate            json.RawMessage `json:"logRotate,omitempty"`
 	}
 
 	configBytes := body
@@ -343,6 +344,9 @@ func (s *Server) applyConfig(c *gin.Context) {
 		telemtRaw = requestData.Telemt
 		reqCoreProfileHash = strings.TrimSpace(requestData.CoreProfileHash)
 		reqExpectedSHA = strings.TrimSpace(requestData.ExpectedConfigSha256)
+		if len(requestData.LogRotate) > 0 {
+			applyLogRotateFromJSON(requestData.LogRotate)
+		}
 		if requestData.PanelURL != "" {
 			panelURL := requestData.PanelURL
 			logger.Infof("Parsed request with panelUrl: %s", panelURL)

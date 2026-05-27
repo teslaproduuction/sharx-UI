@@ -60,6 +60,7 @@ func (a *ServerController) initRouter(g *gin.RouterGroup) {
 	g.POST("/updater/trigger", a.dockerUpdaterTrigger)
 	g.GET("/cpuHistory/:bucket", a.getCpuHistoryBucket)
 	g.GET("/memHistory/:bucket", a.getMemHistoryBucket)
+	g.GET("/diskHistory/:bucket", a.getDiskHistoryBucket)
 	g.GET("/getXrayVersion", a.getXrayVersion)
 	g.GET("/getConfigJson", a.getConfigJson)
 	g.GET("/getDb", a.getDb)
@@ -205,6 +206,11 @@ func (a *ServerController) refreshStatus() {
 			memPct = float64(a.lastStatus.Mem.Current) / float64(a.lastStatus.Mem.Total) * 100
 		}
 		a.serverService.AppendMemSample(now, memPct)
+		diskPct := 0.0
+		if a.lastStatus.Disk.Total > 0 {
+			diskPct = float64(a.lastStatus.Disk.Current) / float64(a.lastStatus.Disk.Total) * 100
+		}
+		a.serverService.AppendDiskSample(now, diskPct)
 		// Broadcast status update via WebSocket
 		websocket.BroadcastStatus(a.lastStatus)
 	}
@@ -262,12 +268,16 @@ func (a *ServerController) dockerUpdaterTrigger(c *gin.Context) {
 
 // getCpuHistoryBucket retrieves aggregated CPU usage history (panel + worker nodes when multi-node).
 func (a *ServerController) getCpuHistoryBucket(c *gin.Context) {
-	a.resourceHistoryBucket(c, true)
+	a.resourceHistoryBucket(c, "cpu")
 }
 
 // getMemHistoryBucket retrieves aggregated host memory usage history (percent) for panel + workers.
 func (a *ServerController) getMemHistoryBucket(c *gin.Context) {
-	a.resourceHistoryBucket(c, false)
+	a.resourceHistoryBucket(c, "mem")
+}
+
+func (a *ServerController) getDiskHistoryBucket(c *gin.Context) {
+	a.resourceHistoryBucket(c, "disk")
 }
 
 func allowedResourceHistoryBucket(bucket int) bool {
@@ -282,7 +292,7 @@ func allowedResourceHistoryBucket(bucket int) bool {
 	return allowed[bucket]
 }
 
-func (a *ServerController) resourceHistoryBucket(c *gin.Context, cpu bool) {
+func (a *ServerController) resourceHistoryBucket(c *gin.Context, metric string) {
 	bucketStr := c.Param("bucket")
 	bucket, err := strconv.Atoi(bucketStr)
 	if err != nil || bucket <= 0 {
@@ -297,9 +307,12 @@ func (a *ServerController) resourceHistoryBucket(c *gin.Context, cpu bool) {
 	multi, _ := settingSvc.GetMultiNodeMode()
 
 	var panelPoints []map[string]any
-	if cpu {
+	switch metric {
+	case "cpu":
 		panelPoints = a.serverService.AggregateCpuHistory(bucket, 60)
-	} else {
+	case "disk":
+		panelPoints = a.serverService.AggregateDiskHistory(bucket, 60)
+	default:
 		panelPoints = a.serverService.AggregateMemHistory(bucket, 60)
 	}
 
@@ -313,9 +326,12 @@ func (a *ServerController) resourceHistoryBucket(c *gin.Context, cpu bool) {
 				display = fmt.Sprintf("Node %d", nodeID)
 			}
 			var pts []map[string]any
-			if cpu {
+			switch metric {
+			case "cpu":
 				pts = a.serverService.AggregateWorkerCpuHistory(nodeID, bucket, 60)
-			} else {
+			case "disk":
+				pts = a.serverService.AggregateWorkerDiskHistory(nodeID, bucket, 60)
+			default:
 				pts = a.serverService.AggregateWorkerMemHistory(nodeID, bucket, 60)
 			}
 			series = append(series, gin.H{
@@ -362,7 +378,8 @@ func (a *ServerController) pollWorkerHostMetricsIfDue() {
 			}
 			cpuV := statusHostCpuPercent(status)
 			memPct := statusHostMemPercent(status)
-			a.serverService.AppendWorkerResourceSample(node.Id, node.Name, ts, cpuV, memPct)
+			diskPct := statusHostDiskPercent(status)
+			a.serverService.AppendWorkerResourceSample(node.Id, node.Name, ts, cpuV, memPct, diskPct)
 		}
 	}()
 }
@@ -389,6 +406,19 @@ func statusHostMemPercent(st map[string]interface{}) float64 {
 	}
 	cur := uint64Interface(hm["current"])
 	tot := uint64Interface(hm["total"])
+	if tot == 0 {
+		return 0
+	}
+	return clampPercent(float64(cur) / float64(tot) * 100)
+}
+
+func statusHostDiskPercent(st map[string]interface{}) float64 {
+	hd, ok := st["hostDisk"].(map[string]interface{})
+	if !ok || hd == nil {
+		return 0
+	}
+	cur := uint64Interface(hd["current"])
+	tot := uint64Interface(hd["total"])
 	if tot == 0 {
 		return 0
 	}

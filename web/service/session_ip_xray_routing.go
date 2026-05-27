@@ -17,16 +17,16 @@ const sessionIPBlockOutboundTag = "blocked"
 
 type sessionIPBlockRow struct {
 	ClientId int    `gorm:"column:client_id"`
-	Email    string `gorm:"column:email"`
+	Email    string `gorm:"column:name"`
 	IP       string `gorm:"column:ip"`
 }
 
-// listSessionIPBlockRowsForXray returns email+IP rows for routing rules.
+// listSessionIPBlockRowsForXray returns name+IP rows for routing rules.
 // If filter is nil, all blocked rows are included. If filter is non-nil, only those client_ids (empty map => none).
 func listSessionIPBlockRowsForXray(filter map[int]struct{}) ([]sessionIPBlockRow, error) {
 	db := database.GetDB()
 	q := db.Table("client_blocked_session_ips AS c").
-		Select("c.client_id AS client_id, ce.email AS email, c.ip AS ip").
+		Select("c.client_id AS client_id, ce.name AS name, c.ip AS ip").
 		Joins("INNER JOIN client_entities ce ON ce.id = c.client_id")
 	if filter != nil {
 		if len(filter) == 0 {

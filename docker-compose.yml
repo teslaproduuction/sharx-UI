@@ -48,14 +48,14 @@ services:
       # XUI_WEB_CERT_FILE:  /cert/fullchain.pem
       # XUI_WEB_KEY_FILE: /cert/privkey.pem
       # XUI_WEB_DOMAIN: panel.example.com
-      # XUI_WEB_PORT: 8443
+      XUI_WEB_PORT: 2053
       
       # PostgreSQL: при network_mode: host контейнер не в sharx_network — имя postgres не резолвится.
       # Порт БД проброшен на хост (5432:5432), подключайтесь к 127.0.0.1.
       XUI_DB_HOST: 127.0.0.1
       XUI_DB_PORT: 5432
       XUI_DB_USER: xui_user
-      XUI_DB_PASSWORD: change_this_password
+      XUI_DB_PASSWORD: AT4kbCAAo69QegH0nmncz2Le
       XUI_DB_NAME: xui_db
       XUI_DB_SSLMODE: disable
       # Host network: use localhost — watchtower публикуется только на 127.0.0.1:8081 (см. сервис watchtower).
@@ -99,7 +99,7 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_USER: xui_user
-      POSTGRES_PASSWORD: change_this_password
+      POSTGRES_PASSWORD: AT4kbCAAo69QegH0nmncz2Le
       POSTGRES_DB: xui_db
     volumes:
       - postgres_data:/var/lib/postgresql/data

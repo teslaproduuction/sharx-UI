@@ -518,7 +518,7 @@ func (t *Tgbot) NotifyClientCreated(client *model.ClientEntity) {
 	}
 
 	msg := t.I18nBot("tgbot.messages.clientCreated")
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Name)
 	msg += t.I18nBot("tgbot.messages.status", "Status=="+client.Status)
 	msg += t.I18nBot("tgbot.messages.clientEnabled", "Enabled=="+fmt.Sprintf("%v", client.Enable))
 	msg += t.I18nBot("tgbot.messages.trafficLimit", "Limit=="+t.formatTrafficLimitLocalized(client.TotalGB))
@@ -539,7 +539,7 @@ func (t *Tgbot) NotifyClientUpdated(client *model.ClientEntity, _ *model.ClientE
 	}
 
 	msg := t.I18nBot("tgbot.messages.clientUpdated")
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Name)
 	msg += t.I18nBot("tgbot.messages.status", "Status=="+client.Status)
 	msg += t.I18nBot("tgbot.messages.clientEnabled", "Enabled=="+fmt.Sprintf("%v", client.Enable))
 	msg += t.I18nBot("tgbot.messages.trafficLimit", "Limit=="+t.formatTrafficLimitLocalized(client.TotalGB))
@@ -580,7 +580,7 @@ func (t *Tgbot) NotifyClientDeleted(client *model.ClientEntity) {
 	}
 
 	msg := t.I18nBot("tgbot.messages.clientDeleted")
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Name)
 	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	if client.Comment != "" {
@@ -597,7 +597,7 @@ func (t *Tgbot) NotifyClientDisabled(client *model.ClientEntity) {
 	}
 
 	msg := t.I18nBot("tgbot.messages.clientDisabled")
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Name)
 	msg += t.I18nBot("tgbot.messages.status", "Status=="+client.Status)
 	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
@@ -615,7 +615,7 @@ func (t *Tgbot) NotifyClientFirstConnection(client *model.ClientEntity) {
 	}
 
 	msg := t.I18nBot("tgbot.messages.clientFirstConnection")
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+client.Name)
 	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 
 	if client.Comment != "" {
@@ -676,7 +676,7 @@ func (t *Tgbot) NotifyClientStateChanged(oldClient *model.ClientEntity, newClien
 		title = "<b>Client State Changed</b>\n"
 	}
 	msg := tgEmojiTag(clientStateCustomEmojiID[newState], stateEmoji) + " " + title
-	msg += t.I18nBot("tgbot.messages.email", "Email=="+newClient.Email)
+	msg += t.I18nBot("tgbot.messages.email", "Email=="+newClient.Name)
 	msg += t.I18nBot("tgbot.messages.status", "Status=="+newState)
 	msg += t.I18nBot("tgbot.messages.time", "Time=="+time.Now().Format("2006-01-02 15:04:05"))
 	if newClient.Comment != "" {
@@ -791,18 +791,18 @@ func (t *Tgbot) NotifyGroupChanged(groupName string, enable bool, clients []*mod
 	if len(clients) > maxClients {
 		for i := 0; i < maxClients; i++ {
 			if clients[i].Comment != "" {
-				clientList += fmt.Sprintf("• %s (%s)\n", clients[i].Email, clients[i].Comment)
+				clientList += fmt.Sprintf("• %s (%s)\n", clients[i].Name, clients[i].Comment)
 			} else {
-				clientList += fmt.Sprintf("• %s\n", clients[i].Email)
+				clientList += fmt.Sprintf("• %s\n", clients[i].Name)
 			}
 		}
 		clientList += t.I18nBot("tgbot.messages.groupClientsMore", "Count=="+fmt.Sprintf("%d", len(clients)-maxClients))
 	} else {
 		for _, client := range clients {
 			if client.Comment != "" {
-				clientList += fmt.Sprintf("• %s (%s)\n", client.Email, client.Comment)
+				clientList += fmt.Sprintf("• %s (%s)\n", client.Name, client.Comment)
 			} else {
-				clientList += fmt.Sprintf("• %s\n", client.Email)
+				clientList += fmt.Sprintf("• %s\n", client.Name)
 			}
 		}
 	}

@@ -182,7 +182,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 						client.Status = status
 						// Update in DB
 						if err := db.Model(&model.ClientEntity{}).Where("id = ?", client.Id).Update("status", status).Error; err != nil {
-							logger.Warningf("Failed to update status for client %s: %v", client.Email, err)
+							logger.Warningf("Failed to update status for client %s: %v", client.Name, err)
 						}
 
 						// Collect client for API removal if enabled
@@ -190,7 +190,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 							// Get tag from first inbound
 							var inbound model.Inbound
 							if err := db.Where("id = ?", inboundIds[0]).First(&inbound).Error; err == nil {
-								clientsToDisable[client.Email] = inbound.Tag
+								clientsToDisable[client.Name] = inbound.Tag
 							}
 						}
 					}
@@ -201,7 +201,7 @@ func (j *XrayTrafficJob) broadcastWebSocketEvents() {
 			if len(clientsToDisable) > 0 {
 				go func() {
 					inboundService := service.InboundService{}
-					_, err := clientService.DisableClientsByEmail(clientsToDisable, &inboundService)
+					_, err := clientService.DisableClientsByName(clientsToDisable, &inboundService)
 					if err != nil {
 						logger.Warningf("XrayTrafficJob: failed to disable expired clients via API: %v", err)
 					}

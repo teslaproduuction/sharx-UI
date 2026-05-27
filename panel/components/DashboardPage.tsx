@@ -233,6 +233,11 @@ type DashboardMetricSeries = {
   points: ResourceHistoryPoint[];
 };
 
+/** Dashboard shows panel host only; per-node charts live on the Nodes page. */
+function panelOnlySeries(series: DashboardMetricSeries[]): DashboardMetricSeries[] {
+  return series.filter((s) => s.key === "panel");
+}
+
 /** Parse `{ series: [...] }` CPU/mem history API; supports legacy bare point array from older panels. */
 function parseResourceHistoryEnvelope(obj: unknown, metric: "cpu" | "mem"): DashboardMetricSeries[] {
   if (Array.isArray(obj)) {
@@ -736,11 +741,11 @@ export function DashboardPage() {
     const load = async () => {
       const r = await getJson<unknown>(panel("api/server/cpuHistory/2"));
       if (r.success && r.obj) {
-        setCpuPreviewSeries(parseResourceHistoryEnvelope(r.obj, "cpu"));
+        setCpuPreviewSeries(panelOnlySeries(parseResourceHistoryEnvelope(r.obj, "cpu")));
       }
       const mr = await getJson<unknown>(panel("api/server/memHistory/2"));
       if (mr.success && mr.obj) {
-        setMemPreviewSeries(parseResourceHistoryEnvelope(mr.obj, "mem"));
+        setMemPreviewSeries(panelOnlySeries(parseResourceHistoryEnvelope(mr.obj, "mem")));
       }
     };
     void load();
@@ -755,7 +760,7 @@ export function DashboardPage() {
       const r = await getJson<unknown>(panel(`api/server/cpuHistory/${cpuBucket}`));
       setSpin(false);
       if (r.success && r.obj) {
-        setCpuHistorySeries(parseResourceHistoryEnvelope(r.obj, "cpu"));
+        setCpuHistorySeries(panelOnlySeries(parseResourceHistoryEnvelope(r.obj, "cpu")));
       }
     })();
   }, [cpuOpen, cpuBucket]);
@@ -767,7 +772,7 @@ export function DashboardPage() {
       const r = await getJson<unknown>(panel(`api/server/memHistory/${memBucket}`));
       setSpin(false);
       if (r.success && r.obj) {
-        setMemHistorySeries(parseResourceHistoryEnvelope(r.obj, "mem"));
+        setMemHistorySeries(panelOnlySeries(parseResourceHistoryEnvelope(r.obj, "mem")));
       }
     })();
   }, [memOpen, memBucket]);
