@@ -192,7 +192,7 @@ func (j *CheckClientIpJob) checkError(e error) {
 func (j *CheckClientIpJob) getInboundClientIps(clientEmail string) (*model.InboundClientIps, error) {
 	db := database.GetDB()
 	InboundClientIps := &model.InboundClientIps{}
-	err := db.Model(model.InboundClientIps{}).Where("client_email = ?", clientEmail).First(InboundClientIps).Error
+	err := db.Model(model.InboundClientIps{}).Where("client_name = ?", clientEmail).First(InboundClientIps).Error
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +204,7 @@ func (j *CheckClientIpJob) addInboundClientIps(clientEmail string, ips []string)
 	jsonIps, err := json.Marshal(ips)
 	j.checkError(err)
 
-	inboundClientIps.ClientEmail = clientEmail
+	inboundClientIps.ClientName = clientEmail
 	inboundClientIps.Ips = string(jsonIps)
 
 	db := database.GetDB()
@@ -232,7 +232,7 @@ func (j *CheckClientIpJob) updateInboundClientIps(inboundClientIps *model.Inboun
 		return false
 	}
 
-	inboundClientIps.ClientEmail = clientEmail
+	inboundClientIps.ClientName = clientEmail
 	inboundClientIps.Ips = string(jsonIps)
 
 	inbound, err := j.getInboundByEmail(clientEmail)

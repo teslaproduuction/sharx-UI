@@ -70,8 +70,8 @@ func (a *ClientController) initRouter(g *gin.RouterGroup) {
 	g.POST("/sessions/block/:id", a.setSessionIPBlocked)
 }
 
-// onlineClientEmailSet returns lowercase trimmed emails currently reported as online by Xray.
-func onlineClientEmailSet(inboundSvc service.InboundService) map[string]struct{} {
+// onlineClientNameSet returns lowercase trimmed emails currently reported as online by Xray.
+func onlineClientNameSet(inboundSvc service.InboundService) map[string]struct{} {
 	list := inboundSvc.GetOnlineClients()
 	m := make(map[string]struct{}, len(list))
 	for _, e := range list {
@@ -94,7 +94,7 @@ func (a *ClientController) getClients(c *gin.Context) {
 	host := requestHostOnly(c)
 	tls := c.Request.TLS != nil
 	inboundSvc := service.InboundService{}
-	online := onlineClientEmailSet(inboundSvc)
+	online := onlineClientNameSet(inboundSvc)
 	cards := make([]*model.ClientCardView, 0, len(clients))
 	for _, cl := range clients {
 		card, err := a.clientService.ClientToCardView(cl, inboundSvc, host, tls, true)
@@ -102,7 +102,7 @@ func (a *ClientController) getClients(c *gin.Context) {
 			jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 			return
 		}
-		if k := strings.ToLower(strings.TrimSpace(cl.Email)); k != "" {
+		if k := strings.ToLower(strings.TrimSpace(cl.Name)); k != "" {
 			if _, ok := online[k]; ok {
 				card.IsOnline = true
 			}
@@ -135,8 +135,8 @@ func (a *ClientController) getClient(c *gin.Context) {
 		jsonMsg(c, I18nWeb(c, "somethingWentWrong"), err)
 		return
 	}
-	online := onlineClientEmailSet(inboundSvc)
-	if k := strings.ToLower(strings.TrimSpace(client.Email)); k != "" {
+	online := onlineClientNameSet(inboundSvc)
+	if k := strings.ToLower(strings.TrimSpace(client.Name)); k != "" {
 		if _, ok := online[k]; ok {
 			card.IsOnline = true
 		}

@@ -427,11 +427,20 @@ const SS_METHODS = [
 
 const QUIC_HEADER_TYPES: { value: StreamFormState["quicHeaderType"]; label: string }[] = [
   { value: "none", label: "none" },
-  { value: "utp", label: "utp" },
+  { value: "srtp", label: "srtp (VoIP)" },
+  { value: "utp", label: "utp (BitTorrent)" },
   { value: "wechat-video", label: "wechat-video" },
   { value: "dtls", label: "dtls" },
   { value: "wireguard", label: "wireguard" },
-  { value: "srtp", label: "srtp" },
+];
+
+const KCP_HEADER_TYPES: { value: StreamFormState["kcpHeaderType"]; label: string }[] = [
+  { value: "none", label: "none" },
+  { value: "srtp", label: "srtp (VoIP)" },
+  { value: "utp", label: "utp (BitTorrent)" },
+  { value: "wechat-video", label: "wechat-video" },
+  { value: "dtls", label: "dtls" },
+  { value: "wireguard", label: "wireguard" },
 ];
 
 function isInboundFormProtocol(s: string): s is InboundFormProtocol {
@@ -928,6 +937,66 @@ export function InboundsPage() {
       streamForm: {
         ...f.streamForm,
         xhttpHeaders: f.streamForm.xhttpHeaders.map((row, i) =>
+          i === index ? { ...row, [key]: value } : row,
+        ),
+      },
+    }));
+  };
+
+  const addTcpReqHeader = () => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpRequestHeaders: [...f.streamForm.tcpHttpRequestHeaders, { name: "", value: "" }],
+      },
+    }));
+  };
+  const removeTcpReqHeader = (index: number) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpRequestHeaders: f.streamForm.tcpHttpRequestHeaders.filter((_, i) => i !== index),
+      },
+    }));
+  };
+  const setTcpReqHeaderField = (index: number, key: "name" | "value", value: string) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpRequestHeaders: f.streamForm.tcpHttpRequestHeaders.map((row, i) =>
+          i === index ? { ...row, [key]: value } : row,
+        ),
+      },
+    }));
+  };
+
+  const addTcpRespHeader = () => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpResponseHeaders: [...f.streamForm.tcpHttpResponseHeaders, { name: "", value: "" }],
+      },
+    }));
+  };
+  const removeTcpRespHeader = (index: number) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpResponseHeaders: f.streamForm.tcpHttpResponseHeaders.filter((_, i) => i !== index),
+      },
+    }));
+  };
+  const setTcpRespHeaderField = (index: number, key: "name" | "value", value: string) => {
+    setForm((f) => ({
+      ...f,
+      streamForm: {
+        ...f.streamForm,
+        tcpHttpResponseHeaders: f.streamForm.tcpHttpResponseHeaders.map((row, i) =>
           i === index ? { ...row, [key]: value } : row,
         ),
       },
@@ -2206,6 +2275,55 @@ export function InboundsPage() {
                       }
                     />
                   </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">
+                        {t("pages.inbounds.hysteriaObfsType", { defaultValue: "Obfuscation" })}
+                      </label>
+                      <SelectNative
+                        value={form.streamForm.hysteriaObfsType || ""}
+                        onChange={(e) =>
+                          setStreamFormField(
+                            "hysteriaObfsType",
+                            e.target.value === "salamander" ? "salamander" : "",
+                          )
+                        }
+                      >
+                        <option value="">{t("pages.inbounds.none", { defaultValue: "None" })}</option>
+                        <option value="salamander">salamander</option>
+                      </SelectNative>
+                    </div>
+                    {form.streamForm.hysteriaObfsType === "salamander" ? (
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">
+                          {t("pages.inbounds.hysteriaObfsPassword", { defaultValue: "Obfuscation password" })}
+                        </label>
+                        <Input
+                          value={form.streamForm.hysteriaObfsPassword}
+                          onChange={(e) => setStreamFormField("hysteriaObfsPassword", e.target.value)}
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                  {form.protocol === "hysteria2" ? (
+                    <div>
+                      <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-hy2-masquerade">
+                        {t("pages.inbounds.hysteria2Masquerade", { defaultValue: "Masquerade URL (optional)" })}
+                      </label>
+                      <Input
+                        id="in-hy2-masquerade"
+                        className="font-mono text-xs"
+                        value={form.streamForm.hysteria2Masquerade}
+                        onChange={(e) => setStreamFormField("hysteria2Masquerade", e.target.value)}
+                        placeholder="https://example.com"
+                      />
+                      <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                        {t("pages.inbounds.hysteria2MasqueradeHint", {
+                          defaultValue: "When set, Hysteria2 will proxy browser requests to this URL — the server looks like a real HTTPS site.",
+                        })}
+                      </p>
+                    </div>
+                  ) : null}
                   <p className="text-xs text-[var(--fg-subtle)]">
                     {t("pages.inbounds.hysteriaTlsHint", {
                       defaultValue:
@@ -2837,9 +2955,12 @@ export function InboundsPage() {
                       >
                         <option value="tcp">TCP</option>
                         <option value="ws">WebSocket</option>
+                        <option value="httpupgrade">HTTPUpgrade</option>
                         <option value="grpc">gRPC</option>
                         <option value="xhttp">XHTTP (SplitHTTP)</option>
                         <option value="quic">QUIC</option>
+                        <option value="kcp">mKCP</option>
+                        <option value="h2">HTTP/2 (h2)</option>
                       </SelectNative>
                     </div>
                     <div>
@@ -2868,45 +2989,163 @@ export function InboundsPage() {
                     </div>
                   </div>
                   {form.streamForm.network === "tcp" ? (
-                    <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <label
-                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                          htmlFor="in-hdr"
-                        >
-                          {t("pages.inbounds.tcpHeaderType", { defaultValue: "TCP header" })}
-                        </label>
-                        <SelectNative
-                          id="in-hdr"
-                          value={form.streamForm.tcpHeaderType}
-                          onChange={(e) =>
-                            setStreamFormField(
-                              "tcpHeaderType",
-                              e.target.value as StreamFormState["tcpHeaderType"],
-                            )
-                          }
-                        >
-                          <option value="none">none</option>
-                          <option value="http">http</option>
-                        </SelectNative>
+                    <div className="mt-3 space-y-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label
+                            className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                            htmlFor="in-hdr"
+                          >
+                            {t("pages.inbounds.tcpHeaderType", { defaultValue: "TCP header" })}
+                          </label>
+                          <SelectNative
+                            id="in-hdr"
+                            value={form.streamForm.tcpHeaderType}
+                            onChange={(e) =>
+                              setStreamFormField(
+                                "tcpHeaderType",
+                                e.target.value as StreamFormState["tcpHeaderType"],
+                              )
+                            }
+                          >
+                            <option value="none">none</option>
+                            <option value="http">http</option>
+                          </SelectNative>
+                        </div>
+                        <div className="flex items-end pb-1">
+                          <CheckboxField
+                            checked={form.streamForm.acceptProxyProtocol}
+                            onChange={(e) =>
+                              setStreamFormField(
+                                "acceptProxyProtocol",
+                                e.target.checked,
+                              )
+                            }
+                            label={t("pages.inbounds.acceptProxyProtocol", {
+                              defaultValue: "Accept proxy protocol",
+                            })}
+                          />
+                        </div>
                       </div>
-                      <div className="flex items-end pb-1">
-                        <CheckboxField
-                          checked={form.streamForm.acceptProxyProtocol}
-                          onChange={(e) =>
-                            setStreamFormField(
-                              "acceptProxyProtocol",
-                              e.target.checked,
-                            )
-                          }
-                          label={t("pages.inbounds.acceptProxyProtocol", {
-                            defaultValue: "Accept proxy protocol",
-                          })}
-                        />
-                      </div>
+                      {form.streamForm.tcpHeaderType === "http" ? (
+                        <div className="space-y-3 rounded-lg border border-[var(--border)]/60 p-3">
+                          <p className="text-xs text-[var(--fg-subtle)]">
+                            {t("pages.inbounds.tcpHttpCamouflageHint", {
+                              defaultValue: "HTTP header camouflage — disguise traffic as web requests/responses.",
+                            })}
+                          </p>
+                          <div>
+                            <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tcp-http-path">
+                              {t("pages.inbounds.tcpHttpPath", { defaultValue: "Request path" })}
+                            </label>
+                            <Input
+                              id="in-tcp-http-path"
+                              className="font-mono text-xs"
+                              value={form.streamForm.tcpHttpPath}
+                              onChange={(e) => setStreamFormField("tcpHttpPath", e.target.value)}
+                              placeholder="/"
+                            />
+                          </div>
+                          <div>
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-[var(--fg-muted)]">
+                                {t("pages.inbounds.tcpHttpRequestHeaders", { defaultValue: "Request headers" })}
+                              </span>
+                              <Button type="button" variant="secondary" className="text-xs" onClick={addTcpReqHeader}>
+                                <Plus className="mr-1 inline h-3.5 w-3.5" />
+                                {t("pages.inbounds.xhttpAddHeader", { defaultValue: "Add" })}
+                              </Button>
+                            </div>
+                            <div className="space-y-2">
+                              {form.streamForm.tcpHttpRequestHeaders.map((row, index) => (
+                                <div key={index} className="flex gap-2">
+                                  <Input
+                                    className="min-w-0 flex-1 font-mono text-xs"
+                                    value={row.name}
+                                    onChange={(e) => setTcpReqHeaderField(index, "name", e.target.value)}
+                                    placeholder="Host"
+                                    aria-label={`req header name ${index + 1}`}
+                                  />
+                                  <Input
+                                    className="min-w-0 flex-1 font-mono text-xs"
+                                    value={row.value}
+                                    onChange={(e) => setTcpReqHeaderField(index, "value", e.target.value)}
+                                    placeholder="example.com"
+                                    aria-label={`req header value ${index + 1}`}
+                                  />
+                                  <Button type="button" variant="secondary" className="shrink-0 px-2" onClick={() => removeTcpReqHeader(index)} aria-label={t("remove", { defaultValue: "Remove" })}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <div>
+                              <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tcp-resp-status">
+                                {t("pages.inbounds.tcpHttpResponseStatus", { defaultValue: "Response status" })}
+                              </label>
+                              <Input
+                                id="in-tcp-resp-status"
+                                className="font-mono text-xs"
+                                value={form.streamForm.tcpHttpResponseStatus}
+                                onChange={(e) => setStreamFormField("tcpHttpResponseStatus", e.target.value)}
+                                placeholder="200"
+                              />
+                            </div>
+                            <div>
+                              <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tcp-resp-reason">
+                                {t("pages.inbounds.tcpHttpResponseReason", { defaultValue: "Response reason" })}
+                              </label>
+                              <Input
+                                id="in-tcp-resp-reason"
+                                className="font-mono text-xs"
+                                value={form.streamForm.tcpHttpResponseReason}
+                                onChange={(e) => setStreamFormField("tcpHttpResponseReason", e.target.value)}
+                                placeholder="OK"
+                              />
+                            </div>
+                          </div>
+                          <div>
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                              <span className="text-xs font-medium text-[var(--fg-muted)]">
+                                {t("pages.inbounds.tcpHttpResponseHeaders", { defaultValue: "Response headers" })}
+                              </span>
+                              <Button type="button" variant="secondary" className="text-xs" onClick={addTcpRespHeader}>
+                                <Plus className="mr-1 inline h-3.5 w-3.5" />
+                                {t("pages.inbounds.xhttpAddHeader", { defaultValue: "Add" })}
+                              </Button>
+                            </div>
+                            <div className="space-y-2">
+                              {form.streamForm.tcpHttpResponseHeaders.map((row, index) => (
+                                <div key={index} className="flex gap-2">
+                                  <Input
+                                    className="min-w-0 flex-1 font-mono text-xs"
+                                    value={row.name}
+                                    onChange={(e) => setTcpRespHeaderField(index, "name", e.target.value)}
+                                    placeholder="Content-Type"
+                                    aria-label={`resp header name ${index + 1}`}
+                                  />
+                                  <Input
+                                    className="min-w-0 flex-1 font-mono text-xs"
+                                    value={row.value}
+                                    onChange={(e) => setTcpRespHeaderField(index, "value", e.target.value)}
+                                    placeholder="application/octet-stream"
+                                    aria-label={`resp header value ${index + 1}`}
+                                  />
+                                  <Button type="button" variant="secondary" className="shrink-0 px-2" onClick={() => removeTcpRespHeader(index)} aria-label={t("remove", { defaultValue: "Remove" })}>
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
-                  {form.streamForm.network === "ws" ? (
+                  {form.streamForm.network === "ws" ||
+                  form.streamForm.network === "httpupgrade" ? (
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label
@@ -2958,20 +3197,62 @@ export function InboundsPage() {
                     </div>
                   ) : null}
                   {form.streamForm.network === "grpc" ? (
-                    <div className="mt-3">
-                      <label
-                        className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
-                        htmlFor="in-grpc"
-                      >
-                        {t("pages.inbounds.grpcServiceName", { defaultValue: "gRPC service name" })}
-                      </label>
-                      <Input
-                        id="in-grpc"
-                        value={form.streamForm.grpcServiceName}
-                        onChange={(e) =>
-                          setStreamFormField("grpcServiceName", e.target.value)
-                        }
-                        placeholder=""
+                    <div className="mt-3 space-y-3">
+                      <div>
+                        <label
+                          className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                          htmlFor="in-grpc"
+                        >
+                          {t("pages.inbounds.grpcServiceName", { defaultValue: "gRPC service name" })}
+                        </label>
+                        <Input
+                          id="in-grpc"
+                          value={form.streamForm.grpcServiceName}
+                          onChange={(e) =>
+                            setStreamFormField("grpcServiceName", e.target.value)
+                          }
+                          placeholder=""
+                        />
+                      </div>
+                      <CheckboxField
+                        checked={form.streamForm.grpcMultiMode}
+                        onChange={(e) => setStreamFormField("grpcMultiMode", e.target.checked)}
+                        label={t("pages.inbounds.grpcMultiMode", { defaultValue: "Multi mode (multiplex streams)" })}
+                      />
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-grpc-idle">
+                            {t("pages.inbounds.grpcIdleTimeout", { defaultValue: "Idle timeout (s, 0=default)" })}
+                          </label>
+                          <Input
+                            id="in-grpc-idle"
+                            type="number"
+                            min={0}
+                            value={String(form.streamForm.grpcIdleTimeout)}
+                            onChange={(e) =>
+                              setStreamFormField("grpcIdleTimeout", Math.max(0, parseInt(e.target.value, 10) || 0))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-grpc-hc">
+                            {t("pages.inbounds.grpcHealthCheckTimeout", { defaultValue: "Health check timeout (s, 0=default)" })}
+                          </label>
+                          <Input
+                            id="in-grpc-hc"
+                            type="number"
+                            min={0}
+                            value={String(form.streamForm.grpcHealthCheckTimeout)}
+                            onChange={(e) =>
+                              setStreamFormField("grpcHealthCheckTimeout", Math.max(0, parseInt(e.target.value, 10) || 0))
+                            }
+                          />
+                        </div>
+                      </div>
+                      <CheckboxField
+                        checked={form.streamForm.grpcPermitWithoutStream}
+                        onChange={(e) => setStreamFormField("grpcPermitWithoutStream", e.target.checked)}
+                        label={t("pages.inbounds.grpcPermitWithoutStream", { defaultValue: "Permit keepalive without stream" })}
                       />
                     </div>
                   ) : null}
@@ -3445,6 +3726,140 @@ export function InboundsPage() {
                       </div>
                     </div>
                   ) : null}
+                  {form.streamForm.network === "kcp" ? (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-xs text-[var(--fg-subtle)]">
+                        {t("pages.inbounds.kcpHint", {
+                          defaultValue: "mKCP — UDP-based transport with header obfuscation to disguise traffic as other protocols.",
+                        })}
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-hdr">
+                            {t("pages.inbounds.kcpHeaderType", { defaultValue: "Header obfuscation" })}
+                          </label>
+                          <SelectNative
+                            id="in-kcp-hdr"
+                            value={form.streamForm.kcpHeaderType}
+                            onChange={(e) =>
+                              setStreamFormField("kcpHeaderType", e.target.value as StreamFormState["kcpHeaderType"])
+                            }
+                          >
+                            {KCP_HEADER_TYPES.map((x) => (
+                              <option key={x.value} value={x.value}>{x.label}</option>
+                            ))}
+                          </SelectNative>
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-seed">
+                            {t("pages.inbounds.kcpSeed", { defaultValue: "Seed (encryption key)" })}
+                          </label>
+                          <Input
+                            id="in-kcp-seed"
+                            className="font-mono text-xs"
+                            value={form.streamForm.kcpSeed}
+                            onChange={(e) => setStreamFormField("kcpSeed", e.target.value)}
+                            placeholder=""
+                          />
+                        </div>
+                      </div>
+                      <CheckboxField
+                        checked={form.streamForm.kcpCongestion}
+                        onChange={(e) => setStreamFormField("kcpCongestion", e.target.checked)}
+                        label={t("pages.inbounds.kcpCongestion", { defaultValue: "Congestion control" })}
+                      />
+                      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-mtu">
+                            MTU
+                          </label>
+                          <Input id="in-kcp-mtu" type="number" min={576} max={1460} value={String(form.streamForm.kcpMtu)} onChange={(e) => setStreamFormField("kcpMtu", Math.max(576, parseInt(e.target.value, 10) || 1350))} />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-tti">
+                            TTI (ms)
+                          </label>
+                          <Input id="in-kcp-tti" type="number" min={1} max={100} value={String(form.streamForm.kcpTti)} onChange={(e) => setStreamFormField("kcpTti", Math.max(1, parseInt(e.target.value, 10) || 20))} />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-up">
+                            {t("pages.inbounds.kcpUplinkCapacity", { defaultValue: "Uplink (MB/s)" })}
+                          </label>
+                          <Input id="in-kcp-up" type="number" min={0} value={String(form.streamForm.kcpUplinkCapacity)} onChange={(e) => setStreamFormField("kcpUplinkCapacity", Math.max(0, parseInt(e.target.value, 10) || 50))} />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-dn">
+                            {t("pages.inbounds.kcpDownlinkCapacity", { defaultValue: "Downlink (MB/s)" })}
+                          </label>
+                          <Input id="in-kcp-dn" type="number" min={0} value={String(form.streamForm.kcpDownlinkCapacity)} onChange={(e) => setStreamFormField("kcpDownlinkCapacity", Math.max(0, parseInt(e.target.value, 10) || 20))} />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-rbuf">
+                            {t("pages.inbounds.kcpReadBuffer", { defaultValue: "Read buffer (MB)" })}
+                          </label>
+                          <Input id="in-kcp-rbuf" type="number" min={1} value={String(form.streamForm.kcpReadBuffer)} onChange={(e) => setStreamFormField("kcpReadBuffer", Math.max(1, parseInt(e.target.value, 10) || 2))} />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-kcp-wbuf">
+                            {t("pages.inbounds.kcpWriteBuffer", { defaultValue: "Write buffer (MB)" })}
+                          </label>
+                          <Input id="in-kcp-wbuf" type="number" min={1} value={String(form.streamForm.kcpWriteBuffer)} onChange={(e) => setStreamFormField("kcpWriteBuffer", Math.max(1, parseInt(e.target.value, 10) || 2))} />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
+                  {form.streamForm.network === "h2" ? (
+                    <div className="mt-3 space-y-3">
+                      <p className="text-xs text-[var(--fg-subtle)]">
+                        {t("pages.inbounds.h2Hint", {
+                          defaultValue: "HTTP/2 transport — disguises traffic as standard HTTPS API calls. Requires TLS security.",
+                        })}
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-h2-host">
+                            {t("host", { defaultValue: "Host" })}
+                            <span className="ml-1 text-[var(--fg-subtle)]">(comma-separated)</span>
+                          </label>
+                          <Input
+                            id="in-h2-host"
+                            className="font-mono text-xs"
+                            value={form.streamForm.h2Host}
+                            onChange={(e) => setStreamFormField("h2Host", e.target.value)}
+                            placeholder="example.com"
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-h2-path">
+                            {t("path", { defaultValue: "Path" })}
+                          </label>
+                          <Input
+                            id="in-h2-path"
+                            className="font-mono text-xs"
+                            value={form.streamForm.h2Path}
+                            onChange={(e) => setStreamFormField("h2Path", e.target.value)}
+                            placeholder="/"
+                          />
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-h2-idle">
+                            {t("pages.inbounds.h2ReadIdleTimeout", { defaultValue: "Read idle timeout (s)" })}
+                          </label>
+                          <Input id="in-h2-idle" type="number" min={0} value={String(form.streamForm.h2ReadIdleTimeout)} onChange={(e) => setStreamFormField("h2ReadIdleTimeout", Math.max(0, parseInt(e.target.value, 10) || 10))} />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-h2-hc">
+                            {t("pages.inbounds.h2HealthCheckTimeout", { defaultValue: "Health check timeout (s)" })}
+                          </label>
+                          <Input id="in-h2-hc" type="number" min={0} value={String(form.streamForm.h2HealthCheckTimeout)} onChange={(e) => setStreamFormField("h2HealthCheckTimeout", Math.max(0, parseInt(e.target.value, 10) || 15))} />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                   {form.streamForm.network === "quic" ? (
                     <div className="mt-3 space-y-3">
                       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -3527,6 +3942,19 @@ export function InboundsPage() {
                           </Button>
                         </div>
                       </div>
+                    </div>
+                  ) : null}
+                  {form.streamForm.network !== "tcp" ? (
+                    <div className="mt-3">
+                      <CheckboxField
+                        checked={form.streamForm.acceptProxyProtocol}
+                        onChange={(e) =>
+                          setStreamFormField("acceptProxyProtocol", e.target.checked)
+                        }
+                        label={t("pages.inbounds.acceptProxyProtocol", {
+                          defaultValue: "Accept proxy protocol",
+                        })}
+                      />
                     </div>
                   ) : null}
                   {form.streamForm.security === "tls" ? (
@@ -3710,6 +4138,41 @@ export function InboundsPage() {
                             setStreamFormField("tlsKeyPem", e.target.value)
                           }
                           placeholder="-----BEGIN PRIVATE KEY-----"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tls-ocsp">
+                            {t("pages.inbounds.tlsOcspStapling", { defaultValue: "OCSP stapling cache (s, 0=off)" })}
+                          </label>
+                          <Input
+                            id="in-tls-ocsp"
+                            type="number"
+                            min={0}
+                            value={String(form.streamForm.tlsOcspStapling)}
+                            onChange={(e) =>
+                              setStreamFormField("tlsOcspStapling", Math.max(0, parseInt(e.target.value, 10) || 0))
+                            }
+                          />
+                        </div>
+                        <div className="flex items-end pb-1">
+                          <CheckboxField
+                            checked={form.streamForm.tlsVerifyClientCertificate}
+                            onChange={(e) => setStreamFormField("tlsVerifyClientCertificate", e.target.checked)}
+                            label={t("pages.inbounds.tlsVerifyClientCertificate", { defaultValue: "Require client certificate (mTLS)" })}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-tls-pinned">
+                          {t("pages.inbounds.tlsPinnedSha256", { defaultValue: "Pinned peer cert SHA-256 (one per line)" })}
+                        </label>
+                        <TextArea
+                          id="in-tls-pinned"
+                          className="min-h-[60px] font-mono text-xs"
+                          value={form.streamForm.tlsPinnedSha256}
+                          onChange={(e) => setStreamFormField("tlsPinnedSha256", e.target.value)}
+                          placeholder=""
                         />
                       </div>
                     </div>
@@ -4066,6 +4529,66 @@ export function InboundsPage() {
                       </div>
                     </div>
                   ) : null}
+                  {streamTransportMode === "full" ? (
+                    <div className="mt-3 space-y-3 rounded-lg border border-[var(--border)]/60 p-3">
+                      <p className="text-xs font-medium text-[var(--fg-muted)]">
+                        {t("pages.inbounds.sockoptSection", { defaultValue: "Sockopt (inbound)" })}
+                      </p>
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                        <div className="flex items-center pb-1">
+                          <CheckboxField
+                            checked={form.streamForm.sockoptTcpFastOpen}
+                            onChange={(e) => setStreamFormField("sockoptTcpFastOpen", e.target.checked)}
+                            label={t("pages.inbounds.sockoptTcpFastOpen", { defaultValue: "TCP Fast Open" })}
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-sockopt-tproxy">
+                            {t("pages.inbounds.sockoptTproxy", { defaultValue: "TProxy" })}
+                          </label>
+                          <SelectNative
+                            id="in-sockopt-tproxy"
+                            value={form.streamForm.sockoptTproxy}
+                            onChange={(e) =>
+                              setStreamFormField("sockoptTproxy", e.target.value as StreamFormState["sockoptTproxy"])
+                            }
+                          >
+                            <option value="off">off</option>
+                            <option value="redirect">redirect</option>
+                            <option value="tproxy">tproxy</option>
+                          </SelectNative>
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-sockopt-mark">
+                            {t("pages.inbounds.sockoptMark", { defaultValue: "SO_MARK (0=off)" })}
+                          </label>
+                          <Input
+                            id="in-sockopt-mark"
+                            type="number"
+                            min={0}
+                            value={String(form.streamForm.sockoptMark)}
+                            onChange={(e) =>
+                              setStreamFormField("sockoptMark", Math.max(0, parseInt(e.target.value, 10) || 0))
+                            }
+                          />
+                        </div>
+                        <div>
+                          <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-sockopt-keepalive">
+                            {t("pages.inbounds.sockoptTcpKeepAlive", { defaultValue: "TCP keepalive interval (s, 0=default)" })}
+                          </label>
+                          <Input
+                            id="in-sockopt-keepalive"
+                            type="number"
+                            min={0}
+                            value={String(form.streamForm.sockoptTcpKeepAlive)}
+                            onChange={(e) =>
+                              setStreamFormField("sockoptTcpKeepAlive", Math.max(0, parseInt(e.target.value, 10) || 0))
+                            }
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </>
               )}
             </InboundFormSection>
@@ -4084,48 +4607,46 @@ export function InboundsPage() {
               }
             >
             {form.protocol === "vless" ? (
-              <div>
-                <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-flow">
-                  {t("pages.inbounds.addInboundVlessFlowLabel")}
-                </label>
-                <SelectNative
-                  id="in-flow"
-                  value={form.vlessFlow}
-                  onChange={(e) =>
-                    setForm((f) => ({ ...f, vlessFlow: e.target.value }))
-                  }
-                >
-                  <option value="">{t("pages.inbounds.addInboundVlessFlowNone")}</option>
-                  <option value="xtls-rprx-vision">xtls-rprx-vision</option>
-                </SelectNative>
-
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-
+              <div className="space-y-3">
                 <div>
-                  <label className="mb-1.5 block text-xs font-medium">
-                    Encryption
+                  <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-flow">
+                    {t("pages.inbounds.addInboundVlessFlowLabel")}
                   </label>
-
-                  <Input
-                    value={form.vlessEncryption}
-                    placeholder="none"
+                  <SelectNative
+                    id="in-flow"
+                    value={form.vlessFlow}
                     onChange={(e) =>
-                      setForm((f) => ({
-                        ...f,
-                        vlessEncryption: e.target.value,
-                      }))
+                      setForm((f) => ({ ...f, vlessFlow: e.target.value }))
                     }
-                    disabled={Boolean(form.vlessTrojanFallbacks.length != 0)}
                   >
-                  </Input>
+                    <option value="">{t("pages.inbounds.addInboundVlessFlowNone")}</option>
+                    <option value="xtls-rprx-vision">xtls-rprx-vision</option>
+                    <option value="xtls-rprx-vision-udp443">xtls-rprx-vision-udp443</option>
+                  </SelectNative>
                 </div>
 
-                <div>
-                  <label className="mb-1.5 block text-xs font-medium">
-                    Decryption
-                  </label>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">
+                      Encryption
+                    </label>
+                    <Input
+                      value={form.vlessEncryption}
+                      placeholder="none"
+                      onChange={(e) =>
+                        setForm((f) => ({
+                          ...f,
+                          vlessEncryption: e.target.value,
+                        }))
+                      }
+                      disabled={Boolean(form.vlessTrojanFallbacks.length != 0)}
+                    />
+                  </div>
 
-                  <div className="flex gap-2">
+                  <div>
+                    <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]">
+                      Decryption
+                    </label>
                     <Input
                       className="font-mono text-xs"
                       placeholder="none"
@@ -4139,7 +4660,6 @@ export function InboundsPage() {
                       disabled={Boolean(form.vlessTrojanFallbacks.length != 0)}
                     />
                   </div>
-                </div>
                 </div>
               </div>
             ) : null}
@@ -4515,6 +5035,18 @@ export function InboundsPage() {
                   }
                   label={t("pages.inbounds.telemtUseMiddleProxy", {
                     defaultValue: "use_middle_proxy",
+                  })}
+                />
+                <CheckboxField
+                  checked={form.telemtForm.proxyProtocol}
+                  onChange={(e) =>
+                    setForm((f) => ({
+                      ...f,
+                      telemtForm: { ...f.telemtForm, proxyProtocol: e.target.checked },
+                    }))
+                  }
+                  label={t("pages.inbounds.telemtProxyProtocol", {
+                    defaultValue: "proxy_protocol (accept PROXY Protocol from upstream)",
                   })}
                 />
                 <div>
@@ -5133,6 +5665,23 @@ export function InboundsPage() {
                     defaultValue: "Route only",
                   })}
                 />
+              </div>
+              <div className="mt-3">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor="in-sniff-excluded">
+                  {t("pages.inbounds.sniffingDomainsExcluded", { defaultValue: "Excluded domains (one per line)" })}
+                </label>
+                <TextArea
+                  id="in-sniff-excluded"
+                  className="min-h-[64px] font-mono text-xs"
+                  value={form.sniffingForm.domainsExcluded}
+                  onChange={(e) => setSniffingFormField("domainsExcluded", e.target.value)}
+                  placeholder="domain:example.com"
+                />
+                <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.sniffingDomainsExcludedHint", {
+                    defaultValue: "Domains matching these rules will not have their destination overridden.",
+                  })}
+                </p>
               </div>
             </InboundFormSection>
             ) : null}

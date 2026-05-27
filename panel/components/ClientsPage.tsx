@@ -177,7 +177,7 @@ function formatClientCardExpiry(ms: number | undefined, noExpiry: string, expire
 /** Unified panel API shape (see model.ClientCardView). */
 type ClientCard = {
   id: number;
-  email: string;
+  name: string;
   enable: boolean;
   status?: string;
   uuid?: string;
@@ -223,7 +223,7 @@ type ClientsConfirmAction =
 /** How long a client can disappear from the online batch before the UI flips to offline (avoids flicker on sparse WS ticks). */
 const OFFLINE_STATUS_DELAY_MS = 5_000;
 
-function normEmail(s: string) {
+function normClientName(s: string) {
   return s.trim().toLowerCase();
 }
 
@@ -282,14 +282,14 @@ function mergeClientWithEntity(row: ClientCard, e: WsClientEntity): ClientCard {
   return next;
 }
 
-function findLastOnlineForEmail(
-  email: string,
+function findLastOnlineForName(
+  name: string,
   lastOnlineMap: Record<string, unknown>
 ): number | undefined {
-  const k = normEmail(email);
+  const k = normClientName(name);
   for (const [key, v] of Object.entries(lastOnlineMap)) {
     if (typeof v !== "number") continue;
-    if (normEmail(String(key)) === k) return v;
+    if (normClientName(String(key)) === k) return v;
   }
   return undefined;
 }
@@ -460,7 +460,7 @@ type SortDir = "asc" | "desc";
 /** Table column order (source of truth for header / body / filter row). */
 const DATA_COLUMN_ORDER = [
   "id",
-  "email",
+  "name",
   "comment",
   "connection",
   "state",
@@ -487,10 +487,10 @@ const DATA_COLUMN_ORDER = [
 type DataColumnId = (typeof DATA_COLUMN_ORDER)[number];
 type ClientSortKey = DataColumnId;
 
-type ColumnFilterId = "email" | "comment" | "traffic" | "expiry" | "hwid";
+type ColumnFilterId = "name" | "comment" | "traffic" | "expiry" | "hwid";
 
 const DEFAULT_COLUMN_FILTERS: Record<ColumnFilterId, string> = {
-  email: "",
+  name: "",
   comment: "",
   traffic: "",
   expiry: "",
@@ -499,7 +499,7 @@ const DEFAULT_COLUMN_FILTERS: Record<ColumnFilterId, string> = {
 
 const DEFAULT_COLUMN_VISIBILITY: Record<DataColumnId, boolean> = {
   id: false,
-  email: true,
+  name: true,
   comment: false,
   connection: true,
   state: true,
@@ -526,7 +526,7 @@ const DEFAULT_COLUMN_VISIBILITY: Record<DataColumnId, boolean> = {
 function getDataColumnLabel(col: DataColumnId, t: TFunction): string {
   const d: Record<DataColumnId, { key: string; defaultValue: string }> = {
     id: { key: "pages.clients.colId", defaultValue: "ID" },
-    email: { key: "pages.clients.email", defaultValue: "Email" },
+    name: { key: "pages.clients.name", defaultValue: "Client name" },
     comment: { key: "pages.clients.colComment", defaultValue: "Name" },
     connection: { key: "pages.clients.connectionStatus", defaultValue: "Status" },
     state: { key: "pages.clients.stateColumn", defaultValue: "State" },
@@ -801,7 +801,7 @@ function buildClientTextFilterHaystacks(
     : "—";
 
   return {
-    email: r.email.toLowerCase(),
+    name: r.name.toLowerCase(),
     comment: (r.comment || "").toLowerCase(),
     traffic,
     expiry: expiryLabel,
@@ -836,8 +836,8 @@ function compareClients(
     case "id":
       c = a.id - b.id;
       break;
-    case "email":
-      c = a.email.localeCompare(b.email, undefined, { sensitivity: "base" });
+    case "name":
+      c = a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
       break;
     case "comment":
       c = (a.comment || "").localeCompare(b.comment || "", undefined, {
@@ -990,13 +990,13 @@ function ClientDataCell({
       return (
         <span className="tabular-nums text-[var(--fg)]">{r.id}</span>
       );
-    case "email":
+    case "name":
       return (
         <span
           className="block max-w-full truncate font-medium text-[var(--fg)]"
-          title={r.email}
+          title={r.name}
         >
-          {r.email}
+          {r.name}
         </span>
       );
     case "comment":
@@ -1284,7 +1284,7 @@ function groupSortKey(r: ClientCard, options: GroupOption[]): string {
 type ClientSheetMode = "create" | "edit";
 
 type ClientSessionsResponse = {
-  email: string;
+  name: string;
   blockedSessionIps?: string[];
   results: {
     nodeId?: number;
@@ -1299,12 +1299,12 @@ type ClientSessionsResponse = {
     }[];
     dropAvailable: boolean;
     error?: string;
-  }[];
+  }[] | null;
 };
 
 type ClientDetail = {
   id: number;
-  email: string;
+  name: string;
   enable: boolean;
   totalGB: number;
   expiryTime: number;
@@ -1321,10 +1321,12 @@ type ClientDetail = {
   uuid?: string;
   hwidEnabled?: boolean;
   maxHwid?: number;
+  ipLimitEnabled?: boolean;
+  maxIPs?: number;
 };
 
 type ClientFormState = {
-  email: string;
+  name: string;
   enable: boolean;
   totalGB: string;
   expiryLocal: string;
@@ -1337,10 +1339,12 @@ type ClientFormState = {
   announce: string;
   hwidEnabled: boolean;
   maxHwid: string;
+  ipLimitEnabled: boolean;
+  maxIPs: string;
 };
 
 const FORM_DEFAULT: ClientFormState = {
-  email: "",
+  name: "",
   enable: true,
   totalGB: "0",
   expiryLocal: "",
@@ -1352,6 +1356,8 @@ const FORM_DEFAULT: ClientFormState = {
   announce: "",
   hwidEnabled: false,
   maxHwid: "0",
+  ipLimitEnabled: false,
+  maxIPs: "1",
 };
 
 function msToDatetimeLocal(ms: number): string {
@@ -1677,9 +1683,35 @@ function ClientUnifiedCard({
                 <div>
                   <label
                     className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
+                    htmlFor={id("client-name")}
+                  >
+                    {t("pages.clients.name", { defaultValue: "Client name" })} *
+                  </label>
+                  <Input
+                    id={id("client-name")}
+                    type="text"
+                    value={form.name}
+                    onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+                    autoComplete="off"
+                    readOnly={isEdit}
+                    aria-readonly={isEdit}
+                    className={isEdit ? "cursor-default bg-[var(--bg-muted)]/40" : undefined}
+                  />
+                  {isEdit ? (
+                    <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                      {t("pages.clients.nameImmutableHint", {
+                        defaultValue: "Client name cannot be changed after the client is created.",
+                      })}
+                    </p>
+                  ) : null}
+                </div>
+
+                <div>
+                  <label
+                    className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]"
                     htmlFor={id("comment")}
                   >
-                    {t("pages.clients.displayName", { defaultValue: "Client name" })}
+                    {t("pages.clients.comment", { defaultValue: "Comment" })}
                   </label>
                   <Input
                     id={id("comment")}
@@ -1746,34 +1778,6 @@ function ClientUnifiedCard({
                   <p className="mt-1 text-xs text-[var(--fg-subtle)]">
                     {t("pages.clients.addModalTgIdHint")}
                   </p>
-                </div>
-
-                <div>
-                  <label
-                    className="mb-1.5 flex items-center gap-1 text-xs font-medium text-[var(--fg-muted)]"
-                    htmlFor={id("email")}
-                  >
-                    <Mail size={12} />
-                    {t("pages.clients.email")} *
-                  </label>
-                  <Input
-                    id={id("email")}
-                    type="email"
-                    value={form.email}
-                    onChange={(e) => setForm((f) => ({ ...f, email: e.target.value }))}
-                    placeholder="user@example.com"
-                    autoComplete="off"
-                    readOnly={isEdit}
-                    aria-readonly={isEdit}
-                    className={isEdit ? "cursor-default bg-[var(--bg-muted)]/40" : undefined}
-                  />
-                  {isEdit ? (
-                    <p className="mt-1 text-xs text-[var(--fg-subtle)]">
-                      {t("pages.clients.emailImmutableHint", {
-                        defaultValue: "Email cannot be changed after the client is created.",
-                      })}
-                    </p>
-                  ) : null}
                 </div>
 
                 {variant === "create" ? (
@@ -2188,6 +2192,30 @@ function ClientUnifiedCard({
                 </Button>
               ) : null}
             </div>
+
+            <div className="rounded-xl border border-[var(--border)] bg-[var(--bg-elevated)] p-4">
+              <SectionLabel icon={Shield}>
+                {t("pages.clients.ipLimitTitle", { defaultValue: "IP limit" })}
+              </SectionLabel>
+              <CheckboxField
+                checked={form.ipLimitEnabled}
+                onChange={(e) => setForm((f) => ({ ...f, ipLimitEnabled: e.target.checked }))}
+                label={t("pages.clients.ipLimitEnabled", { defaultValue: "Limit concurrent IPs" })}
+              />
+              <div className="mt-3">
+                <label className="mb-1.5 block text-xs font-medium text-[var(--fg-muted)]" htmlFor={id("max-ips")}>
+                  {t("pages.clients.maxIPs", { defaultValue: "Max unique IPs" })}
+                </label>
+                <Input
+                  id={id("max-ips")}
+                  type="number"
+                  min={1}
+                  disabled={!form.ipLimitEnabled}
+                  value={form.maxIPs}
+                  onChange={(e) => setForm((f) => ({ ...f, maxIPs: e.target.value }))}
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -2439,13 +2467,13 @@ export function ClientsPage() {
       const onlineSet = new Set(
         onlineList
           .filter((e): e is string => typeof e === "string")
-          .map(normEmail),
+          .map(normClientName),
       );
       setRows((prev) =>
         prev.map((row) => {
-          const k = normEmail(row.email);
+          const k = normClientName(row.name);
           const serverOnline = onlineSet.has(k);
-          const lo = findLastOnlineForEmail(row.email, lastOnlineMap);
+          const lo = findLastOnlineForName(row.name, lastOnlineMap);
           const base: ClientCard = {
             ...row,
             ...(lo != null ? { lastOnline: lo } : {}),
@@ -2809,7 +2837,7 @@ export function ClientsPage() {
     const expiredLabel = t("pages.clients.cardExpired", {
       defaultValue: "Expired",
     });
-    const emailNeedle = columnFilters.email.trim().toLowerCase();
+    const nameNeedle = columnFilters.name.trim().toLowerCase();
     const commentNeedle = columnFilters.comment.trim().toLowerCase();
     const hwidNeedle = columnFilters.hwid.trim().toLowerCase();
     const trafficRaw = columnFilters.traffic.trim();
@@ -2827,7 +2855,7 @@ export function ClientsPage() {
       filterInboundId !== "" ||
       filterGroupId !== "";
     const anyTextHaystack =
-      emailNeedle.length > 0 ||
+      nameNeedle.length > 0 ||
       commentNeedle.length > 0 ||
       hwidNeedle.length > 0 ||
       trafficNeedle.length > 0 ||
@@ -2877,7 +2905,7 @@ export function ClientsPage() {
         expiredLabel,
       );
 
-      if (emailNeedle && !hay.email.includes(emailNeedle)) return false;
+      if (nameNeedle && !hay.name.includes(nameNeedle)) return false;
       if (commentNeedle && !hay.comment.includes(commentNeedle)) return false;
       if (hwidNeedle && !hay.hwid.includes(hwidNeedle)) return false;
 
@@ -2958,7 +2986,7 @@ export function ClientsPage() {
 
   useEffect(() => {
     if (!columnVisibility[sortKey]) {
-      setSortKey("email");
+      setSortKey("name");
       setSortDir("asc");
     }
   }, [columnVisibility, sortKey]);
@@ -3054,7 +3082,7 @@ export function ClientsPage() {
   const defaultDirForKey = (k: ClientSortKey): SortDir => {
     switch (k) {
       case "id":
-      case "email":
+      case "name":
       case "comment":
       case "expiry":
       case "state":
@@ -3289,7 +3317,7 @@ export function ClientsPage() {
       }
       const c = r.obj as ClientDetail;
       setForm({
-        email: c.email ?? "",
+        name: c.name ?? "",
         enable: c.enable !== false,
         totalGB: String(c.totalGB ?? 0),
         expiryLocal: msToDatetimeLocal(c.expiryTime ?? 0),
@@ -3301,6 +3329,8 @@ export function ClientsPage() {
         announce: c.announce ?? "",
         hwidEnabled: !!c.hwidEnabled,
         maxHwid: String(c.maxHwid ?? 0),
+        ipLimitEnabled: !!c.ipLimitEnabled,
+        maxIPs: String(c.maxIPs ?? 1),
       });
       const ids = (c.inboundIds ?? []).filter((iid) => iid > 0);
       const m: Record<number, boolean> = {};
@@ -3324,8 +3354,8 @@ export function ClientsPage() {
   };
 
   const submitClient = async () => {
-    const email = form.email.trim().toLowerCase();
-    if (!email) {
+    const name = form.name.trim().toLowerCase();
+    if (!name) {
       toast.error(t("pages.clients.emailRequired"));
       return;
     }
@@ -3393,12 +3423,14 @@ export function ClientsPage() {
 
       const subIdTrim = form.subId.trim();
       const body: Record<string, unknown> = {
-        email,
+        name,
         enable: form.enable,
         totalGB,
         expiryTime,
         hwidEnabled: form.hwidEnabled,
         maxHwid,
+        ipLimitEnabled: form.ipLimitEnabled,
+        maxIPs: form.ipLimitEnabled ? Math.max(1, parseInt(form.maxIPs, 10) || 1) : 0,
         reset: resetVal,
         tgId,
         subId: subIdTrim,
@@ -3596,9 +3628,9 @@ export function ClientsPage() {
                       >
                         <Checkbox
                           checked={columnVisibility[colId]}
-                          disabled={colId === "email"}
+                          disabled={colId === "name"}
                           onChange={(e) => {
-                            if (colId === "email") return;
+                            if (colId === "name") return;
                             setColumnVisibility((v) => ({
                               ...v,
                               [colId]: e.target.checked,
@@ -3770,16 +3802,16 @@ export function ClientsPage() {
                       ) : null}
                       {DATA_COLUMN_ORDER.map((col) => {
                         if (!columnVisibility[col]) return null;
-                        if (col === "email") {
+                        if (col === "name") {
                           return (
                             <th
                               key={col}
                               className="p-2 align-top font-normal"
                             >
                               <ClientsColumnFilterInput
-                                value={columnFilters.email}
+                                value={columnFilters.name}
                                 onChange={(v) =>
-                                  setColumnFilters((f) => ({ ...f, email: v }))
+                                  setColumnFilters((f) => ({ ...f, name: v }))
                                 }
                                 placeholder={t("pages.clients.filterColEmail", {
                                   defaultValue: "Contains…",
@@ -4076,7 +4108,7 @@ export function ClientsPage() {
                                     return next;
                                   });
                                 }}
-                                aria-label={r.email}
+                                aria-label={r.name}
                               />
                             </td>
                           ) : null}
@@ -4087,7 +4119,7 @@ export function ClientsPage() {
                                 key={col}
                                 className={cx(
                                   "p-3 align-middle",
-                                  col === "email" &&
+                                  col === "name" &&
                                     "max-w-[14rem] font-medium text-[var(--fg)]",
                                 )}
                               >
@@ -4123,7 +4155,7 @@ export function ClientsPage() {
         }}
         title={
           sheetMode === "edit"
-            ? form.email.trim() ||
+            ? form.name.trim() ||
               t("pages.clients.editClient", { defaultValue: "Edit client" })
             : t("pages.clients.addClient")
         }
@@ -4409,6 +4441,27 @@ export function ClientsPage() {
                       ? t("pages.clients.copyWireGuardDetails", { defaultValue: "Copy" })
                       : t("copy")}
                   </Button>
+                  {row.protocol === "wireguard" ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      className="!h-8 !text-xs"
+                      onClick={() => {
+                        const conf = row.link.includes("[Interface]")
+                          ? row.link.slice(row.link.indexOf("[Interface]"))
+                          : row.link;
+                        const blob = new Blob([conf], { type: "text/plain;charset=utf-8" });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement("a");
+                        a.href = url;
+                        a.download = `${keysModalClient?.name || "client"}.conf`;
+                        a.click();
+                        URL.revokeObjectURL(url);
+                      }}
+                    >
+                      {t("pages.clients.downloadWireGuardConf", { defaultValue: "Download .conf" })}
+                    </Button>
+                  ) : null}
                   <Button
                     type="button"
                     variant="secondary"
@@ -4496,7 +4549,7 @@ export function ClientsPage() {
           </div>
         ) : sessionsData ? (
           <div className="max-h-[60vh] space-y-4 overflow-y-auto text-sm">
-            {sessionsData.results.some((b) =>
+            {(sessionsData.results ?? []).some((b) =>
               (b.sessions ?? []).some((s) => s.protocol === "mtproto"),
             ) ? (
               <p className="rounded-lg border border-[var(--border)] bg-[var(--surface)] p-2 text-[11px] text-[var(--fg-muted)]">
@@ -4506,7 +4559,7 @@ export function ClientsPage() {
                 })}
               </p>
             ) : null}
-            {sessionsData.results.map((block) => (
+            {(sessionsData.results ?? []).map((block) => (
               <div
                 key={
                   block.isOfflineBlockedGroup
@@ -4846,7 +4899,7 @@ export function ClientsPage() {
         }
         description={
           clientsConfirmAction?.kind === "deleteOne"
-            ? clientsConfirmAction.client.email
+            ? clientsConfirmAction.client.name
             : undefined
         }
         confirmLabel={

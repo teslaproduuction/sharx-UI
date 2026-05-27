@@ -41,15 +41,16 @@ type telemtSettingsJSON struct {
 		PublicPort int    `json:"publicPort"`
 	} `json:"links"`
 	Censorship *struct {
-		TLSDomain         string `json:"tlsDomain"`
-		SNI               string `json:"sni"`
-		Mask              *bool  `json:"mask"`
-		TLSEmulation      *bool  `json:"tlsEmulation"`
-		TLSFrontDir       string `json:"tlsFrontDir"`
-		UnknownSniAction  string `json:"unknownSniAction"`
+		TLSDomain        string `json:"tlsDomain"`
+		SNI              string `json:"sni"`
+		Mask             *bool  `json:"mask"`
+		TLSEmulation     *bool  `json:"tlsEmulation"`
+		TLSFrontDir      string `json:"tlsFrontDir"`
+		UnknownSniAction string `json:"unknownSniAction"`
 	} `json:"censorship"`
-	APIEnabled *bool  `json:"apiEnabled"`
-	APIListen  string `json:"apiListen"`
+	APIEnabled    *bool  `json:"apiEnabled"`
+	APIListen     string `json:"apiListen"`
+	ProxyProtocol *bool  `json:"proxyProtocol"`
 }
 
 var telemtBareKeyRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -201,8 +202,17 @@ func BuildTelemtToml(inbound *model.Inbound, users []TelemtAccessUser, publicHos
 		}
 	}
 	fmt.Fprintf(&b, "\n[server]\nport = %d\n", inbound.Port)
+	metricsPort := 0
 	if cfg.MetricsPort != nil && *cfg.MetricsPort > 0 {
-		fmt.Fprintf(&b, "metrics_port = %d\n", *cfg.MetricsPort)
+		metricsPort = *cfg.MetricsPort
+	} else if apiPort > 0 {
+		metricsPort = apiPort + 1000
+	}
+	if metricsPort > 0 {
+		fmt.Fprintf(&b, "metrics_port = %d\n", metricsPort)
+	}
+	if cfg.ProxyProtocol != nil && *cfg.ProxyProtocol {
+		fmt.Fprintf(&b, "proxy_protocol = true\n")
 	}
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "[server.api]\nenabled = %v\nlisten = %q\nwhitelist = [\"127.0.0.1/32\", \"::1/128\"]\n\n", apiEnabled, apiListen)
@@ -316,7 +326,7 @@ func TelemtAccessUsersForInbound(inboundId int) ([]TelemtAccessUser, error) {
 		if !c.Enable {
 			continue
 		}
-		em := strings.TrimSpace(c.Email)
+		em := strings.TrimSpace(c.Name)
 		if em == "" {
 			continue
 		}
@@ -327,7 +337,9 @@ func TelemtAccessUsersForInbound(inboundId int) ([]TelemtAccessUser, error) {
 		if c.ExpiryTime > 0 {
 			u.ExpirationRFC3339 = time.UnixMilli(c.ExpiryTime).UTC().Format(time.RFC3339)
 		}
-		if c.HWIDEnabled && c.MaxHWID > 0 {
+		if c.IPLimitEnabled && c.MaxIPs > 0 {
+			u.MaxUniqueIPs = c.MaxIPs
+		} else if c.HWIDEnabled && c.MaxHWID > 0 {
 			u.MaxUniqueIPs = c.MaxHWID
 		}
 		if d := denyByClient[c.Id]; len(d) > 0 {

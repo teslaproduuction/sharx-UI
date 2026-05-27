@@ -222,7 +222,7 @@ func (a *ClientHWIDController) registerHWID(c *gin.Context) {
 	ipAddress := c.ClientIP()
 
 	// Get client by email
-	client, err := a.clientService.GetClientByEmail(1, req.Email) // TODO: Get userId from session
+	client, err := a.clientService.GetClientByName(1, req.Email) // TODO: Get userId from session
 	if err != nil {
 		jsonMsg(c, "Client not found", err)
 		return

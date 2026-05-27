@@ -134,7 +134,7 @@ func (s *ClientSessionBlockService) SetSessionIPBlocked(userId, clientId int, ip
 		return fmt.Errorf("client not found")
 	}
 	db := database.GetDB()
-	email := strings.TrimSpace(cl.Email)
+	email := strings.TrimSpace(cl.Name)
 	if !blocked {
 		if err := db.Where("client_id = ? AND ip = ?", clientId, ip).Delete(&model.ClientBlockedSessionIP{}).Error; err != nil {
 			return err

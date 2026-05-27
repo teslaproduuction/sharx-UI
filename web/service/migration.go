@@ -638,7 +638,7 @@ func (s *MigrationService) migrateClientsFromInbounds(sqliteDB *sql.DB, tx *gorm
 				continue
 			}
 
-			// Normalize email to lowercase
+			// Normalize name to lowercase
 			email = strings.ToLower(email)
 
 			// Check if client already exists (by email)
@@ -648,7 +648,7 @@ func (s *MigrationService) migrateClientsFromInbounds(sqliteDB *sql.DB, tx *gorm
 			} else {
 				// Check in database
 				var existingDB model.ClientEntity
-				if err := tx.Where("LOWER(email) = ?", email).First(&existingDB).Error; err == nil {
+				if err := tx.Where("LOWER(name) = ?", email).First(&existingDB).Error; err == nil {
 					// Client exists, update it
 					existingDB.Enable = s.getBoolFromMap(clientMap, "enable", true)
 					existingDB.Status = "active"
@@ -697,7 +697,7 @@ func (s *MigrationService) migrateClientsFromInbounds(sqliteDB *sql.DB, tx *gorm
 					totalBytesNew := s.getInt64FromMap(clientMap, "totalGB")
 					clientEntity = &model.ClientEntity{
 						UserId: 1, // Default user
-						Email:  email,
+						Name:   email,
 						Enable: s.getBoolFromMap(clientMap, "enable", true),
 						Status: "active",
 						// LimitIP removed - using HWID only
@@ -795,12 +795,12 @@ func (s *MigrationService) migrateClientTraffics(sqliteDB *sql.DB, tx *gorm.DB) 
 			continue
 		}
 
-		// Normalize email to lowercase (same as in migrateClientsFromInbounds)
+		// Normalize name to lowercase (same as in migrateClientsFromInbounds)
 		email := strings.ToLower(oldTraffic.Email.String)
 
 		// Find client by email (case-insensitive search using LOWER function for PostgreSQL)
 		var client model.ClientEntity
-		if err := tx.Where("LOWER(email) = ?", email).First(&client).Error; err != nil {
+		if err := tx.Where("LOWER(name) = ?", email).First(&client).Error; err != nil {
 			warnings = append(warnings, fmt.Sprintf("Client with email %s not found for traffic migration", email))
 			continue
 		}
@@ -839,7 +839,7 @@ func (s *MigrationService) migrateClientTraffics(sqliteDB *sql.DB, tx *gorm.DB) 
 }
 
 func (s *MigrationService) migrateInboundClientIps(sqliteDB *sql.DB, tx *gorm.DB) (int, error) {
-	rows, err := sqliteDB.Query("SELECT id, client_email, ips FROM inbound_client_ips")
+	rows, err := sqliteDB.Query("SELECT id, client_name, ips FROM inbound_client_ips")
 	if err != nil {
 		return 0, err
 	}
@@ -856,7 +856,7 @@ func (s *MigrationService) migrateInboundClientIps(sqliteDB *sql.DB, tx *gorm.DB
 
 		// Check if already exists
 		var existing model.InboundClientIps
-		if err := tx.Where("client_email = ?", clientEmail.String).First(&existing).Error; err == nil {
+		if err := tx.Where("client_name = ?", clientEmail.String).First(&existing).Error; err == nil {
 			// Update existing
 			if err := tx.Model(&existing).Update("ips", ips.String).Error; err != nil {
 				logger.Warningf("Failed to update inbound_client_ips for %s: %v", clientEmail.String, err)
@@ -865,7 +865,7 @@ func (s *MigrationService) migrateInboundClientIps(sqliteDB *sql.DB, tx *gorm.DB
 		} else {
 			// Create new
 			inboundClientIps := model.InboundClientIps{
-				ClientEmail: clientEmail.String,
+				ClientName: clientEmail.String,
 				Ips:         ips.String,
 			}
 			if err := tx.Create(&inboundClientIps).Error; err != nil {

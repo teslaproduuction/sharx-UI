@@ -376,7 +376,7 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 			if !entity.Enable || entity.Status == "expired_traffic" || entity.Status == "expired_time" {
 				continue
 			}
-			u := entity.Email
+			u := entity.Name
 			if i := strings.IndexByte(u, '@'); i > 0 {
 				u = u[:i]
 			}
@@ -421,7 +421,7 @@ func (s *InboundService) BuildSettingsFromClientEntities(inbound *model.Inbound,
 		}
 
 		client := make(map[string]any)
-		client["email"] = entity.Email
+		client["email"] = entity.Name
 
 		switch proto {
 		case model.Trojan:
@@ -466,7 +466,7 @@ func (s *InboundService) getAllEmails() ([]string, error) {
 	var emails []string
 
 	// Get emails from ClientEntity (new architecture only)
-	err := db.Model(&model.ClientEntity{}).Pluck("email", &emails).Error
+	err := db.Model(&model.ClientEntity{}).Pluck("name", &emails).Error
 	if err != nil {
 		return nil, err
 	}
@@ -1322,7 +1322,7 @@ func (s *InboundService) DelInboundClient(inboundId int, clientId string) (bool,
 
 	// Find ClientEntity by email
 	clientService := ClientService{}
-	clientEntity, err := clientService.GetClientByEmail(oldInbound.UserId, targetEmail)
+	clientEntity, err := clientService.GetClientByName(oldInbound.UserId, targetEmail)
 	if err != nil {
 		return false, common.NewError("ClientEntity not found")
 	}
@@ -1406,7 +1406,7 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 
 	// Find ClientEntity by old email
 	clientService := ClientService{}
-	clientEntity, err := clientService.GetClientByEmail(oldInbound.UserId, oldEmail)
+	clientEntity, err := clientService.GetClientByName(oldInbound.UserId, oldEmail)
 	if err != nil {
 		return false, common.NewError("ClientEntity not found")
 	}
@@ -1418,8 +1418,8 @@ func (s *InboundService) UpdateInboundClient(data *model.Inbound, clientId strin
 	updatedEntity.CreatedAt = clientEntity.CreatedAt
 	// Preserve inbound assignments
 	updatedEntity.InboundIds = clientEntity.InboundIds
-	// Client email cannot be changed after creation (same as panel Clients API).
-	updatedEntity.Email = clientEntity.Email
+	// Client name cannot be changed after creation (same as panel Clients API).
+	updatedEntity.Name = clientEntity.Name
 
 	// Update client using ClientService (this handles Settings update automatically)
 	needRestart, err := clientService.UpdateClient(oldInbound.UserId, updatedEntity)
@@ -1463,7 +1463,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 	}
 
 	// NOTE: disableInvalidClients is no longer needed - client disabling is handled by ClientService.AddClientTraffic
-	// which updates ClientEntity.Enable and client_traffics.enable, and then DisableClientsByEmail handles Xray API removal
+	// which updates ClientEntity.Enable and client_traffics.enable, and then DisableClientsByName handles Xray API removal
 	// and Settings update. This ensures proper separation: clients are managed individually, not as part of inbound.
 
 	// NOTE: disableInvalidInbounds is disabled - inbound should NOT be blocked by traffic limits.
@@ -1483,7 +1483,7 @@ func (s *InboundService) AddTraffic(inboundTraffics []*xray.Traffic, clientTraff
 		// Run in goroutine to avoid blocking traffic updates
 		go func() {
 			clientService := ClientService{}
-			needRestart3, err := clientService.DisableClientsByEmail(clientsToDisable, s)
+			needRestart3, err := clientService.DisableClientsByName(clientsToDisable, s)
 			if err != nil {
 				logger.Warning("Error in disabling clients in new architecture:", err)
 			} else if needRestart3 {
@@ -1847,11 +1847,11 @@ func (s *InboundService) MigrationRemoveOrphanedTraffics() {
 // These methods worked with deprecated client_traffics table
 
 func (s *InboundService) UpdateClientIPs(tx *gorm.DB, oldEmail string, newEmail string) error {
-	return tx.Model(model.InboundClientIps{}).Where("client_email = ?", oldEmail).Update("client_email", newEmail).Error
+	return tx.Model(model.InboundClientIps{}).Where("client_name = ?", oldEmail).Update("client_name", newEmail).Error
 }
 
 func (s *InboundService) DelClientIPs(tx *gorm.DB, email string) error {
-	return tx.Where("client_email = ?", email).Delete(model.InboundClientIps{}).Error
+	return tx.Where("client_name = ?", email).Delete(model.InboundClientIps{}).Error
 }
 
 func (s *InboundService) GetClientInboundByTrafficID(trafficId int) (traffic *xray.ClientTraffic, inbound *model.Inbound, err error) {
@@ -1886,7 +1886,7 @@ func (s *InboundService) GetClientInboundByEmail(email string) (traffic *xray.Cl
 	return nil, nil, nil
 }
 
-func (s *InboundService) GetClientByEmail(clientEmail string) (*xray.ClientTraffic, *model.Client, error) {
+func (s *InboundService) GetClientByName(clientEmail string) (*xray.ClientTraffic, *model.Client, error) {
 	traffic, inbound, err := s.GetClientInboundByEmail(clientEmail)
 	if err != nil {
 		return nil, nil, err
@@ -2455,7 +2455,7 @@ func (s *InboundService) GetClientTrafficTgBot(tgId int64) ([]*xray.ClientTraffi
 
 	// Populate UUID and other client data for each traffic record
 	for i := range traffics {
-		if ct, client, e := s.GetClientByEmail(traffics[i].Email); e == nil && ct != nil && client != nil {
+		if ct, client, e := s.GetClientByName(traffics[i].Email); e == nil && ct != nil && client != nil {
 			traffics[i].Enable = client.Enable
 			traffics[i].UUID = client.ID
 			traffics[i].SubId = client.SubID
@@ -2467,7 +2467,7 @@ func (s *InboundService) GetClientTrafficTgBot(tgId int64) ([]*xray.ClientTraffi
 
 func (s *InboundService) GetClientTrafficByEmail(email string) (traffic *xray.ClientTraffic, err error) {
 	// Prefer retrieving along with client to reflect actual enabled state from inbound settings
-	t, client, err := s.GetClientByEmail(email)
+	t, client, err := s.GetClientByName(email)
 	if err != nil {
 		// Check if it's a "not found" error (normal case) vs real error
 		errMsg := err.Error()
@@ -2529,7 +2529,7 @@ func (s *InboundService) GetClientTrafficByID(id string) ([]xray.ClientTraffic, 
 	}
 	// Reconcile enable flag with client settings per email to avoid stale DB value
 	for i := range traffics {
-		if ct, client, e := s.GetClientByEmail(traffics[i].Email); e == nil && ct != nil && client != nil {
+		if ct, client, e := s.GetClientByName(traffics[i].Email); e == nil && ct != nil && client != nil {
 			traffics[i].Enable = client.Enable
 			traffics[i].UUID = client.ID
 			traffics[i].SubId = client.SubID
@@ -2593,7 +2593,7 @@ func (s *InboundService) SearchClientTraffic(query string) (traffic *xray.Client
 func (s *InboundService) GetInboundClientIps(clientEmail string) (string, error) {
 	db := database.GetDB()
 	InboundClientIps := &model.InboundClientIps{}
-	err := db.Model(model.InboundClientIps{}).Where("client_email = ?", clientEmail).First(InboundClientIps).Error
+	err := db.Model(model.InboundClientIps{}).Where("client_name = ?", clientEmail).First(InboundClientIps).Error
 	if err != nil {
 		return "", err
 	}
@@ -2604,7 +2604,7 @@ func (s *InboundService) ClearClientIps(clientEmail string) error {
 	db := database.GetDB()
 
 	result := db.Model(model.InboundClientIps{}).
-		Where("client_email = ?", clientEmail).
+		Where("client_name = ?", clientEmail).
 		Update("ips", "")
 	err := result.Error
 	if err != nil {
@@ -2792,7 +2792,7 @@ func (s *InboundService) GetClientsLastOnline() (map[string]int64, error) {
 	return result, nil
 }
 
-func (s *InboundService) FilterAndSortClientEmails(emails []string) ([]string, []string, error) {
+func (s *InboundService) FilterAndSortClientNames(emails []string) ([]string, []string, error) {
 	db := database.GetDB()
 
 	// Step 1: Get ClientTraffic records for emails in the input list
@@ -2859,7 +2859,7 @@ func (s *InboundService) DelInboundClientByEmail(inboundId int, email string) (b
 
 	// Find ClientEntity by email
 	clientService := ClientService{}
-	clientEntity, err := clientService.GetClientByEmail(oldInbound.UserId, email)
+	clientEntity, err := clientService.GetClientByName(oldInbound.UserId, email)
 	if err != nil {
 		return false, common.NewError("ClientEntity not found")
 	}

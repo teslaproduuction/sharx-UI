@@ -130,6 +130,10 @@ var defaultValueMap = map[string]string{
 	"grafanaEnable":             "false",
 	// Panel log level (overrides XUI_LOG_LEVEL env var)
 	"panelLogLevel": "info", // Valid values: "debug", "info", "notice", "warning", "error"
+	"logRotateMaxSizeMB":  "50",
+	"logRotateMaxAgeDays": "14",
+	"logRotateMaxBackups": "5",
+	"logRotateCompress":   "true",
 	// Panel UI preferences persisted in DB (instead of browser localStorage)
 	"panelTheme":        "web",
 	"panelLang":         "en",
@@ -1202,6 +1206,8 @@ func (s *SettingService) UpdateAllSetting(allSetting *entity.AllSetting) error {
 		// dashboard regardless of the operator's choice.
 		logger.SetMinEmitLevel(emitLevel)
 	}
+
+	ApplyLogRotateFromSettings(allSetting)
 
 	// Initialize metrics exporter (metrics are exposed via /panel/metrics endpoint)
 	InitMetricsExporter()

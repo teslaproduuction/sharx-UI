@@ -38,6 +38,7 @@ import {
   splitNameFlag,
 } from "@/lib/nameFlag";
 import { NodeRegisterStep } from "@/components/NodeRegisterStep";
+import { NodeResourceDrawer } from "@/components/NodeResourceDrawer";
 import { usePanelWebSocket } from "@/lib/panelWebSocket";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, SectionHelpModal, Surface } from "@/components/panel";
@@ -364,6 +365,7 @@ export function NodesPage() {
   const [panelSecretLoading, setPanelSecretLoading] = useState(false);
   const [panelOrigin, setPanelOrigin] = useState("");
 
+  const [metricsNode, setMetricsNode] = useState<{ id: number; name: string } | null>(null);
   const [multiNode, setMultiNode] = useState<boolean | null>(null);
   const [profileList, setProfileList] = useState<XrayProfileRow[]>([]);
   const [profileListLoading, setProfileListLoading] = useState(false);
@@ -1272,7 +1274,7 @@ export function NodesPage() {
                     {t("pages.nodes.telemtState")}
                   </th>
                   <th className="p-3">{t("pages.nodes.assignedInbounds")}</th>
-                  <th className="p-3 w-20">{t("pages.nodes.operate")}</th>
+                  <th className="p-3 w-28">{t("pages.nodes.operate")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -1464,6 +1466,16 @@ export function NodesPage() {
                       onClick={(e) => e.stopPropagation()}
                     >
                       <div className="flex items-center gap-0.5">
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          className="!p-1.5 text-[var(--fg-muted)] hover:text-[var(--accent)]"
+                          title={t("pages.nodes.viewMetrics", { defaultValue: "CPU / RAM / Disk" })}
+                          aria-label={t("pages.nodes.viewMetrics", { defaultValue: "CPU / RAM / Disk" })}
+                          onClick={() => setMetricsNode({ id: r.id, name: r.name })}
+                        >
+                          <Activity size={16} />
+                        </Button>
                         <Button
                           type="button"
                           variant="ghost"
@@ -2065,6 +2077,13 @@ export function NodesPage() {
           </p>
         ) : null}
       </Modal>
+
+      <NodeResourceDrawer
+        open={metricsNode != null}
+        nodeId={metricsNode?.id ?? null}
+        nodeName={metricsNode?.name ?? ""}
+        onClose={() => setMetricsNode(null)}
+      />
     </PageScaffold>
   );
 }

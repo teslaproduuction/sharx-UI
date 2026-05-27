@@ -60,15 +60,16 @@ func mergeOfflineBlockedSessionRows(results []ClientSessionNodeResult, blockedIP
 
 // ClientOnlineSessionsResponse aggregates results from local Xray and/or worker nodes.
 type ClientOnlineSessionsResponse struct {
-	Email             string                    `json:"email"`
+	Name              string                    `json:"name"`
 	Results           []ClientSessionNodeResult `json:"results"`
 	BlockedSessionIPs []string                  `json:"blockedSessionIps,omitempty"`
 }
 
-// ClientSessionService lists and drops per-IP client sessions (Xray user>>>email>>>online + conntrack).
+// ClientSessionService lists and drops per-IP client sessions (Xray user>>>clientName>>>online + conntrack).
+// clientName is ClientEntity.Name, which is set as the Xray "email" field in the inbound config.
 type ClientSessionService struct{}
 
-// GetOnlineSessionsForClient returns sessions for the client email on all relevant nodes (and local in single-mode).
+// GetOnlineSessionsForClient returns sessions for the client on all relevant nodes (and local in single-mode).
 func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) (*ClientOnlineSessionsResponse, error) {
 	cs := ClientService{}
 	client, err := cs.GetClient(clientId)
@@ -78,9 +79,10 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 	if client.UserId != userId {
 		return nil, fmt.Errorf("client not found")
 	}
-	email := strings.TrimSpace(client.Email)
-	if email == "" {
-		return &ClientOnlineSessionsResponse{Email: email, Results: nil}, nil
+	// client.Name is used as the Xray "email" key (see inbound.go: client["email"] = entity.Name)
+	clientName := strings.TrimSpace(client.Name)
+	if clientName == "" {
+		return &ClientOnlineSessionsResponse{Name: clientName, Results: []ClientSessionNodeResult{}}, nil
 	}
 
 	blockSvc := ClientSessionBlockService{}
@@ -89,7 +91,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 	ss := SettingService{}
 	multi, _ := ss.GetMultiNodeMode()
 
-	out := &ClientOnlineSessionsResponse{Email: email, BlockedSessionIPs: blockedIPs}
+	out := &ClientOnlineSessionsResponse{Name: clientName, BlockedSessionIPs: blockedIPs, Results: []ClientSessionNodeResult{}}
 
 	if !multi {
 		xs := XrayService{}
@@ -104,7 +106,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 				defer cleanup()
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				xsSess, err := api.GetUserOnlineIPList(ctx, email, false)
+				xsSess, err := api.GetUserOnlineIPList(ctx, clientName, false)
 				if err != nil {
 					logger.Warningf("local user online IP list: %v", err)
 					xrayErr = err.Error()
@@ -113,7 +115,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 				}
 			}
 		}
-		sessions = append(sessions, CollectLocalTelemtOnlineSessions(email)...)
+		sessions = append(sessions, CollectLocalTelemtOnlineSessions(clientName)...)
 		errStr := ""
 		if len(sessions) == 0 && xrayErr != "" {
 			errStr = xrayErr
@@ -148,7 +150,7 @@ func (s *ClientSessionService) GetOnlineSessionsForClient(userId, clientId int) 
 				continue
 			}
 			seen[n.Id] = struct{}{}
-			sess, err := nodeSvc.GetUserOnlineSessionsFromNode(n, email, false)
+			sess, err := nodeSvc.GetUserOnlineSessionsFromNode(n, clientName, false)
 			if err != nil {
 				nid := n.Id
 				out.Results = append(out.Results, ClientSessionNodeResult{
@@ -177,8 +179,8 @@ func (s *ClientSessionService) DropAllSessionsForClient(userId, clientId int) er
 	if err != nil {
 		return err
 	}
-	email := strings.TrimSpace(resp.Email)
-	if email == "" {
+	clientName := strings.TrimSpace(resp.Name)
+	if clientName == "" {
 		return nil
 	}
 	ss := SettingService{}
@@ -199,7 +201,7 @@ func (s *ClientSessionService) DropAllSessionsForClient(userId, clientId int) er
 		defer cleanup()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		sessions, err := api.GetUserOnlineIPList(ctx, email, true)
+		sessions, err := api.GetUserOnlineIPList(ctx, clientName, true)
 		if err != nil {
 			return err
 		}
@@ -233,7 +235,7 @@ func (s *ClientSessionService) DropAllSessionsForClient(userId, clientId int) er
 				continue
 			}
 			seen[n.Id] = struct{}{}
-			if err := nodeSvc.PostDropConnectionsToNode(n, []string{email}); err != nil {
+			if err := nodeSvc.PostDropConnectionsToNode(n, []string{clientName}); err != nil {
 				return fmt.Errorf("node %s: %w", n.Name, err)
 			}
 		}

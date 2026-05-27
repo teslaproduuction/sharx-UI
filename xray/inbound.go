@@ -9,13 +9,14 @@ import (
 // InboundConfig represents an Xray inbound configuration.
 // It defines how Xray accepts incoming connections including protocol, port, and settings.
 type InboundConfig struct {
-	Listen         json_util.RawMessage `json:"listen"` // listen cannot be an empty string
-	Port           int                  `json:"port"`
-	Protocol       string               `json:"protocol"`
-	Settings       json_util.RawMessage `json:"settings"`
-	StreamSettings json_util.RawMessage `json:"streamSettings"`
-	Tag            string               `json:"tag"`
-	Sniffing       json_util.RawMessage `json:"sniffing"`
+	Listen              json_util.RawMessage `json:"listen"` // listen cannot be an empty string
+	Port                int                  `json:"port"`
+	Protocol            string               `json:"protocol"`
+	Settings            json_util.RawMessage `json:"settings"`
+	StreamSettings      json_util.RawMessage `json:"streamSettings"`
+	Tag                 string               `json:"tag"`
+	Sniffing            json_util.RawMessage `json:"sniffing"`
+	AcceptProxyProtocol bool                 `json:"acceptProxyProtocol,omitempty"`
 }
 
 // Equals compares two InboundConfig instances for deep equality.

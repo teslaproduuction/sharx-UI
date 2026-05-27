@@ -303,7 +303,7 @@ func (s *SubJsonService) effectivePassword(inbound *model.Inbound, client model.
 	if s.SubService == nil || inbound == nil {
 		return ""
 	}
-	return s.SubService.passwordForSubLink(inbound, &model.ClientEntity{Email: client.Email, Password: client.Password})
+	return s.SubService.passwordForSubLink(inbound, &model.ClientEntity{Name: client.Email, Password: client.Password})
 }
 
 // genMixed builds an Xray SOCKS outbound to a remote Mixed inbound (HTTP+SOCKS on one port).
