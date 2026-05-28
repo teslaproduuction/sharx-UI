@@ -55,7 +55,7 @@ services:
       XUI_DB_HOST: 127.0.0.1
       XUI_DB_PORT: 5432
       XUI_DB_USER: xui_user
-      XUI_DB_PASSWORD: AT4kbCAAo69QegH0nmncz2Le
+      XUI_DB_PASSWORD: change_this_password
       XUI_DB_NAME: xui_db
       XUI_DB_SSLMODE: disable
       # Host network: use localhost — watchtower публикуется только на 127.0.0.1:8081 (см. сервис watchtower).
@@ -99,7 +99,7 @@ services:
       - "5432:5432"
     environment:
       POSTGRES_USER: xui_user
-      POSTGRES_PASSWORD: AT4kbCAAo69QegH0nmncz2Le
+      POSTGRES_PASSWORD: change_this_password
       POSTGRES_DB: xui_db
     volumes:
       - postgres_data:/var/lib/postgresql/data

@@ -92,8 +92,8 @@ func patchHysteriaObfs(stream map[string]any) {
 		switch strings.TrimSpace(typ) {
 		case "salamander":
 			pwd, _ := m["password"].(string)
-			if strings.TrimSpace(pwd) == "" {
-				logger.Debug("Hysteria salamander obfs requires a non-empty password; stripping invalid entry.")
+			if len([]rune(strings.TrimSpace(pwd))) < 4 {
+				logger.Debug("Hysteria salamander obfs requires a password of at least 4 characters; stripping invalid entry.")
 				continue
 			}
 			cleaned = append(cleaned, m)

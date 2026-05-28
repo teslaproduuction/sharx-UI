@@ -2302,6 +2302,12 @@ export function InboundsPage() {
                           value={form.streamForm.hysteriaObfsPassword}
                           onChange={(e) => setStreamFormField("hysteriaObfsPassword", e.target.value)}
                         />
+                        {form.streamForm.hysteriaObfsPassword.trim().length > 0 &&
+                          [...form.streamForm.hysteriaObfsPassword.trim()].length < 4 ? (
+                          <p className="mt-1 text-xs text-red-500">
+                            {t("pages.inbounds.hysteriaObfsPasswordTooShort", { defaultValue: "Password must be at least 4 characters" })}
+                          </p>
+                        ) : null}
                       </div>
                     ) : null}
                   </div>
