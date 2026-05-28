@@ -13,6 +13,11 @@ import (
 type NodeConfig struct {
 	PanelURL    string `json:"panelUrl"`
 	NodeAddress string `json:"nodeAddress"`
+	// NodeId is assigned by the panel on first apply-config / pull-xray-config and
+	// echoed back by this worker in push-geo/push-logs so the panel can identify the
+	// source node unambiguously even when many workers share PANEL_URL / SECRET_KEY
+	// and listen on the same port. Zero = not yet assigned.
+	NodeId int `json:"nodeId,omitempty"`
 }
 
 var (
@@ -65,7 +70,23 @@ func GetConfig() *NodeConfig {
 	return &NodeConfig{
 		PanelURL:    config.PanelURL,
 		NodeAddress: config.NodeAddress,
+		NodeId:      config.NodeId,
 	}
+}
+
+// SetNodeId persists the node id assigned by the panel.
+func SetNodeId(id int) error {
+	configMu.Lock()
+	defer configMu.Unlock()
+
+	if config == nil {
+		config = &NodeConfig{}
+	}
+	if config.NodeId == id {
+		return nil
+	}
+	config.NodeId = id
+	return saveConfig()
 }
 
 // SetPanelURL sets the panel URL and saves it to disk.

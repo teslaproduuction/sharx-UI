@@ -69,7 +69,13 @@ func extractPortForPush(address string) string {
 	return ""
 }
 
-// FindNodeByPushAddress matches a node row by the URL the worker sends in log/geo push (exact or same port).
+// FindNodeByPushAddress matches a node row by the URL the worker sends in log/geo push.
+// Strategy:
+// 1) Exact normalized URL match
+// 2) Port-only fallback ONLY when it uniquely identifies one node
+//
+// Returning the first node by port is unsafe in multi-node setups where many workers
+// use the same API port (e.g. 8080) and can collapse all pushes to node id=1.
 func (s *NodeService) FindNodeByPushAddress(nodeAddress string) (*model.Node, error) {
 	nodes, err := s.GetAllNodes()
 	if err != nil {
@@ -77,11 +83,31 @@ func (s *NodeService) FindNodeByPushAddress(nodeAddress string) (*model.Node, er
 	}
 	reqAddr := strings.TrimSuffix(strings.TrimSpace(nodeAddress), "/")
 	reqPort := extractPortForPush(reqAddr)
+
+	// Exact match first.
 	for _, n := range nodes {
 		nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
-		nodePort := extractPortForPush(nodeAddr)
-		if nodeAddr == reqAddr || (reqPort != "" && nodePort != "" && nodePort == reqPort) {
+		if nodeAddr == reqAddr {
 			return n, nil
+		}
+	}
+
+	// Port fallback only when unambiguous.
+	if reqPort != "" {
+		var byPort []*model.Node
+		for _, n := range nodes {
+			nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
+			nodePort := extractPortForPush(nodeAddr)
+			if nodePort != "" && nodePort == reqPort {
+				byPort = append(byPort, n)
+			}
+		}
+		if len(byPort) == 1 {
+			return byPort[0], nil
+		}
+		if len(byPort) > 1 {
+			logger.Warningf("node push address %q matched %d nodes by port %s; exact address match required",
+				reqAddr, len(byPort), reqPort)
 		}
 	}
 	return nil, nil
@@ -2411,12 +2437,20 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 
 	requestBody := map[string]interface{}{
 		"config": json.RawMessage(xrayConfig),
+		"nodeId": node.Id,
 	}
 	if panelURL != "" {
 		requestBody["panelUrl"] = panelURL
 	}
 	if telemt != nil {
-		requestBody["telemt"] = *telemt
+		// Force a non-nil slice so JSON encodes as `[]` (clear all Telemt) rather than
+		// `null` — workers treat `null`/missing as "leave Telemt untouched", which would
+		// leave stale sidecars running after the admin unassigns Telemt from the node.
+		payload := *telemt
+		if payload == nil {
+			payload = []TelemtNodePayload{}
+		}
+		requestBody["telemt"] = payload
 	}
 	if meta != nil {
 		if meta.CoreProfileHash != "" {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
 	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/node/xray"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
@@ -30,8 +31,13 @@ func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.M
 
 	type pullBody struct {
 		NodeAddress string `json:"nodeAddress"`
+		NodeId      int    `json:"nodeId,omitempty"`
 	}
-	payload, err := json.Marshal(pullBody{NodeAddress: nodeAddress})
+	reqBody := pullBody{NodeAddress: nodeAddress}
+	if cfg := nodeConfig.GetConfig(); cfg != nil && cfg.NodeId > 0 {
+		reqBody.NodeId = cfg.NodeId
+	}
+	payload, err := json.Marshal(reqBody)
 	if err != nil {
 		logger.Warningf("Config pull: marshal request: %v", err)
 		return
@@ -66,10 +72,18 @@ func TryPullAndApply(panelURL, nodeAddress string, hmacKey [32]byte, mgr *xray.M
 	var envelope struct {
 		Config json.RawMessage `json:"config"`
 		Telemt json.RawMessage `json:"telemt"`
+		NodeId int             `json:"nodeId,omitempty"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil {
 		logger.Warningf("Config pull: invalid JSON: %v", err)
 		return
+	}
+	if envelope.NodeId > 0 {
+		if err := nodeConfig.SetNodeId(envelope.NodeId); err != nil {
+			logger.Warningf("Config pull: failed to persist node id: %v", err)
+		} else {
+			logger.Infof("Config pull: panel assigned nodeId=%d", envelope.NodeId)
+		}
 	}
 	if len(envelope.Config) == 0 {
 		logger.Warningf("Config pull: empty config in response")

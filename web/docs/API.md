@@ -4431,7 +4431,8 @@ Receive logs from a node (called by node applications).
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `apiKey` | string | Yes | Node API key |
-| `nodeAddress` | string | No | Node's own address (for identification when multiple nodes share API key) |
+| `nodeId` | integer | No | Panel-assigned node id (echoed back by the worker; takes precedence over `nodeAddress` when present). Set by the panel via `apply-config` / `pull-xray-config` and persisted by the worker in `node-config.json`. |
+| `nodeAddress` | string | Conditional | Node's own address. Required when `nodeId` is not set (e.g. first contact before the panel has assigned an id, or legacy workers). |
 | `entries` | array | Yes | Array of structured log entries (`logger.Entry`), one object per log line |
 
 **Example Request:**
@@ -4441,6 +4442,7 @@ curl -X POST "http://localhost:2053/panel/api/node/push-logs" \
   -H "Content-Type: application/json" \
   -d '{
     "apiKey": "node-api-key",
+    "nodeId": 7,
     "nodeAddress": "http://192.168.1.100:8080",
     "entries": [
       { "ts": "2024/01/01 12:00:00", "level": "info", "source": "node", "msg": "Connection established", "channel": "service", "component": "node" },
@@ -4459,11 +4461,28 @@ curl -X POST "http://localhost:2053/panel/api/node/push-logs" \
 
 ### POST `/panel/api/node/pull-xray-config`
 
-HMAC-authenticated pull for worker nodes (no session cookie). Body includes at least `nodeAddress` (see node pairing). Returns **`config`** (Xray JSON for that node) and **`telemt`**: an array of `{ "inboundId", "tag", "toml" }` for Telemt MTProto sidecars. Telemt inbounds never appear inside `config.inbounds`.
+HMAC-authenticated pull for worker nodes (no session cookie).
+
+**Request Body** (JSON):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `nodeId` | integer | No | Panel-assigned node id, persisted by the worker after the first successful pull/apply. When present, the panel resolves the node by `nodeId` and ignores `nodeAddress` collisions. |
+| `nodeAddress` | string | Conditional | Worker's reachable address. Required when `nodeId` is not yet known (first contact / legacy workers). |
+
+**Response Body** (JSON):
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `config` | object | Xray JSON for this node. |
+| `telemt` | array | Telemt MTProto sidecars: `{ "inboundId", "tag", "toml" }`. Telemt inbounds never appear inside `config.inbounds`. |
+| `nodeId` | integer | Panel-assigned node id. The worker MUST persist this and echo it back in subsequent `pull-xray-config`, `push-logs`, and `push-geo` requests so the panel can identify the source unambiguously when `SECRET_KEY` is shared across workers. |
+| `coreProfileHash` | string | Optional SHA-256 of the panel core profile used to build `config`. |
+| `configSha256` | string | Optional SHA-256 of the exact `config` bytes. |
 
 ### Worker: POST `/api/v1/apply-config`
 
-Request body matches the pull response: **`config`** (Xray) plus optional **`telemt`**. If **`telemt` is omitted**, Telemt state on the node is left unchanged. **`telemt": []`** clears Telemt processes for that apply.
+Request body matches the pull response: **`config`** (Xray) plus optional **`telemt`**, and includes **`nodeId`** (panel-assigned identifier the worker must persist) and **`panelUrl`**. If **`telemt` is omitted**, Telemt state on the node is left unchanged. **`telemt: []`** clears Telemt processes for that apply.
 
 ---
 

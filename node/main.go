@@ -64,17 +64,21 @@ func main() {
 	nodeLogs.SetOutboundHMACKey(h)
 
 	savedConfig := nodeConfig.GetConfig()
-	nodeAddress := savedConfig.NodeAddress
+	// Environment must have priority over persisted config to avoid stale nodeAddress
+	// in node-config.json overriding runtime docker-compose values.
+	nodeAddress := os.Getenv("NODE_ADDRESS")
 	if nodeAddress == "" {
-		nodeAddress = os.Getenv("NODE_ADDRESS")
+		nodeAddress = savedConfig.NodeAddress
 	}
 	if nodeAddress == "" {
 		nodeAddress = fmt.Sprintf("http://127.0.0.1:%d", port)
 	}
 
-	panelURL := savedConfig.PanelURL
+	// Environment must have priority over persisted config to avoid stale panelUrl
+	// in node-config.json overriding runtime docker-compose values.
+	panelURL := os.Getenv("PANEL_URL")
 	if panelURL == "" {
-		panelURL = os.Getenv("PANEL_URL")
+		panelURL = savedConfig.PanelURL
 	}
 
 	nodeLogs.InitLogPusher(nodeAddress)
