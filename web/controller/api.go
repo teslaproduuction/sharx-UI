@@ -112,15 +112,34 @@ func parseSharxV1Signature(s string) (hex string, ok bool) {
 	return strings.TrimSpace(s[3:]), true
 }
 
-// findNodeByAddressForLogPush matches the panel node row by public URL (exact or by port for localhost vs LAN).
+// findNodeByAddressForLogPush matches node by address for log push.
+// Behavior mirrors NodeService.FindNodeByPushAddress:
+// - exact address match first
+// - port-only fallback only when unique
 func findNodeByAddressForLogPush(nodes []*model.Node, nodeAddress string) *model.Node {
 	reqAddr := strings.TrimSuffix(strings.TrimSpace(nodeAddress), "/")
 	reqPort := extractPort(reqAddr)
+
+	// Exact match first.
 	for _, n := range nodes {
 		nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
-		nodePort := extractPort(nodeAddr)
-		if nodeAddr == reqAddr || (nodePort != "" && nodePort == reqPort) {
+		if nodeAddr == reqAddr {
 			return n
+		}
+	}
+
+	// Port fallback only when it points to exactly one node.
+	if reqPort != "" {
+		var byPort []*model.Node
+		for _, n := range nodes {
+			nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
+			nodePort := extractPort(nodeAddr)
+			if nodePort != "" && nodePort == reqPort {
+				byPort = append(byPort, n)
+			}
+		}
+		if len(byPort) == 1 {
+			return byPort[0]
 		}
 	}
 	return nil
@@ -132,6 +151,7 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 
 	type PushLogRequest struct {
 		NodeAddress string         `json:"nodeAddress,omitempty"`
+		NodeId      int            `json:"nodeId,omitempty"`
 		Entries     []logger.Entry `json:"entries,omitempty"`
 	}
 
@@ -181,11 +201,26 @@ func (a *APIController) pushNodeLogs(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid signature"})
 		return
 	}
-	if strings.TrimSpace(req.NodeAddress) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
-		return
+	// Prefer panel-assigned nodeId (immune to address/port collisions).
+	var node *model.Node
+	if req.NodeId > 0 {
+		for _, n := range nodes {
+			if n.Id == req.NodeId {
+				node = n
+				break
+			}
+		}
+		if node == nil {
+			logger.Debugf("HMAC log push: nodeId %d not found, falling back to address match", req.NodeId)
+		}
 	}
-	node := findNodeByAddressForLogPush(nodes, req.NodeAddress)
+	if node == nil {
+		if strings.TrimSpace(req.NodeAddress) == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId or nodeAddress is required"})
+			return
+		}
+		node = findNodeByAddressForLogPush(nodes, req.NodeAddress)
+	}
 	if node == nil {
 		logger.Debugf("HMAC log push: no node for address %s", req.NodeAddress)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
@@ -257,6 +292,7 @@ func (a *APIController) pushNodeGeo(c *gin.Context) {
 
 	type pushGeoRequest struct {
 		NodeAddress string  `json:"nodeAddress"`
+		NodeId      int     `json:"nodeId,omitempty"`
 		Lat         float64 `json:"lat"`
 		Lng         float64 `json:"lng"`
 		Source      string  `json:"source,omitempty"`
@@ -276,8 +312,8 @@ func (a *APIController) pushNodeGeo(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.NodeAddress) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
+	if req.NodeId == 0 && strings.TrimSpace(req.NodeAddress) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId or nodeAddress is required"})
 		return
 	}
 	if req.Lat < -90 || req.Lat > 90 || req.Lng < -180 || req.Lng > 180 {
@@ -308,13 +344,25 @@ func (a *APIController) pushNodeGeo(c *gin.Context) {
 	}
 
 	nodeService := service.NodeService{}
-	node, err := nodeService.FindNodeByPushAddress(req.NodeAddress)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
-		return
+	var node *model.Node
+	if req.NodeId > 0 {
+		n, gerr := nodeService.GetNode(req.NodeId)
+		if gerr == nil {
+			node = n
+		} else {
+			logger.Debugf("HMAC geo push: nodeId %d not found, falling back to address match", req.NodeId)
+		}
 	}
 	if node == nil {
-		logger.Debugf("HMAC geo push: no node for address %s", req.NodeAddress)
+		n, ferr := nodeService.FindNodeByPushAddress(req.NodeAddress)
+		if ferr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
+			return
+		}
+		node = n
+	}
+	if node == nil {
+		logger.Debugf("HMAC geo push: no node for nodeId=%d address=%q", req.NodeId, req.NodeAddress)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
 		return
 	}
@@ -338,6 +386,7 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 
 	type pullReq struct {
 		NodeAddress string `json:"nodeAddress"`
+		NodeId      int    `json:"nodeId,omitempty"`
 	}
 
 	body, err := io.ReadAll(c.Request.Body)
@@ -353,8 +402,8 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid JSON: " + err.Error()})
 		return
 	}
-	if strings.TrimSpace(req.NodeAddress) == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeAddress is required"})
+	if req.NodeId == 0 && strings.TrimSpace(req.NodeAddress) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "nodeId or nodeAddress is required"})
 		return
 	}
 
@@ -381,13 +430,25 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	}
 
 	nodeService := service.NodeService{}
-	node, err := nodeService.FindNodeByPushAddress(req.NodeAddress)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
-		return
+	var node *model.Node
+	if req.NodeId > 0 {
+		n, gerr := nodeService.GetNode(req.NodeId)
+		if gerr == nil {
+			node = n
+		} else {
+			logger.Debugf("HMAC pull-xray-config: nodeId %d not found, falling back to address", req.NodeId)
+		}
 	}
 	if node == nil {
-		logger.Debugf("HMAC pull-xray-config: no node for address %s", req.NodeAddress)
+		n, ferr := nodeService.FindNodeByPushAddress(req.NodeAddress)
+		if ferr != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to get nodes"})
+			return
+		}
+		node = n
+	}
+	if node == nil {
+		logger.Debugf("HMAC pull-xray-config: no node for nodeId=%d address=%q", req.NodeId, req.NodeAddress)
 		c.JSON(http.StatusUnauthorized, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.unknownNode")})
 		return
 	}
@@ -412,6 +473,10 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 		return
 	}
 	telemtPayloads, err := service.BuildTelemtPayloadsForNode(node, ibs)
+	// Non-nil empty slice → JSON `[]` (stop all Telemt) instead of `null` (no change).
+	if telemtPayloads == nil {
+		telemtPayloads = []service.TelemtNodePayload{}
+	}
 	if err != nil {
 		logger.Errorf("pull-xray-config telemt for node %d: %v", node.Id, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": I18nWeb(c, "api.pullXrayConfig.buildFailed")})
@@ -419,13 +484,14 @@ func (a *APIController) pullWorkerXrayConfig(c *gin.Context) {
 	}
 
 	type pullResp struct {
-		Config            json.RawMessage             `json:"config"`
-		Telemt            []service.TelemtNodePayload `json:"telemt"`
-		CoreProfileHash   string                      `json:"coreProfileHash,omitempty"`
-		ConfigSha256      string                      `json:"configSha256,omitempty"`
+		Config          json.RawMessage             `json:"config"`
+		Telemt          []service.TelemtNodePayload `json:"telemt"`
+		NodeId          int                         `json:"nodeId"`
+		CoreProfileHash string                      `json:"coreProfileHash,omitempty"`
+		ConfigSha256    string                      `json:"configSha256,omitempty"`
 	}
 	logger.Debugf("pull-xray-config: node %s (%d), %d bytes, telemt=%d", node.Name, node.Id, len(configJSON), len(telemtPayloads))
-	c.JSON(http.StatusOK, pullResp{Config: configJSON, Telemt: telemtPayloads, CoreProfileHash: coreHash, ConfigSha256: cfgHex})
+	c.JSON(http.StatusOK, pullResp{Config: configJSON, Telemt: telemtPayloads, NodeId: node.Id, CoreProfileHash: coreHash, ConfigSha256: cfgHex})
 }
 
 // getAPIDocsMarkdown returns the API documentation markdown file.

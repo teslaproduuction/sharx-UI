@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	nodeConfig "github.com/konstpic/sharx-code/v2/node/config"
 	"github.com/konstpic/sharx-code/v2/util/geoip"
 	"github.com/konstpic/sharx-code/v2/util/pairing_outbound"
 )
@@ -46,6 +47,9 @@ func Run(panelURL, nodeAddress string, hmacKey [32]byte) {
 		"lng":         l.Lon,
 		"source":      l.Source,
 		"ip":          l.IP,
+	}
+	if cfg := nodeConfig.GetConfig(); cfg != nil && cfg.NodeId > 0 {
+		payload["nodeId"] = cfg.NodeId
 	}
 	jsonData, err := json.Marshal(payload)
 	if err != nil {

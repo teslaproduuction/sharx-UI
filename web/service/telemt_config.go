@@ -425,8 +425,14 @@ func BackfillTelemtSecretsForInbound(inboundId int) error {
 }
 
 func BuildTelemtPayloadsForNode(node *model.Node, ibs []*model.Inbound) ([]TelemtNodePayload, error) {
-	if node == nil || len(ibs) == 0 {
-		return nil, nil
+	if node == nil {
+		return []TelemtNodePayload{}, nil
+	}
+	// Return a non-nil empty slice (not nil) so JSON marshals to `[]` instead of `null`.
+	// The worker treats `null`/missing as "do not change Telemt", but the caller's intent here
+	// is "this node has no Telemt inbounds assigned → stop every Telemt sidecar".
+	if len(ibs) == 0 {
+		return []TelemtNodePayload{}, nil
 	}
 	ns := NodeService{}
 	out := make([]TelemtNodePayload, 0)
