@@ -63,7 +63,7 @@ const XRAY_SNIPPETS: SnippetDef[] = [
       '"network": "hysteria",',
       '"security": "tls",',
       '"finalmask": {',
-      '  "udp": [{ "type": "salamander", "password": "" }]',
+      '  "udp": [{ "type": "salamander", "settings": { "password": "" } }]',
       "}",
     ].join("\n"),
   },

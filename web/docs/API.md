@@ -275,6 +275,11 @@ curl -X POST "http://localhost:2053/getTwoFactorEnable" \
 
 Base path: `/panel/api/inbounds`
 
+> **Compatibility note (important):**
+> In this section, parameters named `email` refer to the Xray client key stored in inbound `settings.clients[].email`.
+> After `v1.3.9`, this value usually matches panel client `name` (`client_entities.name`).
+> Panel client CRUD endpoints are documented in section **10. Clients** and use `name`.
+
 ### GET `/panel/api/inbounds/list`
 
 Get all inbounds for the logged-in user.
@@ -374,13 +379,13 @@ curl -X GET "http://localhost:2053/panel/api/inbounds/get/1" \
 
 ### GET `/panel/api/inbounds/getClientTraffics/{email}`
 
-Get client traffic statistics by email.
+Get client traffic statistics by Xray client key (`settings.clients[].email`).
 
 **Path Parameters:**
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Example Request:**
 
@@ -561,7 +566,7 @@ Get IP addresses associated with a client.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Example Request:**
 
@@ -600,7 +605,7 @@ Clear IP address records for a client.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Example Request:**
 
@@ -692,7 +697,7 @@ Delete a client from an inbound by email.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | integer | Inbound ID |
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Example Request:**
 
@@ -743,7 +748,7 @@ Reset traffic counter for a specific client.
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `id` | integer | Inbound ID |
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Example Request:**
 
@@ -910,7 +915,7 @@ Update traffic statistics for a client.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `email` | string | Client email |
+| `email` | string | Xray client key (`settings.clients[].email`, usually equals panel client `name`) |
 
 **Request Body** (JSON):
 
@@ -2959,6 +2964,7 @@ curl -X POST "http://localhost:2053/panel/node/resetTraffic/1" \
 Base path: `/panel/client`
 
 Client entities are separate from inbound clients and can be assigned to multiple inbounds.
+`GET /panel/client/list` and `GET /panel/client/get/{id}` return an extended card view (`ClientCardView`): base `ClientEntity` fields plus `activeHwidCount`, `inbounds`, subscription links, and `isOnline`.
 
 ### GET `/panel/client/list`
 
@@ -2981,12 +2987,11 @@ curl -X GET "http://localhost:2053/panel/client/list" \
     {
       "id": 1,
       "userId": 1,
-      "email": "user1@example.com",
+      "name": "user1@example.com",
       "uuid": "550e8400-e29b-41d4-a716-446655440000",
       "security": "auto",
       "password": "",
       "flow": "xtls-rprx-vision",
-      "limitIp": 2,
       "totalGB": 10.5,
       "expiryTime": 1735689600000,
       "enable": true,
@@ -3001,11 +3006,27 @@ curl -X GET "http://localhost:2053/panel/client/list" \
       "up": 123456789,
       "down": 987654321,
       "allTime": 1111111110,
-      "lastOnline": 1704067200,
+      "lastOnline": 1704067200000,
       "hwidEnabled": false,
       "maxHwid": 1,
+      "ipLimitEnabled": false,
+      "maxIPs": 1,
       "groupId": 1,
-      "announce": ""
+      "announce": "",
+      "activeHwidCount": 0,
+      "inbounds": [
+        {
+          "id": 1,
+          "remark": "Main VLESS",
+          "protocol": "vless",
+          "port": 443,
+          "tag": "inbound-443"
+        }
+      ],
+      "subscriptionUrl": "https://sub.example.com/sub/abc123",
+      "subscriptionJsonUrl": "https://sub.example.com/json/abc123",
+      "subscriptionPageUrl": "https://panel.example.com/panel/sub/?id=abc123",
+      "isOnline": true
     }
   ]
 }
@@ -3040,12 +3061,11 @@ Create a new client entity.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `email` | string | Yes | Client email (unique per user) |
+| `name` | string | Yes | Client name (unique per user, immutable after creation) |
 | `uuid` | string | No | UUID for VMESS/VLESS (auto-generated if empty) |
 | `security` | string | No | Security method |
 | `password` | string | No | Password for Trojan/Shadowsocks |
 | `flow` | string | No | Flow control for XTLS |
-| `limitIp` | integer | No | IP limit (0 = unlimited) |
 | `totalGB` | float | No | Traffic limit in GB (0 = unlimited) |
 | `expiryTime` | integer | No | Expiration timestamp in ms (0 = never) |
 | `enable` | boolean | No | Enable client (default: true) |
@@ -3055,6 +3075,8 @@ Create a new client entity.
 | `reset` | integer | No | Traffic reset period in days |
 | `hwidEnabled` | boolean | No | Enable HWID tracking |
 | `maxHwid` | integer | No | Max HWID devices (0 = unlimited) |
+| `ipLimitEnabled` | boolean | No | Enable concurrent unique source IP limit (default: false) |
+| `maxIPs` | integer | No | Max concurrent unique source IPs when `ipLimitEnabled=true` (default: 1) |
 | `inboundIds` | array | No | Array of inbound IDs to assign |
 | `groupId` | integer | No | Group ID to assign client to (null to remove from group) |
 | `announce` | string | No | Custom announcement text for this client (max 200 chars, supports base64). Overrides subscription header announce setting if provided. |
@@ -3066,10 +3088,9 @@ curl -X POST "http://localhost:2053/panel/client/add" \
   -H "Content-Type: application/json" \
   -b cookies.txt \
   -d '{
-    "email": "newuser@example.com",
+    "name": "newuser@example.com",
     "uuid": "550e8400-e29b-41d4-a716-446655440000",
     "flow": "xtls-rprx-vision",
-    "limitIp": 2,
     "totalGB": 50,
     "expiryTime": 1767225600000,
     "enable": true,
@@ -3411,7 +3432,7 @@ curl -X POST "http://localhost:2053/panel/client/bulk/setHwidLimit" \
 
 ### GET `/panel/client/sessions/{id}`
 
-List **per-IP active sessions** for a client entity. Data comes from Xray stats (`user>>><email>>>online`) on the **local** Xray process (single-node mode) or from each **worker node** that has an inbound assigned to this client (multi-node mode). Requires `statsUserOnline` in the Xray policy for the core (the panel merges this into generated config).
+List **per-IP active sessions** for a client entity. Data comes from Xray stats (`user>>><email>>>online`) on the **local** Xray process (single-node mode) or from each **worker node** that has an inbound assigned to this client (multi-node mode). Requires `statsUserOnline` in the Xray policy for the core (the panel merges this into generated config). In panel API this identifier is returned as client `name`.
 
 **Path Parameters:**
 
@@ -3430,7 +3451,8 @@ curl -X GET "http://localhost:2053/panel/client/sessions/1" \
 
 ```json
 {
-  "email": "user1@example.com",
+  "name": "user1@example.com",
+  "blockedSessionIps": ["198.51.100.77"],
   "results": [
     {
       "nodeName": "Local",
@@ -3456,7 +3478,8 @@ curl -X GET "http://localhost:2053/panel/client/sessions/1" \
 
 | Field | Description |
 |-------|-------------|
-| `email` | Client email (Xray `user` id for stats) |
+| `name` | Client name (internally used as Xray `email` user id for stats) |
+| `blockedSessionIps` | Session IPs blocked for this client in panel rules |
 | `results[]` | One block per target (local Xray or each worker) |
 | `nodeId` | Worker DB id, or omitted/`null` for local |
 | `nodeName` | Display name (e.g. `Local` or node name) |
@@ -3762,7 +3785,7 @@ curl -X GET "http://localhost:2053/panel/group/1/clients" \
     {
       "id": 1,
       "userId": 1,
-      "email": "user1@example.com",
+      "name": "user1@example.com",
       "uuid": "550e8400-e29b-41d4-a716-446655440000",
       "groupId": 1,
       "enable": true,
@@ -4165,7 +4188,7 @@ Register a HWID from a client application.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `email` | string | Yes | Client email |
+| `email` | string | Yes | Legacy request field: client name identifier (`ClientEntity.name`) |
 
 **Required Headers:**
 
@@ -4735,12 +4758,11 @@ curl -s -X POST "https://NODE:8080/api/v1/drop-ips" \
 {
   "id": 1,
   "userId": 1,
-  "email": "string",
+  "name": "string",
   "uuid": "UUID string",
   "security": "auto",
   "password": "",
   "flow": "xtls-rprx-vision",
-  "limitIp": 0,
   "totalGB": 0,
   "expiryTime": 0,
   "enable": true,
@@ -4758,6 +4780,8 @@ curl -s -X POST "https://NODE:8080/api/v1/drop-ips" \
   "lastOnline": 0,
   "hwidEnabled": false,
   "maxHwid": 1,
+  "ipLimitEnabled": false,
+  "maxIPs": 1,
   "groupId": null,
   "announce": ""
 }
