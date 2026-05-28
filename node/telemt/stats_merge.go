@@ -137,7 +137,7 @@ func (m *Manager) MergeTelemtIntoNodeStats(traffic *[]*xray.Traffic, clientTraff
 		baseURL := "http://" + net.JoinHostPort(host, port)
 		authHeader := strings.TrimSpace(doc.Server.API.AuthHeader)
 
-		if merged := m.mergeTelemtPrometheusCounters(tag, doc, clientTraffic, &clientIdx, traffic); merged {
+		if merged := m.mergeTelemtPrometheusCounters(tag, doc, clientTraffic, &clientIdx, traffic, addOnline); merged {
 			continue
 		}
 
@@ -288,6 +288,7 @@ func (m *Manager) mergeTelemtPrometheusCounters(
 	clientTraffic *[]*xray.ClientTraffic,
 	clientIdx *map[string]int,
 	traffic *[]*xray.Traffic,
+	addOnline func(string),
 ) bool {
 	metricsURL := telemtMetricsURL(doc)
 	if metricsURL == "" {
@@ -320,6 +321,11 @@ func (m *Manager) mergeTelemtPrometheusCounters(
 		if dFrom == 0 && dTo == 0 {
 			continue
 		}
+		// Positive delta = user transferred traffic this tick → online.
+		// Mirrors legacy JSON path (u.CurrentConnections>0) and onlineFromTraffic in node/xray/manager.go.
+		if addOnline != nil {
+			addOnline(user)
+		}
 		tagUp += int64(dTo)
 		tagDown += int64(dFrom)
 		if clientTraffic != nil {
@@ -340,19 +346,17 @@ func (m *Manager) mergeTelemtPrometheusCounters(
 	if err := savePromOctetsSnapshot(snapPath, next); err != nil {
 		logger.Debugf("telemt stats: %s: save prom snapshot: %v", tag, err)
 	}
-	if tagUp > 0 || tagDown > 0 {
-		if traffic != nil {
-			if tagUp > 0 {
-				*traffic = append(*traffic, &xray.Traffic{
-					IsInbound: true, Tag: tag, Up: tagUp, Down: 0,
-				})
-			}
-			if tagDown > 0 {
-				*traffic = append(*traffic, &xray.Traffic{
-					IsInbound: true, Tag: tag + "_up", Up: 0, Down: tagDown,
-				})
-			}
-		}
+	// Single inbound traffic entry with the REAL tag so panel CollectNodeStats can map
+	// it to inboundId via tagToInboundId. Splitting Down into a synthetic tag+"_up"
+	// caused `Total Received` for telemt inbounds to stay at 0 in the Inbounds page.
+	if (tagUp > 0 || tagDown > 0) && traffic != nil {
+		*traffic = append(*traffic, &xray.Traffic{
+			IsInbound:  true,
+			IsOutbound: false,
+			Tag:        tag,
+			Up:         tagUp,
+			Down:       tagDown,
+		})
 	}
 	return true
 }
