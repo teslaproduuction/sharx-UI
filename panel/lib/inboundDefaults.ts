@@ -926,8 +926,9 @@ function buildHysteriaStreamSettingsFromForm(
         congestion: "bbr",
       },
     };
-    if (state.hysteriaObfsType === "salamander" && state.hysteriaObfsPassword.trim()) {
-      finalmask.udp = [{ type: "salamander", password: state.hysteriaObfsPassword.trim() }];
+    const obfsPwd = state.hysteriaObfsPassword.trim();
+    if (state.hysteriaObfsType === "salamander" && [...obfsPwd].length >= 4) {
+      finalmask.udp = [{ type: "salamander", password: obfsPwd }];
     }
     out.finalmask = finalmask;
     const masquerade = state.hysteria2Masquerade.trim();
