@@ -591,15 +591,27 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if client.MaxHWID != existing.MaxHWID {
 		updates["max_hwid"] = client.MaxHWID
 	}
+	// IP limit settings. Must be always-updated (zero-valued false / 0 are legitimate
+	// states the admin can save), otherwise GORM's "Updates(struct)" semantics drop them
+	// silently. Mirrors the always-update pattern used for `enable` / `total_gb` above.
+	updates["ip_limit_enabled"] = client.IPLimitEnabled
+	updates["max_ips"] = client.MaxIPs
 	updates["updated_at"] = client.UpdatedAt
 
-	// First try to update with all fields including HWID
+	// First try to update with all fields including HWID and IP limit
 	err = tx.Model(&model.ClientEntity{}).Where("id = ? AND user_id = ?", client.Id, userId).Updates(updates).Error
 	if err != nil {
-		// If HWID columns don't exist, remove them and try again
-		if strings.Contains(err.Error(), "no such column: hwid_enabled") || strings.Contains(err.Error(), "no such column: max_hwid") {
-			delete(updates, "hwid_enabled")
-			delete(updates, "max_hwid")
+		// Some columns may not exist on very old databases that skipped migrations 0040 (HWID)
+		// or 0043 (IP limit). Strip the offending columns and retry once.
+		msg := err.Error()
+		stripped := false
+		for _, col := range []string{"hwid_enabled", "max_hwid", "ip_limit_enabled", "max_ips"} {
+			if strings.Contains(msg, "no such column: "+col) {
+				delete(updates, col)
+				stripped = true
+			}
+		}
+		if stripped {
 			err = tx.Model(&model.ClientEntity{}).Where("id = ? AND user_id = ?", client.Id, userId).Updates(updates).Error
 		}
 	}
