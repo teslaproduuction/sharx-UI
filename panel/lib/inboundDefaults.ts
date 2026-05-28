@@ -823,10 +823,20 @@ function parseHysteriaTlsFormFields(
     for (const item of udp) {
       if (!item || typeof item !== "object") continue;
       const m = item as Record<string, unknown>;
-      if (m.type === "salamander" && typeof m.password === "string" && m.password.trim()) {
-        base.hysteriaObfsType = "salamander";
-        base.hysteriaObfsPassword = m.password;
-        break;
+      if (m.type === "salamander") {
+        const settings =
+          m.settings && typeof m.settings === "object"
+            ? (m.settings as Record<string, unknown>)
+            : null;
+        const settingsPwd =
+          settings && typeof settings.password === "string" ? settings.password : "";
+        const legacyPwd = typeof m.password === "string" ? m.password : "";
+        const pwd = settingsPwd.trim() ? settingsPwd : legacyPwd;
+        if (pwd.trim()) {
+          base.hysteriaObfsType = "salamander";
+          base.hysteriaObfsPassword = pwd;
+          break;
+        }
       }
     }
   }
@@ -928,7 +938,7 @@ function buildHysteriaStreamSettingsFromForm(
     };
     const obfsPwd = state.hysteriaObfsPassword.trim();
     if (state.hysteriaObfsType === "salamander" && [...obfsPwd].length >= 4) {
-      finalmask.udp = [{ type: "salamander", password: obfsPwd }];
+      finalmask.udp = [{ type: "salamander", settings: { password: obfsPwd } }];
     }
     out.finalmask = finalmask;
     const masquerade = state.hysteria2Masquerade.trim();

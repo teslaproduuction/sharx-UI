@@ -91,12 +91,22 @@ func patchHysteriaObfs(stream map[string]any) {
 		typ, _ := m["type"].(string)
 		switch strings.TrimSpace(typ) {
 		case "salamander":
-			pwd, _ := m["password"].(string)
+			settings, _ := m["settings"].(map[string]any)
+			pwd, _ := settings["password"].(string)
+			if strings.TrimSpace(pwd) == "" {
+				if legacy, ok := m["password"].(string); ok && strings.TrimSpace(legacy) != "" {
+					pwd = legacy
+				}
+			}
 			if len([]rune(strings.TrimSpace(pwd))) < 4 {
 				logger.Debug("Hysteria salamander obfs requires a password of at least 4 characters; stripping invalid entry.")
 				continue
 			}
-			cleaned = append(cleaned, m)
+			normalized := map[string]any{
+				"type":     "salamander",
+				"settings": map[string]any{"password": pwd},
+			}
+			cleaned = append(cleaned, normalized)
 		default:
 			if typ != "" {
 				logger.Debug("Hysteria obfs type %q is not supported; stripping entry.", typ)
