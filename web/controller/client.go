@@ -504,6 +504,21 @@ func (a *ClientController) updateClient(c *gin.Context) {
 					client.MaxHWID = int(maxHwid)
 				}
 			}
+			// IP limit settings — must be copied here, otherwise the JSON request body
+			// `ipLimitEnabled` / `maxIPs` never reaches ClientService.UpdateClient and the
+			// existing (false / 1) values are persisted regardless of what the UI sent.
+			if ipLimitEnabled, ok := updateData["ipLimitEnabled"].(bool); ok {
+				client.IPLimitEnabled = ipLimitEnabled
+			}
+			if maxIPsVal, exists := updateData["maxIPs"]; exists {
+				if maxIPs, ok := maxIPsVal.(float64); ok {
+					client.MaxIPs = int(maxIPs)
+				} else if maxIPs, ok := maxIPsVal.(int); ok {
+					client.MaxIPs = maxIPs
+				} else if maxIPs, ok := maxIPsVal.(int64); ok {
+					client.MaxIPs = int(maxIPs)
+				}
+			}
 			// Handle groupId - can be null (no group), so check if key exists
 			if groupIdVal, exists := updateData["groupId"]; exists {
 				if groupIdVal == nil {
@@ -593,6 +608,18 @@ func (a *ClientController) updateClient(c *gin.Context) {
 				}
 			}
 			// If maxHwid was not provided in form, keep existing value (don't reset to 0)
+			// Always update ipLimitEnabled if it's in the request (even if false)
+			ipLimitEnabledStr := c.PostForm("ipLimitEnabled")
+			if ipLimitEnabledStr != "" {
+				client.IPLimitEnabled = ipLimitEnabledStr == "true" || ipLimitEnabledStr == "1"
+			}
+			// Always update maxIPs if it's in the request (including 0 for unlimited)
+			maxIPsStr := c.PostForm("maxIPs")
+			if maxIPsStr != "" {
+				if maxIPs, err := strconv.Atoi(maxIPsStr); err == nil {
+					client.MaxIPs = maxIPs
+				}
+			}
 			// Handle groupId - can be empty (no group)
 			if groupIdStr := c.PostForm("groupId"); groupIdStr != "" {
 				if groupId, err := strconv.Atoi(groupIdStr); err == nil && groupId > 0 {
