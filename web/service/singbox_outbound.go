@@ -34,6 +34,10 @@ type SingboxOutboundFragments struct {
 	Outbound      json.RawMessage
 	BridgeInbound json.RawMessage
 	RouteRule     json.RawMessage
+	// IsEndpoint marks Outbound as a sing-box `endpoints[]` entry (WireGuard /
+	// AmneziaWG) rather than an `outbounds[]` entry. sing-box 1.11+ moved
+	// WireGuard from outbound to endpoint; routing to it by tag is unchanged.
+	IsEndpoint bool
 }
 
 // BuildSingboxOutboundForSidecar dispatches by kind. Returns ErrKindNotSupported
@@ -102,6 +106,8 @@ func BuildSingboxOutboundForSidecar(sc *model.OutboundSidecar) (SingboxOutboundF
 		Outbound:      obJSON,
 		BridgeInbound: bridgeJSON,
 		RouteRule:     ruleJSON,
+		// WireGuard/AmneziaWG is an endpoint in sing-box 1.11+.
+		IsEndpoint: strings.TrimSpace(sc.Kind) == "wireguard_client",
 	}, nil
 }
 
@@ -421,12 +427,12 @@ func buildWireGuardClientOutbound(tag string, raw map[string]any) (map[string]an
 //
 // The function never errors — a malformed sidecar is logged + skipped so one
 // bad row cannot break the entire sing-box config push.
-func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, bridges []json.RawMessage, rules []json.RawMessage) {
+func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, bridges []json.RawMessage, rules []json.RawMessage, endpoints []json.RawMessage) {
 	svc := OutboundSidecarService{}
 	rows, err := svc.List(0)
 	if err != nil {
 		logger.Warningf("singbox outbound: list sidecars: %v", err)
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 	for _, sc := range rows {
 		if sc == nil || !sc.Enable {
@@ -459,11 +465,15 @@ func collectOutboundFragmentsForNode(nodeID int) (outbounds []json.RawMessage, b
 		if len(frag.Outbound) == 0 {
 			continue
 		}
-		outbounds = append(outbounds, frag.Outbound)
+		if frag.IsEndpoint {
+			endpoints = append(endpoints, frag.Outbound)
+		} else {
+			outbounds = append(outbounds, frag.Outbound)
+		}
 		bridges = append(bridges, frag.BridgeInbound)
 		rules = append(rules, frag.RouteRule)
 	}
-	return outbounds, bridges, rules
+	return outbounds, bridges, rules, endpoints
 }
 
 func sidecarAssignedToNode(sc *model.OutboundSidecar, nodeID int) bool {
