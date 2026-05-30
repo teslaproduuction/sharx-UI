@@ -2700,6 +2700,16 @@
       "routing": {
         "domainStrategy": "Domain strategy"
       }
+    },
+    "settings": {
+      "panelHostWorkload": "Panel host also runs a node",
+      "panelHostWorkloadDesc": "Hybrid mode: the panel host runs its own workload (inbounds/sidecars bound to the panel-host node) in addition to orchestrating workers. Off = pure orchestrator."
+    },
+    "nodes": {
+      "panelHostHybridBadge": "panel host (orchestrator + local node)"
+    },
+    "inbounds": {
+      "panelHostNodeOption": "panel-host (local node, id: 0)"
     }
   }
 }

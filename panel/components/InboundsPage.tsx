@@ -494,7 +494,8 @@ function inboundBindingsToForm(ib: {
   nodeBindings?: InboundNodeBindingApi[];
   nodeIds?: number[];
 }): NodeBindingFormRow[] {
-  const nb = ib.nodeBindings?.filter((b) => (b.nodeId ?? 0) > 0) ?? [];
+  // nodeId=0 is the panel-host hybrid binding; keep it, drop only negatives/nulls.
+  const nb = ib.nodeBindings?.filter((b) => (b.nodeId ?? -1) >= 0) ?? [];
   if (nb.length > 0) {
     return nb.map((b) => ({
       nodeId: b.nodeId,
@@ -505,7 +506,7 @@ function inboundBindingsToForm(ib: {
     }));
   }
   return (ib.nodeIds ?? [])
-    .filter((id) => id > 0)
+    .filter((id) => id >= 0)
     .map((nodeId) => ({
       nodeId,
       publishedAddress: "",
@@ -752,6 +753,7 @@ export function InboundsPage() {
   const [nodeBindings, setNodeBindings] = useState<NodeBindingFormRow[]>([]);
   /** When false/loading, the wizard omits the “Nodes” step (standalone / single node). */
   const [multiNodeMode, setMultiNodeMode] = useState<boolean | null>(null);
+  const [panelHostWorkload, setPanelHostWorkload] = useState<boolean>(false);
   const [baselineSettings, setBaselineSettings] = useState("");
 
   const [preserveTraffic, setPreserveTraffic] = useState({
@@ -785,10 +787,14 @@ export function InboundsPage() {
     const r = await getJson<{ id: number; name: string }[]>(panel("node/list"));
     if (r.success && Array.isArray(r.obj)) {
       setNodes(
-        (r.obj as { id: number; name: string }[]).map((n) => ({
-          id: n.id,
-          name: n.name || `Node ${n.id}`,
-        })),
+        (r.obj as { id: number; name: string }[])
+          // Drop the panel-host pseudo-node (id=0); it's offered as a dedicated
+          // checkbox in the selector (hybrid mode only).
+          .filter((n) => n.id > 0)
+          .map((n) => ({
+            id: n.id,
+            name: n.name || `Node ${n.id}`,
+          })),
       );
     } else {
       setNodes([]);
@@ -801,8 +807,12 @@ export function InboundsPage() {
       setMultiNodeMode(
         Boolean((s.obj as { multiNodeMode?: boolean }).multiNodeMode),
       );
+      setPanelHostWorkload(
+        Boolean((s.obj as { panelHostWorkload?: boolean }).panelHostWorkload),
+      );
     } else {
       setMultiNodeMode(false);
+      setPanelHostWorkload(false);
     }
   }, []);
 
@@ -1345,7 +1355,8 @@ export function InboundsPage() {
       Number.isFinite(tg) && tg > 0 ? Math.round(tg * 1024 * 1024 * 1024) : 0;
 
     const bindingsPayload = nodeBindings
-      .filter((b) => b.nodeId > 0)
+      // Keep panel-host (nodeId=0) hybrid bindings; only drop negatives.
+      .filter((b) => b.nodeId >= 0)
       .map((b) => ({
         nodeId: b.nodeId,
         publishedAddress: b.publishedAddress.trim(),
@@ -1535,7 +1546,7 @@ export function InboundsPage() {
           down: ib.down ?? 0,
           allTime: ib.allTime ?? 0,
         };
-        const nb = (ib.nodeBindings ?? []).filter((b) => (b.nodeId ?? 0) > 0);
+        const nb = (ib.nodeBindings ?? []).filter((b) => (b.nodeId ?? -1) >= 0);
         if (nb.length > 0) {
           body.nodeBindings = nb.map((b) => ({
             nodeId: b.nodeId,
@@ -1545,7 +1556,7 @@ export function InboundsPage() {
             subscriptionRemarkSuffix: (b.subscriptionRemarkSuffix ?? "").trim(),
           }));
         } else {
-          const nids = ib.nodeIds?.filter((n) => n > 0) ?? [];
+          const nids = ib.nodeIds?.filter((n) => n >= 0) ?? [];
           if (nids.length > 0) body.nodeIds = nids;
         }
         const up = await postJson<unknown>(panel(`api/inbounds/update/${id}`), body, true);
@@ -6398,6 +6409,32 @@ export function InboundsPage() {
                   {t("pages.inbounds.assignNodes", { defaultValue: "Assign nodes" })}
                 </p>
                 <div className="max-h-36 space-y-2 overflow-y-auto rounded-xl border border-[var(--border)] p-2">
+                  {panelHostWorkload ? (
+                    <CheckboxField
+                      key="panel-host"
+                      checked={nodeBindings.some((b) => b.nodeId === 0)}
+                      onChange={(e) => {
+                        const on = e.target.checked;
+                        setNodeBindings((rows) => {
+                          if (on) {
+                            if (rows.some((r) => r.nodeId === 0)) return rows;
+                            return [
+                              ...rows,
+                              {
+                                nodeId: 0,
+                                publishedAddress: "",
+                                publishedPort: "0",
+                                includeInSubscription: true,
+                                subscriptionRemarkSuffix: "",
+                              },
+                            ];
+                          }
+                          return rows.filter((r) => r.nodeId !== 0);
+                        });
+                      }}
+                      label={t("pages.inbounds.panelHostNodeOption", { defaultValue: "panel-host (local node, id: 0)" })}
+                    />
+                  ) : null}
                   {nodes.map((n) => {
                     const checked = nodeBindings.some((b) => b.nodeId === n.id);
                     return (

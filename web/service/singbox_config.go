@@ -51,53 +51,45 @@ type SingboxConfigService struct {
 func (s *SingboxConfigService) BuildSingboxConfigStandalone() (SingboxNodePayload, error) {
 	multi, _ := s.settingService.GetMultiNodeMode()
 	if multi {
-		// Multi-node hybrid model: the panel host is a pure orchestrator and
-		// runs NO workload — every inbound + sidecar must be bound to a worker
-		// node. Returning an empty payload tells the caller to stop the local
-		// sing-box child if one is still running from a prior standalone
-		// session. Cascade hubs that previously lived on the panel host should
-		// now be assigned to a worker (e.g. the RU exit node) via the Node
-		// selector in the Sidecar / Inbound modals.
-		return SingboxNodePayload{}, nil
+		workload, _ := s.settingService.GetPanelHostWorkload()
+		if !workload {
+			// Orchestrator-only: the panel host runs NO workload — every inbound
+			// + sidecar must be bound to a worker node. An empty payload tells
+			// the caller to stop any leftover local sing-box child.
+			return SingboxNodePayload{}, nil
+		}
+		// Hybrid "panel runs a local node": build the panel-host (id=0) subset —
+		// sing-box inbounds explicitly bound to node id=0 + hub sidecars (empty
+		// NodeIds or an explicit 0). The panel applies this in-process; workers
+		// receive their own subsets via the apply-config envelope.
+		allInbounds, err := s.inboundService.GetAllInbounds()
+		if err != nil {
+			return SingboxNodePayload{}, fmt.Errorf("singbox: load inbounds: %w", err)
+		}
+		hubInbounds := make([]*model.Inbound, 0, len(allInbounds))
+		nodeSvc := NodeService{}
+		for _, inb := range allInbounds {
+			if inb == nil || !inb.Enable || !model.IsSingboxInboundProtocol(inb.Protocol) {
+				continue
+			}
+			bindings, berr := nodeSvc.GetInboundNodeBindingViews(inb.Id)
+			if berr != nil {
+				continue
+			}
+			for _, b := range bindings {
+				if b.NodeId == 0 {
+					hubInbounds = append(hubInbounds, inb)
+					break
+				}
+			}
+		}
+		return s.buildFromInboundsForHub(hubInbounds)
 	}
 	allInbounds, err := s.inboundService.GetAllInbounds()
 	if err != nil {
 		return SingboxNodePayload{}, fmt.Errorf("singbox: load inbounds: %w", err)
 	}
 	return s.buildFromInbounds(allInbounds)
-	// Multi-node: keep only inbounds with no node assignment.
-	hubInbounds := make([]*model.Inbound, 0, len(allInbounds))
-	nodeSvc := NodeService{}
-	for _, inb := range allInbounds {
-		if inb == nil || !inb.Enable {
-			continue
-		}
-		if !model.IsSingboxInboundProtocol(inb.Protocol) {
-			continue
-		}
-		bindings, berr := nodeSvc.GetInboundNodeBindingViews(inb.Id)
-		if berr != nil {
-			continue
-		}
-		// Panel-host inbound = no bindings (legacy) OR explicit binding to
-		// nodeId=0 (new convention: operator selected "panel-host" in the
-		// node multi-select alongside other workers).
-		hub := len(bindings) == 0
-		for _, b := range bindings {
-			if b.NodeId == 0 {
-				hub = true
-				break
-			}
-		}
-		if hub {
-			hubInbounds = append(hubInbounds, inb)
-		}
-	}
-	// Pass nodeID=0 → collectOutboundFragmentsForNode includes all sidecars
-	// (it filters by sidecarAssignedToNode only when nodeID>0). To get the
-	// "hub" semantic, pre-filter sidecars below by leveraging the empty-
-	// NodeIds convention via collectOutboundFragmentsForHub.
-	return s.buildFromInboundsForHub(hubInbounds)
 }
 
 // buildFromInboundsForHub is buildFromInbounds with the outbound collector

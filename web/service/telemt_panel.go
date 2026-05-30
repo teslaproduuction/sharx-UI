@@ -78,11 +78,23 @@ func ApplyLocalTelemtStandalone(xs *XrayService) error {
 		multi = false
 	}
 	if multi {
-		// Multi-node hybrid: panel host runs no workload. Kill any leftover
-		// Telemt children from a prior standalone session so the process tree
-		// matches the "orchestrator only" promise (see master plan).
-		StopLocalTelemtStandalone()
-		return nil
+		workload, _ := xs.settingService.GetPanelHostWorkload()
+		if !workload {
+			// Orchestrator-only: kill any leftover Telemt children so the process
+			// tree matches the "no local workload" promise.
+			StopLocalTelemtStandalone()
+			return nil
+		}
+		// Hybrid: run only Telemt inbounds bound to the panel-host node (id=0).
+		payloads, err := BuildTelemtPayloadsForPanelHost()
+		if err != nil {
+			return err
+		}
+		if len(payloads) == 0 {
+			StopLocalTelemtStandalone()
+			return nil
+		}
+		return getPanelTelemt().Apply(nodePayloadsToTelemt(payloads))
 	}
 	payloads, err := BuildTelemtPayloadsStandalone()
 	if err != nil {

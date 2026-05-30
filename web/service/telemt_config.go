@@ -500,6 +500,56 @@ func BuildTelemtPayloadsStandalone() ([]TelemtNodePayload, error) {
 	return out, nil
 }
 
+// BuildTelemtPayloadsForPanelHost is BuildTelemtPayloadsStandalone restricted to
+// Telemt inbounds explicitly bound to the panel-host pseudo-node (id=0). Used by
+// the hybrid "panel runs a local node" path so the panel host runs only its own
+// Telemt subset (local data dir), while workers run theirs via apply-config.
+func BuildTelemtPayloadsForPanelHost() ([]TelemtNodePayload, error) {
+	db := database.GetDB()
+	var inbounds []model.Inbound
+	if err := db.Where("enable = ?", true).Find(&inbounds).Error; err != nil {
+		return nil, err
+	}
+	ns := NodeService{}
+	base := filepath.Join(config.GetDataFolderPath(), "telemt")
+	out := make([]TelemtNodePayload, 0)
+	for i := range inbounds {
+		ib := &inbounds[i]
+		if model.NormalizeProtocol(ib.Protocol) != model.Telemt {
+			continue
+		}
+		views, err := ns.GetInboundNodeBindingViews(ib.Id)
+		if err != nil {
+			return nil, err
+		}
+		boundToPanelHost := false
+		var pubHost string
+		var pubPort int
+		for _, v := range views {
+			if v.NodeId == 0 {
+				boundToPanelHost = true
+				pubHost = strings.TrimSpace(v.PublishedAddress)
+				pubPort = v.PublishedPort
+				break
+			}
+		}
+		if !boundToPanelHost {
+			continue
+		}
+		users, err := TelemtAccessUsersForInbound(ib.Id)
+		if err != nil {
+			return nil, err
+		}
+		workDir := filepath.Join(base, ib.Tag)
+		tomlStr, err := BuildTelemtToml(ib, users, pubHost, pubPort, workDir)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, TelemtNodePayload{InboundId: ib.Id, Tag: ib.Tag, Toml: tomlStr})
+	}
+	return out, nil
+}
+
 // PreviewTelemtToml returns the Telemt config.toml that would be deployed for this inbound (wizard preview).
 // When inbound.Id > 0, [access.users] is filled from the database; for a new inbound the section is empty until clients are assigned.
 func PreviewTelemtToml(inbound *model.Inbound) (string, error) {

@@ -266,6 +266,12 @@ func (s *NodeService) UpdateNode(node *model.Node) error {
 // DeleteNode deletes a node by ID.
 // This will cascade delete all InboundNodeMapping entries for this node.
 func (s *NodeService) DeleteNode(id int) error {
+	// The panel-host pseudo-node (id=0) is seeded by migration and locked: it
+	// has no remote endpoint, so deleting it would orphan hybrid bindings.
+	if id == 0 {
+		return fmt.Errorf("the panel-host node (id=0) cannot be deleted")
+	}
+
 	db := database.GetDB()
 
 	// Delete all node mappings for this node (cascade delete)
@@ -2033,7 +2039,8 @@ func dedupeInboundBindingNodes(bindings []InboundNodeBindingInput) []InboundNode
 	seen := make(map[int]struct{}, len(bindings))
 	out := make([]InboundNodeBindingInput, 0, len(bindings))
 	for _, b := range bindings {
-		if b.NodeId <= 0 {
+		// Keep node id=0 (panel-host hybrid binding); drop only negatives.
+		if b.NodeId < 0 {
 			continue
 		}
 		if _, ok := seen[b.NodeId]; ok {
@@ -2121,7 +2128,9 @@ func (s *NodeService) AssignInboundToNodesWithBindings(inboundId int, bindings [
 	}
 
 	for _, nodeId := range nodeIds {
-		if nodeId <= 0 {
+		// nodeId == 0 is the panel-host pseudo-node (hybrid mode) — it is a real
+		// row, so port-conflict checks still apply. Only reject negatives.
+		if nodeId < 0 {
 			continue
 		}
 		existingInbounds, err := s.GetInboundsForNode(nodeId)
@@ -2151,7 +2160,8 @@ func (s *NodeService) AssignInboundToNodesWithBindings(inboundId int, bindings [
 	}
 
 	for i, b := range bindings {
-		if b.NodeId <= 0 {
+		// Persist node id=0 (panel-host hybrid) rows; only drop negatives.
+		if b.NodeId < 0 {
 			continue
 		}
 		hasExplicitInclude := b.IncludeInSubscription != nil

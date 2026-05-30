@@ -13,6 +13,7 @@ import (
 	"github.com/konstpic/sharx-code/v2/web/service"
 	"github.com/konstpic/sharx-code/v2/web/session"
 	"github.com/konstpic/sharx-code/v2/web/websocket"
+	"github.com/konstpic/sharx-code/v2/xray"
 
 	"github.com/gin-gonic/gin"
 )
@@ -95,8 +96,9 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 	if id == 0 {
 		settingSvc := service.SettingService{}
 		multi, _ := settingSvc.GetMultiNodeMode()
-		if multi {
-			// Multi-node hybrid: panel host runs no workload. Show empties so
+		workload, _ := settingSvc.GetPanelHostWorkload()
+		if multi && !workload {
+			// Orchestrator-only: panel host runs no workload. Show empties so
 			// the operator doesn't think there's a hidden config being pushed.
 			jsonObj(c, gin.H{
 				"node": gin.H{
@@ -117,8 +119,19 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 			}, nil)
 			return
 		}
+		// Single-host OR hybrid (panel runs a local node): show the panel-host
+		// workload. In hybrid mode the builds are filtered to inbounds bound to
+		// node id=0; in single mode they include every inbound.
 		xraySvc := service.XrayService{}
-		xrayCfg, xerr := xraySvc.GetXrayConfig()
+		var xrayCfg *xray.Config
+		var xerr error
+		role := "standalone"
+		if multi && workload {
+			role = "node"
+			xrayCfg, xerr = xraySvc.GetPanelHostXrayConfig()
+		} else {
+			xrayCfg, xerr = xraySvc.GetXrayConfig()
+		}
 		if xerr != nil {
 			jsonMsg(c, "Failed to build xray config", xerr)
 			return
@@ -129,7 +142,12 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 		if sbx.Cfg != "" {
 			_ = json.Unmarshal([]byte(sbx.Cfg), &sbxObj)
 		}
-		telemt, _ := service.BuildTelemtPayloadsStandalone()
+		var telemt []service.TelemtNodePayload
+		if multi && workload {
+			telemt, _ = service.BuildTelemtPayloadsForPanelHost()
+		} else {
+			telemt, _ = service.BuildTelemtPayloadsStandalone()
+		}
 		jsonObj(c, gin.H{
 			"node": gin.H{
 				"id":          0,
@@ -137,7 +155,7 @@ func (a *NodeController) previewNodeConfig(c *gin.Context) {
 				"address":     "localhost",
 				"status":      "online",
 				"isPanelHost": true,
-				"role":        "standalone",
+				"role":        role,
 			},
 			"xray":            xrayCfg,
 			"xrayProfileHash": "",

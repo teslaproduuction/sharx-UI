@@ -331,6 +331,40 @@ func (s *XrayService) PreviewInboundCoreConfig(inbound *model.Inbound) (*xray.In
 
 // GetXrayConfig retrieves and builds the Xray configuration from settings and inbounds.
 func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
+	return s.buildLocalXrayConfig(false)
+}
+
+// GetPanelHostXrayConfig builds the local Xray config for the panel-host
+// pseudo-node (id=0) in hybrid mode: only Xray inbounds explicitly bound to
+// node id=0 are included, plus the shared template outbounds / cascade / WARP /
+// routing. Used by RestartXray when settings.panelHostWorkload is enabled.
+func (s *XrayService) GetPanelHostXrayConfig() (*xray.Config, error) {
+	return s.buildLocalXrayConfig(true)
+}
+
+// inboundBoundToPanelHost reports whether an inbound has an explicit binding to
+// the panel-host node (id=0).
+func (s *XrayService) inboundBoundToPanelHost(inboundID int) bool {
+	if s.nodeService == (NodeService{}) {
+		s.nodeService = NodeService{}
+	}
+	views, err := s.nodeService.GetInboundNodeBindingViews(inboundID)
+	if err != nil {
+		return false
+	}
+	for _, v := range views {
+		if v.NodeId == 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// buildLocalXrayConfig is the shared body of GetXrayConfig. When
+// onlyPanelHost is true the inbound set is filtered to those bound to node id=0
+// (hybrid panel-host workload); otherwise every enabled Xray inbound is included
+// (single-host mode).
+func (s *XrayService) buildLocalXrayConfig(onlyPanelHost bool) (*xray.Config, error) {
 	// Ensure xrayTemplateConfig is valid before using it.
 	// This is critical when updating only the panel image without DB migrations,
 	// as old JSON in the DB may be incompatible with the new code.
@@ -368,6 +402,9 @@ func (s *XrayService) GetXrayConfig() (*xray.Config, error) {
 			continue
 		}
 		if !model.IsXrayInboundProtocol(inbound.Protocol) {
+			continue
+		}
+		if onlyPanelHost && !s.inboundBoundToPanelHost(inbound.Id) {
 			continue
 		}
 		if err := ApplyPanelInboundTransformsForXray(inbound); err != nil {
@@ -449,19 +486,43 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	}
 
 	if multiMode {
-		// Multi-node hybrid model (per user-decision): panel host is a pure
-		// orchestrator. All local children (telemt + sing-box + xray itself)
-		// are stopped; every workload is pushed to worker nodes via the
-		// per-node apply-config envelope. Cascade hubs that previously lived
-		// on the panel host must be reassigned to a worker (e.g. RU exit node).
+		workload, _ := s.settingService.GetPanelHostWorkload()
+		if workload {
+			// Hybrid "panel runs a local node": the panel host runs its own
+			// workload (Xray inbounds + sing-box + Telemt bound to node id=0,
+			// plus the shared cascade/WARP outbounds) in-process, AND pushes
+			// per-node config to the workers below.
+			phConfig, perr := s.GetPanelHostXrayConfig()
+			if perr != nil {
+				logger.Warningf("panel-host Xray build failed: %v", perr)
+			} else {
+				needRestart := isForce || isNeedXrayRestart.Load() || !s.IsXrayRunning()
+				if !needRestart && s.IsXrayRunning() {
+					needRestart = !p.GetConfig().Equals(phConfig)
+				}
+				if needRestart {
+					if s.IsXrayRunning() {
+						s.CloseAPIConnections()
+						p.Stop()
+					}
+					p = xray.NewProcess(phConfig)
+					result = ""
+					if serr := p.Start(); serr != nil {
+						logger.Warningf("panel-host Xray start failed: %v", serr)
+					}
+				}
+			}
+			TryApplyLocalTelemtStandalone(s)
+			TryApplyLocalSingboxStandalone(s)
+			return s.restartXrayMultiMode(isForce)
+		}
+		// Orchestrator-only: panel host runs no workload. Stop all local
+		// children; every workload is pushed to worker nodes via the per-node
+		// apply-config envelope.
 		StopLocalTelemtStandalone()
-		// BuildSingboxConfigStandalone returns an empty payload when multi-
-		// mode is on, so Apply will stop the local sing-box if any is left
-		// over from a prior standalone session.
+		// BuildSingboxConfigStandalone returns an empty payload here, so Apply
+		// stops any leftover local sing-box from a prior standalone session.
 		TryApplyLocalSingboxStandalone(s)
-		// Stop the panel-host Xray too — workers run their own Xray instance
-		// per the node-API push. Leaving a panel-host Xray idle is harmless
-		// today but doubles the surface area for restart races.
 		if s.IsXrayRunning() {
 			s.CloseAPIConnections()
 			p.Stop()

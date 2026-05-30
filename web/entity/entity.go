@@ -109,6 +109,8 @@ type AllSetting struct {
 
 	// Multi-node mode setting
 	MultiNodeMode bool `json:"multiNodeMode" form:"multiNodeMode"` // Enable multi-node architecture mode
+	// Hybrid: panel host also runs a local node (id=0) when multi-node mode is on
+	PanelHostWorkload bool `json:"panelHostWorkload" form:"panelHostWorkload"`
 	// Dashboard public IPv6 detection
 	EnableIPv6 bool `json:"enableIPv6" form:"enableIPv6"` // Enable fetching/storing public IPv6 in dashboard status
 	// Multi-node worker polling (seconds). Adaptive health uses DegradedIntervalSec when status != online.

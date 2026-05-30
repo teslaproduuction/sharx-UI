@@ -667,6 +667,19 @@ export function SettingsPage() {
             </Row>
             {form.multiNodeMode ? (
               <>
+                <Row
+                  label={t("pages.settings.panelHostWorkload", { defaultValue: "Panel host also runs a node" })}
+                  hint={t("pages.settings.panelHostWorkloadDesc", {
+                    defaultValue:
+                      "Hybrid mode: the panel host runs its own workload (inbounds/sidecars bound to the panel-host node) in addition to orchestrating workers. Off = pure orchestrator.",
+                  })}
+                >
+                  <Switch
+                    checked={form.panelHostWorkload}
+                    onChange={(on) => patch("panelHostWorkload", on)}
+                    ariaLabel={t("pages.settings.panelHostWorkload", { defaultValue: "Panel host also runs a node" })}
+                  />
+                </Row>
                 <Row label={t("pages.settings.nodeStatsInterval")} hint={t("pages.settings.nodeStatsIntervalDesc")}>
                   <Input
                     type="number"
