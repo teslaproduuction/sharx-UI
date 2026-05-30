@@ -21,6 +21,60 @@ type Chain = {
 
 const STRATEGIES = ["leastPing", "random", "priority"];
 
+/** Visual left-to-right flow: client → entry inbound → balancer(strategy) → members → internet. */
+function CascadeFlow({
+  name,
+  strategy,
+  members,
+  t,
+}: {
+  name: string;
+  strategy: string;
+  members: string[];
+  t: ReturnType<typeof useTranslation>["t"];
+}) {
+  const box = "rounded-md border px-2 py-1 text-[11px] whitespace-nowrap";
+  const arrow = <span className="text-[var(--fg-subtle)]">→</span>;
+  return (
+    <div className="rounded-lg border border-dashed border-[var(--border)] p-3">
+      <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-[var(--fg-subtle)]">
+        {t("pages.outboundChains.flowTitle", { defaultValue: "Traffic flow" })}
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={`${box} border-[var(--border)] text-[var(--fg-muted)]`}>
+          {t("pages.outboundChains.flowClient", { defaultValue: "client" })}
+        </span>
+        {arrow}
+        <span className={`${box} border-[var(--border)] text-[var(--fg-muted)]`}>
+          {t("pages.outboundChains.flowInbound", { defaultValue: "inbound + routing rule" })}
+        </span>
+        {arrow}
+        <span className={`${box} border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] font-mono text-[var(--accent)]`}>
+          {(name.trim() || "balancer")} · {strategy}
+        </span>
+        {arrow}
+        <span className="inline-flex flex-wrap items-center gap-1">
+          {members.length === 0 ? (
+            <span className={`${box} border-amber-500/40 bg-amber-500/10 text-amber-300`}>
+              {t("pages.outboundChains.flowNoMembers", { defaultValue: "pick members ↓" })}
+            </span>
+          ) : (
+            members.map((m) => (
+              <span key={m} className={`${box} border-[var(--border)] font-mono text-[var(--fg)]`}>
+                {m}
+              </span>
+            ))
+          )}
+        </span>
+        {arrow}
+        <span className={`${box} border-emerald-500/40 bg-emerald-500/10 text-emerald-300`}>
+          {t("pages.outboundChains.flowInternet", { defaultValue: "internet" })}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 export default function Page() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -197,24 +251,50 @@ export default function Page() {
 
       <Modal open={open} onClose={() => setOpen(false)} title={editId ? t("pages.outboundChains.editTitle", { id: editId, defaultValue: `Edit chain #${editId}` }) : t("pages.outboundChains.addTitle", { defaultValue: "Add chain" })}>
         <div className="space-y-3">
+          {/* Guide: what a cascade is + how it routes */}
+          <div className="rounded-lg border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_5%,transparent)] p-3 text-xs leading-relaxed text-[var(--fg-muted)]">
+            <p className="mb-1 font-medium text-[var(--fg)]">
+              {t("pages.outboundChains.guideTitle", { defaultValue: "How a cascade works" })}
+            </p>
+            <p>
+              {t("pages.outboundChains.guideBody", {
+                defaultValue:
+                  "A cascade is an Xray load-balancer (routing.balancers). Client traffic enters an inbound, then a routing rule sends it to this balancer by its tag. The balancer forwards to one of the member outbounds — each member is itself a hop (a sidecar bridge, a WARP account, or a native VLESS/Trojan out). The strategy decides which member: leastPing picks the lowest-latency one via observatory probes, random spreads load, priority always prefers the first reachable.",
+              })}
+            </p>
+          </div>
+
+          {/* Live flow diagram */}
+          <CascadeFlow name={name} strategy={strategy} members={members} t={t} />
+
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldName", { defaultValue: "Name (becomes balancerTag)" })}</label>
-              <Input value={name} onChange={(e) => setName(e.target.value)} />
+              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="cascade-eu" />
+              <p className="mt-0.5 text-[11px] text-[var(--fg-subtle)]">{t("pages.outboundChains.fieldNameHint", { defaultValue: "Reference this tag from a routing rule's target = Balancer." })}</p>
             </div>
             <div>
               <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldStrategy", { defaultValue: "Strategy" })}</label>
               <SelectNative value={strategy} onChange={(e) => setStrategy(e.target.value)}>
                 {STRATEGIES.map((s) => <option key={s} value={s}>{s}</option>)}
               </SelectNative>
+              <p className="mt-0.5 text-[11px] text-[var(--fg-subtle)]">
+                {strategy === "leastPing"
+                  ? t("pages.outboundChains.strategyHintLeastPing", { defaultValue: "Lowest-latency member (needs probes below)." })
+                  : strategy === "random"
+                    ? t("pages.outboundChains.strategyHintRandom", { defaultValue: "Random member each connection — spreads load." })
+                    : t("pages.outboundChains.strategyHintPriority", { defaultValue: "Always the first reachable member; others are fallback." })}
+              </p>
             </div>
             <div className="sm:col-span-2">
               <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldProbeUrl", { defaultValue: "Probe URL" })}</label>
-              <Input className="font-mono text-xs" value={probeUrl} onChange={(e) => setProbeUrl(e.target.value)} />
+              <Input className="font-mono text-xs" value={probeUrl} onChange={(e) => setProbeUrl(e.target.value)} placeholder="https://www.gstatic.com/generate_204" />
+              <p className="mt-0.5 text-[11px] text-[var(--fg-subtle)]">{t("pages.outboundChains.fieldProbeUrlHint", { defaultValue: "Observatory fetches this through each member to measure latency. A 204 endpoint is ideal." })}</p>
             </div>
             <div>
               <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundChains.fieldProbeInterval", { defaultValue: "Probe interval (seconds)" })}</label>
               <Input type="number" value={probeIntervalSeconds} onChange={(e) => setProbeIntervalSeconds(parseInt(e.target.value, 10) || 60)} />
+              <p className="mt-0.5 text-[11px] text-[var(--fg-subtle)]">{t("pages.outboundChains.fieldProbeIntervalHint", { defaultValue: "How often to re-measure. 60–300s is typical." })}</p>
             </div>
             <div className="flex items-center gap-2 pt-5">
               <Switch checked={enable} onChange={setEnable} />
