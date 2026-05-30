@@ -1,22 +1,22 @@
 # Telemt: ./scripts/download-telemt.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt (or DockerInit fallback)
 # SharX Telemt fork build fallback: ./scripts/build-telemt-sharx.sh
 # Phase 2 — fetch + build hiddify-sing-box for worker nodes (same recipe as panel).
-# Prebuilt shtorm-7/sing-box-extended (musl, runs on alpine) — keeps AmneziaWG +
-# per-user stats + mieru/anytls/tuic/naive (hiddify dropped amnezia). See panel
-# Dockerfile for the full rationale.
-FROM alpine AS singbox-fetch
-ARG TARGETARCH
-ARG SINGBOX_EXT_VERSION=1.13.12-extended-2.1.5
-RUN apk add --no-cache curl tar ca-certificates && mkdir -p /out && \
-    case "${TARGETARCH}" in \
-      amd64) A=amd64 ;; \
-      arm64) A=arm64 ;; \
-      *)     A=amd64 ;; \
-    esac && \
-    curl -fsSL "https://github.com/shtorm-7/sing-box-extended/releases/download/v${SINGBOX_EXT_VERSION}/sing-box-${SINGBOX_EXT_VERSION}-linux-${A}-musl.tar.gz" -o /tmp/sb.tar.gz && \
-    tar -xzf /tmp/sb.tar.gz -C /tmp && \
-    cp /tmp/sing-box-*/sing-box /out/sing-box && chmod +x /out/sing-box && \
-    /out/sing-box version | head -1
+# Build shtorm-7/sing-box-extended from source (AmneziaWG + per-user stats +
+# anytls/tuic/hy2 + mieru-outbound). See panel Dockerfile for rationale.
+FROM golang:1.26-bookworm AS singbox-fetch
+ARG SINGBOX_REF=extended
+RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+    git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
+        https://github.com/shtorm-7/sing-box-extended.git /src
+WORKDIR /src
+ENV CGO_ENABLED=0
+ARG SINGBOX_VERSION=
+RUN SBVER="${SINGBOX_VERSION:-$(git -C /src describe --tags --exact-match 2>/dev/null || echo ${SINGBOX_REF}-$(git -C /src rev-parse --short HEAD 2>/dev/null || echo unknown))}" && \
+    go build -trimpath \
+      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp,with_wireguard" \
+      -ldflags "-w -s -X github.com/sagernet/sing-box/constant.Version=${SBVER}" \
+      -o /out/sing-box ./cmd/sing-box
 
 # Build stage
 FROM golang:1.26-alpine AS builder

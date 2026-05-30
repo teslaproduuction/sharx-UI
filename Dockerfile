@@ -32,24 +32,29 @@ RUN npm run build && cp -R out /webpanel
 # Prebuilt linux-amd64-glibc.tar.gz from upstream releases — no Go build step
 # (panel/node hosts may have only 1 GB RAM; we never build sing-box on the node).
 # ========================================================
-FROM alpine AS singbox-fetch
-# Prebuilt shtorm-7/sing-box-extended release (musl build — runs on plain alpine).
-# This fork keeps AmneziaWG (the `amnezia` endpoint option) + per-user v2ray_api
-# stats + mieru/anytls/tuic/naive. The hiddify/hiddify-sing-box fork DROPPED the
-# amnezia option, so we ship shtorm-7's prebuilt directly. Downloading the release
-# avoids a from-source build (its go.mod needs go 1.26 + a heavy build-tag set).
-# The release already reports `sing-box version 1.13.12-extended-2.1.5`.
-ARG TARGETARCH
-ARG SINGBOX_EXT_VERSION=1.13.12-extended-2.1.5
-RUN apk add --no-cache curl tar ca-certificates && mkdir -p /out && \
-    case "${TARGETARCH}" in \
-      amd64) A=amd64 ;; \
-      arm64) A=arm64 ;; \
-      *)     A=amd64 ;; \
-    esac && \
-    curl -fsSL "https://github.com/shtorm-7/sing-box-extended/releases/download/v${SINGBOX_EXT_VERSION}/sing-box-${SINGBOX_EXT_VERSION}-linux-${A}-musl.tar.gz" -o /tmp/sb.tar.gz && \
-    tar -xzf /tmp/sb.tar.gz -C /tmp && \
-    cp /tmp/sing-box-*/sing-box /out/sing-box && chmod +x /out/sing-box && \
+# Build shtorm-7/sing-box-extended from source — this fork keeps AmneziaWG (the
+# `amnezia` wireguard endpoint option, which hiddify dropped) AND per-user
+# v2ray_api stats + anytls/tuic/hy2 + mieru-OUTBOUND. We compile with our own
+# minimal tag set (NOT the heavy DEFAULT_BUILD_TAGS with admin_panel/manager/
+# tailscale) so the binary stays lean. go.mod requires go>=1.26.1.
+# NOTE: shtorm-7 only registers mieru as an OUTBOUND (no mieru server inbound) —
+# the mieru INBOUND graft from hiddify is tracked separately (enfein/mieru v3.17
+# vs v3.27 reconciliation).
+FROM golang:1.26-bookworm AS singbox-fetch
+ARG SINGBOX_REF=extended
+RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
+    git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
+        https://github.com/shtorm-7/sing-box-extended.git /src
+WORKDIR /src
+ENV CGO_ENABLED=0
+ARG SINGBOX_VERSION=
+RUN SBVER="${SINGBOX_VERSION:-$(git -C /src describe --tags --exact-match 2>/dev/null || echo ${SINGBOX_REF}-$(git -C /src rev-parse --short HEAD 2>/dev/null || echo unknown))}" && \
+    echo "sing-box version stamp: ${SBVER}" && \
+    go build -trimpath \
+      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp,with_wireguard" \
+      -ldflags "-w -s -X github.com/sagernet/sing-box/constant.Version=${SBVER}" \
+      -o /out/sing-box ./cmd/sing-box && \
     /out/sing-box version | head -1
 
 # ========================================================
