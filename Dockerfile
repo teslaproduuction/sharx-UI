@@ -34,18 +34,43 @@ RUN npm run build && cp -R out /webpanel
 # ========================================================
 # Build shtorm-7/sing-box-extended from source — this fork keeps AmneziaWG (the
 # `amnezia` wireguard endpoint option, which hiddify dropped) AND per-user
-# v2ray_api stats + anytls/tuic/hy2 + mieru-OUTBOUND. We compile with our own
-# minimal tag set (NOT the heavy DEFAULT_BUILD_TAGS with admin_panel/manager/
-# tailscale) so the binary stays lean. go.mod requires go>=1.26.1.
-# NOTE: shtorm-7 only registers mieru as an OUTBOUND (no mieru server inbound) —
-# the mieru INBOUND graft from hiddify is tracked separately (enfein/mieru v3.17
-# vs v3.27 reconciliation).
+# v2ray_api stats + anytls/tuic/hy2 + mieru-outbound + mieru-INBOUND (server).
+# The mieru inbound is grafted via static files in third_party/singbox-mieru-graft/:
+#   - protocol/mieru/{common,inbound}.go  (from hiddify/hiddify-sing-box extended)
+#   - option/mieru_inbound.go             (MieruInboundOptions + MieruUser structs)
+# include/registry.go is patched with sed to call mieru.RegisterInbound().
+# Targets enfein/mieru v3.17 already in shtorm-7 go.mod — no bump needed
+# (apis/server surface: Store/Start/Stop/IsRunning/Accept stable from ≥v3.17).
+# Build tags stay lean; go.mod requires go>=1.26.1.
 FROM golang:1.26-bookworm AS singbox-fetch
 ARG SINGBOX_REF=extended
 RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
     git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
         https://github.com/shtorm-7/sing-box-extended.git /src
+
+# ── mieru INBOUND graft ──────────────────────────────────────────────────────
+# 1+2) Copy the two new protocol/mieru/*.go files (written verbatim in repo).
+COPY third_party/singbox-mieru-graft/protocol/mieru/common.go  /src/protocol/mieru/common.go
+COPY third_party/singbox-mieru-graft/protocol/mieru/inbound.go /src/protocol/mieru/inbound.go
+
+# 3) Add MieruInboundOptions + MieruUser to the option package.
+#    Separate file keeps it clean vs patching the existing mieru.go.
+COPY third_party/singbox-mieru-graft/option/mieru_inbound.go   /src/option/mieru_inbound.go
+
+# 4) Register the inbound inside InboundRegistry() — anchor on anytls.RegisterInbound
+#    (mieru.RegisterOutbound lives in OutboundRegistry(), the WRONG function/registry
+#    type, so anchoring there silently fails to wire the inbound).
+RUN sed -i 's/anytls\.RegisterInbound(registry)/anytls.RegisterInbound(registry)\n\tmieru.RegisterInbound(registry)/' \
+    /src/include/registry.go && \
+    grep -q "mieru.RegisterInbound(registry)" /src/include/registry.go || (echo "mieru inbound registration sed FAILED" && exit 1)
+
+# 5) shtorm-7 pins enfein/mieru v3.17 which lacks apis/server (added v3.27).
+#    Bump to v3.27; the outbound-side APIs (apis/client/common/model) are
+#    stable across this range so existing outbound.go compiles unchanged.
+RUN cd /src && go get github.com/enfein/mieru/v3@v3.27.0 && go mod tidy
+# ── end mieru INBOUND graft ──────────────────────────────────────────────────
+
 WORKDIR /src
 ENV CGO_ENABLED=0
 ARG SINGBOX_VERSION=

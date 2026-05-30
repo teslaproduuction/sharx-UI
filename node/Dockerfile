@@ -1,14 +1,25 @@
 # Telemt: ./scripts/download-telemt.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt (or DockerInit fallback)
 # SharX Telemt fork build fallback: ./scripts/build-telemt-sharx.sh
-# Phase 2 — fetch + build hiddify-sing-box for worker nodes (same recipe as panel).
-# Build shtorm-7/sing-box-extended from source (AmneziaWG + per-user stats +
-# anytls/tuic/hy2 + mieru-outbound). See panel Dockerfile for rationale.
+# Phase 2 — fetch + build shtorm-7/sing-box-extended for worker nodes.
+# AmneziaWG + per-user stats + anytls/tuic/hy2 + mieru-outbound + mieru-INBOUND.
+# Same mieru-inbound graft as panel Dockerfile; see that file for rationale.
 FROM golang:1.26-bookworm AS singbox-fetch
 ARG SINGBOX_REF=extended
 RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
     git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
         https://github.com/shtorm-7/sing-box-extended.git /src
+
+# ── mieru INBOUND graft (same as panel Dockerfile) ───────────────────────────
+COPY third_party/singbox-mieru-graft/protocol/mieru/common.go  /src/protocol/mieru/common.go
+COPY third_party/singbox-mieru-graft/protocol/mieru/inbound.go /src/protocol/mieru/inbound.go
+COPY third_party/singbox-mieru-graft/option/mieru_inbound.go   /src/option/mieru_inbound.go
+RUN sed -i 's/anytls\.RegisterInbound(registry)/anytls.RegisterInbound(registry)\n\tmieru.RegisterInbound(registry)/' \
+    /src/include/registry.go && \
+    grep -q "mieru.RegisterInbound(registry)" /src/include/registry.go || (echo "mieru inbound registration sed FAILED" && exit 1)
+RUN cd /src && go get github.com/enfein/mieru/v3@v3.27.0 && go mod tidy
+# ─────────────────────────────────────────────────────────────────────────────
+
 WORKDIR /src
 ENV CGO_ENABLED=0
 ARG SINGBOX_VERSION=
