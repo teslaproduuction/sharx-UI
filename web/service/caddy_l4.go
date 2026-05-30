@@ -54,6 +54,9 @@ type SniRoute struct {
 	Protocol  string `json:"protocol"`
 	Sni       string `json:"sni"`
 	Dial      string `json:"dial"`
+	// Conflict is set when another share_tls_443 inbound claims the same SNI —
+	// the l4 router would route both to the first match, breaking the second.
+	Conflict bool `json:"conflict"`
 }
 
 // inboundSni returns the routing SNI for an inbound: the explicit Sni field, or
@@ -103,6 +106,7 @@ func CollectSniRoutes() ([]SniRoute, error) {
 		return nil, err
 	}
 	out := make([]SniRoute, 0, len(inbounds))
+	seen := make(map[string]bool) // SNI → already claimed
 	for i := range inbounds {
 		inb := &inbounds[i]
 		// UDP protocols bind :443/udp themselves — never go through the TCP l4 router.
@@ -113,12 +117,15 @@ func CollectSniRoutes() ([]SniRoute, error) {
 		if sni == "" || inb.Port <= 0 {
 			continue
 		}
+		conflict := seen[strings.ToLower(sni)]
+		seen[strings.ToLower(sni)] = true
 		out = append(out, SniRoute{
 			InboundID: inb.Id,
 			Tag:       inb.Tag,
 			Protocol:  string(inb.Protocol),
 			Sni:       sni,
 			Dial:      fmt.Sprintf("127.0.0.1:%d", inb.Port),
+			Conflict:  conflict,
 		})
 	}
 	return out, nil
@@ -129,6 +136,12 @@ func CollectSniRoutes() ([]SniRoute, error) {
 func buildLayer4Server(routes []SniRoute) map[string]any {
 	caddyRoutes := make([]map[string]any, 0, len(routes)+1)
 	for _, r := range routes {
+		if r.Conflict {
+			// Duplicate SNI — the first route already claims it; skip so we don't
+			// push an ambiguous config.
+			logger.Warningf("caddy l4: SNI %q claimed by multiple inbounds — skipping inbound %d", r.Sni, r.InboundID)
+			continue
+		}
 		caddyRoutes = append(caddyRoutes, map[string]any{
 			"match": []map[string]any{{"tls": map[string]any{"sni": []string{r.Sni}}}},
 			"handle": []map[string]any{{

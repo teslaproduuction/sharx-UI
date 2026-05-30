@@ -85,8 +85,8 @@ export default function Page() {
       const path =
         core === "xray"
           ? action === "stop"
-            ? "server/stopXrayService"
-            : "server/restartXrayService"
+            ? "api/server/stopXrayService"
+            : "api/server/restartXrayService"
           : `cores/${core}/${action}`;
       const r = await postJson(panel(path), {}, true);
       setBusyCore(null);
@@ -111,7 +111,7 @@ export default function Page() {
       setLogsCore(core);
       setLogLines([]);
       setLogsLoading(true);
-      const path = core === "xray" ? "server/xraylogs/500" : `cores/${core}/logs`;
+      const path = core === "xray" ? "api/server/xraylogs/500" : `cores/${core}/logs`;
       const r =
         core === "xray"
           ? await postJson<string[]>(panel(path), {}, true)

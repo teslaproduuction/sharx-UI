@@ -383,6 +383,10 @@ func buildWireGuardClientOutbound(tag string, raw map[string]any) (map[string]an
 	} else if s, ok := raw["address"].(string); ok && strings.TrimSpace(s) != "" {
 		addr = []any{s}
 	}
+	// sing-box wireguard endpoint `address` requires CIDR prefixes. WARP / AmneziaWG
+	// .conf files list bare IPs (Address = 172.16.0.2, 2606:...), so append /32
+	// (IPv4) or /128 (IPv6) when the prefix is missing.
+	addr = normalizeWireGuardAddresses(addr)
 	peer := map[string]any{
 		"address":    server,
 		"port":       port,
@@ -423,6 +427,32 @@ func buildWireGuardClientOutbound(tag string, raw map[string]any) (map[string]an
 		logger.Warningf("singbox wireguard %q: dropping amnezia block — this sing-box build has no AmneziaWG support (plain WireGuard applied)", tag)
 	}
 	return out, nil
+}
+
+// normalizeWireGuardAddresses ensures every tunnel address carries a CIDR prefix
+// (/32 for IPv4, /128 for IPv6). sing-box's wireguard endpoint rejects bare IPs.
+func normalizeWireGuardAddresses(in []any) []any {
+	out := make([]any, 0, len(in))
+	for _, a := range in {
+		s, ok := a.(string)
+		if !ok {
+			out = append(out, a)
+			continue
+		}
+		s = strings.TrimSpace(s)
+		if s == "" {
+			continue
+		}
+		if !strings.Contains(s, "/") {
+			if strings.Contains(s, ":") {
+				s += "/128" // IPv6
+			} else {
+				s += "/32" // IPv4
+			}
+		}
+		out = append(out, s)
+	}
+	return out
 }
 
 // collectOutboundFragmentsForNode walks every enabled OutboundSidecar assigned
