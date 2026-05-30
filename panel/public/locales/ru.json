@@ -2753,6 +2753,16 @@
       "stopSingbox": "Остановить Sing-box",
       "restartSingbox": "Перезапустить Sing-box",
       "versionLabel": "Версия"
+    },
+    "outboundSidecars": {
+      "importSection": "Импорт — перетащи .conf или вставь URI",
+      "importHint": "AmneziaWG/WireGuard .conf (drag-drop или вставка) · tuic:// · hysteria2:// · anytls://. vless/vmess/trojan → страница Outbounds.",
+      "importButton": "Разобрать и заполнить",
+      "importedAwg": "AmneziaWG-конфиг импортирован",
+      "importBadConf": "Не удалось разобрать WireGuard .conf",
+      "importBadUri": "Неподдерживаемый URI (tuic / hysteria2 / anytls; vless/vmess → Outbounds)",
+      "importedUri": "Импортирован {{kind}}",
+      "importUnknown": "Вставь URI tuic/hy2/anytls или WireGuard .conf"
     }
   }
 }

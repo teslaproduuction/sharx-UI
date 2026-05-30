@@ -2747,6 +2747,16 @@
       "stopSingbox": "Stop Sing-box",
       "restartSingbox": "Restart Sing-box",
       "versionLabel": "Version"
+    },
+    "outboundSidecars": {
+      "importSection": "Import — drop a .conf or paste a URI",
+      "importHint": "AmneziaWG/WireGuard .conf (drag-drop or paste) · tuic:// · hysteria2:// · anytls://. vless/vmess/trojan → Outbounds page.",
+      "importButton": "Parse & fill",
+      "importedAwg": "Imported AmneziaWG config",
+      "importBadConf": "Could not parse WireGuard .conf",
+      "importBadUri": "Unsupported URI (use tuic / hysteria2 / anytls; vless/vmess → Outbounds page)",
+      "importedUri": "Imported {{kind}}",
+      "importUnknown": "Paste a tuic/hy2/anytls URI or a WireGuard .conf"
     }
   }
 }
