@@ -5,6 +5,7 @@ import {
   ArrowDown,
   ArrowLeftRight,
   ArrowUp,
+  Boxes,
   CircleStop,
   Clock,
   CloudDownload,
@@ -1045,6 +1046,30 @@ export function DashboardPage() {
     setSpin(false);
     if (r.success) toast.success(t("success"));
   };
+  const restartTelemtLocal = async () => {
+    if (multi) return;
+    setSpin(true);
+    const r = await postJson(panel("cores/telemt/restart"), {}, true);
+    setSpin(false);
+    if (r.success) { toast.success(t("success")); await pull(); }
+    else toast.error((r as { msg?: string }).msg || t("fail"));
+  };
+  const stopSingboxLocal = async () => {
+    if (multi) return;
+    setSpin(true);
+    const r = await postJson(panel("cores/singbox/stop"), {}, true);
+    setSpin(false);
+    if (r.success) { toast.success(t("success")); await pull(); }
+    else toast.error((r as { msg?: string }).msg || t("fail"));
+  };
+  const restartSingboxLocal = async () => {
+    if (multi) return;
+    setSpin(true);
+    const r = await postJson(panel("cores/singbox/restart"), {}, true);
+    setSpin(false);
+    if (r.success) { toast.success(t("success")); await pull(); }
+    else toast.error((r as { msg?: string }).msg || t("fail"));
+  };
   const openVer = async () => {
     setSpin(true);
     const r = await getJson<string[]>(panel("api/server/getXrayVersion"));
@@ -1325,140 +1350,129 @@ export function DashboardPage() {
           )}
           {showXray && (
           <StaggerItem className={showResources ? "lg:col-span-4" : "lg:col-span-12"}>
-            <Surface padding="sm" className="h-full">
-              <div className="flex flex-wrap items-start justify-between gap-1.5">
-                <div className="min-w-0 flex items-center gap-1.5">
-                  <IconTile icon={Wrench} tone="warning" size="sm" className="shrink-0" />
-                  <h2 className="truncate text-xs font-semibold text-[var(--fg)] sm:text-sm">
-                    {multi ? t("pages.index.xrayPanelAndNodes") : t("pages.index.xrayStatus")}
-                  </h2>
+            <div className={`h-full ${showResources ? "space-y-3" : "grid grid-cols-1 gap-3 sm:grid-cols-3"}`}>
+              {/* Xray card */}
+              <Surface padding="sm" className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-1.5">
+                  <div className="min-w-0 flex items-center gap-1.5">
+                    <IconTile icon={Network} tone="warning" size="sm" className="shrink-0" />
+                    <h2 className="truncate text-xs font-semibold text-[var(--fg)] sm:text-sm">
+                      {multi ? t("pages.index.xrayPanelAndNodes") : "Xray"}
+                    </h2>
+                  </div>
+                  <span
+                    className={`shrink-0 max-w-[min(100%,11rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(xUi.color)}`}
+                    title={multi ? `${t("pages.index.xrayLocalLabel")}: ${xUi.msg}` : xUi.msg}
+                  >
+                    {multi ? `${t("pages.index.xrayLocalLabel")}: ${xUi.msg}` : xUi.msg}
+                  </span>
                 </div>
-                <span
-                  className={`shrink-0 max-w-[min(100%,11rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(
-                    xUi.color
-                  )}`}
-                  title={multi ? `${t("pages.index.xrayLocalLabel")}: ${xUi.msg}` : xUi.msg}
-                >
-                  {multi ? `${t("pages.index.xrayLocalLabel")}: ${xUi.msg}` : xUi.msg}
-                </span>
-              </div>
-              {multi && nx && nx.total > 0 && (
-                <div className="mt-2 rounded-md border border-[var(--border)] bg-[var(--surface)]/60 px-2 py-1.5 text-[11px] leading-snug text-[var(--fg)] sm:text-xs">
-                  <p>
-                    {t("pages.index.nodesCoresSummary", {
-                      running: nx.running,
-                      total: nx.total,
-                    })}
-                    {(nx.error > 0 || nx.stopped > 0) && (
-                      <span className="text-[var(--fg-muted)]">
-                        {" "}
-                        (
-                        {nx.error > 0
-                          ? t("pages.index.nodesCoresErrorCount", { n: nx.error })
-                          : ""}
-                        {nx.error > 0 && nx.stopped > 0 ? " · " : ""}
-                        {nx.stopped > 0
-                          ? t("pages.index.nodesCoresStoppedCount", { n: nx.stopped })
-                          : ""}
-                        )
-                      </span>
-                    )}
-                  </p>
-                  {nt && nt.total > 0 ? (
-                    <p className="mt-1 text-[var(--fg-muted)]">
-                      {t("pages.index.nodesTelemtSummary", {
-                        running: nt.running,
-                        total: nt.total,
-                      })}
+                {multi && nx && nx.total > 0 && (
+                  <div className="rounded-md border border-[var(--border)] bg-[var(--surface)]/60 px-2 py-1.5 text-[11px] leading-snug text-[var(--fg)] sm:text-xs">
+                    <p>
+                      {t("pages.index.nodesCoresSummary", { running: nx.running, total: nx.total })}
+                      {(nx.error > 0 || nx.stopped > 0) && (
+                        <span className="text-[var(--fg-muted)]">
+                          {" "}(
+                          {nx.error > 0 ? t("pages.index.nodesCoresErrorCount", { n: nx.error }) : ""}
+                          {nx.error > 0 && nx.stopped > 0 ? " · " : ""}
+                          {nx.stopped > 0 ? t("pages.index.nodesCoresStoppedCount", { n: nx.stopped }) : ""}
+                          )
+                        </span>
+                      )}
                     </p>
+                    {nt && nt.total > 0 ? (
+                      <p className="mt-1 text-[var(--fg-muted)]">
+                        {t("pages.index.nodesTelemtSummary", { running: nt.running, total: nt.total })}
+                      </p>
+                    ) : null}
+                    <Link href={linkP("panel/nodes")} className="mt-0.5 inline-block text-[10px] font-medium text-[var(--accent)] hover:underline sm:text-xs">
+                      {t("pages.index.openNodes")} →
+                    </Link>
+                  </div>
+                )}
+                {multi && (!nx || nx.total === 0) && nTot > 0 && (
+                  <p className="text-[10px] text-[var(--fg-muted)] sm:text-xs">{t("pages.index.nodesCoresNoEnabled")}</p>
+                )}
+                <p className="line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.xray?.errorMsg}>
+                  {t("pages.index.xrayVersionLine", { version: st.xray?.version || "—" })}
+                  {st.xray?.errorMsg ? ` — ${st.xray.errorMsg}` : ""}
+                </p>
+                <div className="flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
+                  {!multi ? (
+                    <>
+                      <IconButton label={t("pages.index.stopXray")} onClick={stopX}>
+                        <Power size={14} />
+                      </IconButton>
+                      <IconButton label={t("pages.index.restartXray")} onClick={restartX}>
+                        <RefreshCw size={14} />
+                      </IconButton>
+                    </>
                   ) : null}
-                  <Link
-                    href={linkP("panel/nodes")}
-                    className="mt-0.5 inline-block text-[10px] font-medium text-[var(--accent)] hover:underline sm:text-xs"
-                  >
-                    {t("pages.index.openNodes")} →
-                  </Link>
-                </div>
-              )}
-              {multi && (!nx || nx.total === 0) && nTot > 0 && (
-                <p className="mt-1.5 text-[10px] text-[var(--fg-muted)] sm:text-xs">
-                  {t("pages.index.nodesCoresNoEnabled")}
-                </p>
-              )}
-              <p className="mt-2 line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.xray?.errorMsg}>
-                {t("pages.index.xrayVersionLine", {
-                  version: st.xray?.version || "—",
-                })}
-                {st.xray?.errorMsg ? ` — ${st.xray.errorMsg}` : ""}
-              </p>
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5">
-                <span className="text-[10px] font-medium text-[var(--fg-subtle)] sm:text-xs">
-                  {t("pages.index.telemtShort")}
-                </span>
-                <span
-                  className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(
-                    teleUi.color,
-                  )}`}
-                  title={teleUi.msg}
-                >
-                  {teleUi.msg}
-                </span>
-              </div>
-              {st.telemt?.errorMsg && !multi ? (
-                <p
-                  className="mt-1 line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs"
-                  title={st.telemt.errorMsg}
-                >
-                  {st.telemt.errorMsg}
-                </p>
-              ) : null}
-              <div className="mt-2 flex flex-wrap items-center justify-between gap-1.5">
-                <span className="text-[10px] font-medium text-[var(--fg-subtle)] sm:text-xs">
-                  {t("pages.index.singboxShort", { defaultValue: "Sing-box" })}
-                </span>
-                <span
-                  className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(
-                    sbxUi.color,
-                  )}`}
-                  title={st.singbox?.configHash ? `cfg ${st.singbox.configHash}` : sbxUi.msg}
-                >
-                  {sbxUi.msg}
-                  {sbxUi.hash ? ` · ${sbxUi.hash}` : ""}
-                </span>
-              </div>
-              {st.singbox?.errorMsg && !multi ? (
-                <p
-                  className="mt-1 line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs"
-                  title={st.singbox.errorMsg}
-                >
-                  {st.singbox.errorMsg}
-                </p>
-              ) : null}
-              <div className="mt-2.5 flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
-                {!multi ? (
-                  <IconButton
-                    label={t("pages.index.stopTelemt")}
-                    disabled={st.telemt?.state !== "running"}
-                    onClick={stopTelemtLocal}
-                  >
-                    <Power size={14} />
+                  <IconButton label={t("pages.index.xraySwitch")} onClick={openVer}>
+                    <Wrench size={14} />
                   </IconButton>
+                </div>
+              </Surface>
+
+              {/* Telemt card */}
+              <Surface padding="sm" className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-1.5">
+                  <div className="min-w-0 flex items-center gap-1.5">
+                    <IconTile icon={Server} tone="info" size="sm" className="shrink-0" />
+                    <h2 className="truncate text-xs font-semibold text-[var(--fg)] sm:text-sm">{t("pages.index.telemtShort")}</h2>
+                  </div>
+                  <span
+                    className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(teleUi.color)}`}
+                    title={teleUi.msg}
+                  >
+                    {teleUi.msg}
+                  </span>
+                </div>
+                {st.telemt?.errorMsg && !multi ? (
+                  <p className="line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.telemt.errorMsg}>{st.telemt.errorMsg}</p>
                 ) : null}
                 {!multi ? (
-                  <>
-                    <IconButton label={t("pages.index.stopXray")} onClick={stopX}>
+                  <div className="flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
+                    <IconButton label={t("pages.index.stopTelemt")} disabled={st.telemt?.state !== "running"} onClick={stopTelemtLocal}>
                       <Power size={14} />
                     </IconButton>
-                    <IconButton label={t("pages.index.restartXray")} onClick={restartX}>
+                    <IconButton label={t("pages.index.restartTelemt", { defaultValue: "Restart Telemt" })} onClick={restartTelemtLocal}>
                       <RefreshCw size={14} />
                     </IconButton>
-                  </>
+                  </div>
                 ) : null}
-                <IconButton label={t("pages.index.xraySwitch")} onClick={openVer}>
-                  <Wrench size={14} />
-                </IconButton>
-              </div>
-            </Surface>
+              </Surface>
+
+              {/* Sing-box card */}
+              <Surface padding="sm" className="space-y-2">
+                <div className="flex flex-wrap items-start justify-between gap-1.5">
+                  <div className="min-w-0 flex items-center gap-1.5">
+                    <IconTile icon={Boxes} tone="info" size="sm" className="shrink-0" />
+                    <h2 className="truncate text-xs font-semibold text-[var(--fg)] sm:text-sm">{t("pages.index.singboxShort", { defaultValue: "Sing-box" })}</h2>
+                  </div>
+                  <span
+                    className={`shrink-0 max-w-[min(100%,12rem)] truncate rounded-full border px-2 py-0.5 text-[10px] font-medium sm:text-xs ${xrayTagClass(sbxUi.color)}`}
+                    title={st.singbox?.configHash ? `cfg ${st.singbox.configHash}` : sbxUi.msg}
+                  >
+                    {sbxUi.msg}{sbxUi.hash ? ` · ${sbxUi.hash}` : ""}
+                  </span>
+                </div>
+                {st.singbox?.errorMsg && !multi ? (
+                  <p className="line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.singbox.errorMsg}>{st.singbox.errorMsg}</p>
+                ) : null}
+                {!multi ? (
+                  <div className="flex flex-wrap justify-end gap-0 border-t border-[var(--border)]/80 pt-2">
+                    <IconButton label={t("pages.index.stopSingbox", { defaultValue: "Stop Sing-box" })} disabled={st.singbox?.state !== "running"} onClick={stopSingboxLocal}>
+                      <Power size={14} />
+                    </IconButton>
+                    <IconButton label={t("pages.index.restartSingbox", { defaultValue: "Restart Sing-box" })} onClick={restartSingboxLocal}>
+                      <RefreshCw size={14} />
+                    </IconButton>
+                  </div>
+                ) : null}
+              </Surface>
+            </div>
           </StaggerItem>
           )}
         </Stagger>
