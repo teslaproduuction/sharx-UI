@@ -460,6 +460,13 @@ func (s *SubService) prepareInboundForSubscription(inbound *model.Inbound) *mode
 			out.StreamSettings = streamSettings
 		}
 	}
+	// Phase 11 — when the inbound is fronted by the Caddy :443 SNI router, clients
+	// must connect to :443 (Caddy peeks the SNI and forwards to the real port).
+	// Override the advertised port in every share link / subscription. The SNI is
+	// already the inbound's TLS serverName, which the link carries.
+	if out.ShareTls443 {
+		out.Port = 443
+	}
 	return &out
 }
 
