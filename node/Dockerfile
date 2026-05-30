@@ -1,7 +1,7 @@
 # Telemt: ./scripts/download-telemt.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt (or DockerInit fallback)
 # SharX Telemt fork build fallback: ./scripts/build-telemt-sharx.sh
 # Phase 2 — fetch + build hiddify-sing-box for worker nodes (same recipe as panel).
-FROM golang:1.25-bookworm AS singbox-fetch
+FROM golang:1.26-bookworm AS singbox-fetch
 ARG SINGBOX_REF=extended
 RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \

@@ -32,7 +32,7 @@ RUN npm run build && cp -R out /webpanel
 # Prebuilt linux-amd64-glibc.tar.gz from upstream releases — no Go build step
 # (panel/node hosts may have only 1 GB RAM; we never build sing-box on the node).
 # ========================================================
-FROM golang:1.25-bookworm AS singbox-fetch
+FROM golang:1.26-bookworm AS singbox-fetch
 # Build from hiddify-sing-box master HEAD with CGO disabled so the resulting
 # binary is statically-linked and runs on plain alpine (no glibc compat layer).
 #
