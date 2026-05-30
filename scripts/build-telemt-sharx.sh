@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# DEPRECATED: use ./scripts/download-telemt.sh to fetch official telemt/telemt releases.
 # One-off Telemt (SharX fork) Linux musl binaries for embedding in panel/node images.
 # Run when third_party/telemt-sharx changes — not on every docker build.
 #

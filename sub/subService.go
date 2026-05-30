@@ -89,8 +89,8 @@ func (s *SubService) ClientShareLinks(client *model.ClientEntity, inboundIDs []i
 		}
 		prepared := s.prepareInboundForSubscription(inbound)
 		link := s.getLinkWithClient(prepared, client)
-		if link == "" && client != nil && strings.TrimSpace(client.Email) != "" {
-			link = s.getLink(prepared, client.Email)
+		if link == "" && client != nil && strings.TrimSpace(client.Name) != "" {
+			link = s.getLink(prepared, client.Name)
 		}
 		if link == "" {
 			continue
@@ -139,7 +139,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 		logger.Debugf("GetSubs: Client not found by subId '%s': %v", subId, err)
 	} else if clientEntity != nil {
 		logger.Debugf("GetSubs: Found client by subId '%s': clientId=%d, email=%s, hwidEnabled=%v",
-			subId, clientEntity.Id, clientEntity.Email, clientEntity.HWIDEnabled)
+			subId, clientEntity.Id, clientEntity.Name, clientEntity.HWIDEnabled)
 
 		// Check traffic limits and expiry time before returning subscription
 		// Traffic statistics are now stored directly in ClientEntity
@@ -160,7 +160,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 				db.Model(&model.ClientEntity{}).Where("id = ?", clientEntity.Id).Update("status", status)
 				clientEntity.Status = status
 				logger.Warningf("GetSubs: Client %s (subId: %s) exceeded limits - set status to %s: trafficExceeded=%v, timeExpired=%v, totalUsed=%d, total=%d",
-					clientEntity.Email, subId, status, trafficExceeded, timeExpired, totalUsed, trafficLimit)
+					clientEntity.Name, subId, status, trafficExceeded, timeExpired, totalUsed, trafficLimit)
 			}
 		}
 
@@ -241,7 +241,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 			if !newArchTrafficAdded {
 				trafficLimit := int64(clientEntity.TotalGB * 1024 * 1024 * 1024)
 				ct := xray.ClientTraffic{
-					Email:      clientEntity.Email,
+					Email:      clientEntity.Name,
 					Up:         clientEntity.Up,
 					Down:       clientEntity.Down,
 					Total:      trafficLimit,
@@ -267,7 +267,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 				if client.Enable && client.SubID == subId {
 					// Use ClientEntity for traffic (new architecture only)
 					var clientEntity model.ClientEntity
-					err = db.Where("LOWER(email) = ?", strings.ToLower(client.Email)).First(&clientEntity).Error
+					err = db.Where("LOWER(name) = ?", strings.ToLower(client.Email)).First(&clientEntity).Error
 					if err != nil {
 						// Client not found in ClientEntity - skip (old architecture clients should be migrated)
 						logger.Warningf("GetSubs: Client %s (subId: %s) not found in ClientEntity - skipping",
@@ -290,7 +290,7 @@ func (s *SubService) GetSubs(subId string, host string, c *gin.Context) ([]strin
 
 					// Create ClientTraffic from ClientEntity for statistics
 					clientTraffic := xray.ClientTraffic{
-						Email:      clientEntity.Email,
+						Email:      clientEntity.Name,
 						Up:         clientEntity.Up,
 						Down:       clientEntity.Down,
 						Total:      trafficLimit,
@@ -521,7 +521,7 @@ func (s *SubService) getLink(inbound *model.Inbound, email string) string {
 			if c == nil {
 				continue
 			}
-			if strings.ToLower(strings.TrimSpace(c.Email)) == em {
+			if strings.ToLower(strings.TrimSpace(c.Name)) == em {
 				return s.genTelemtLinkWithClient(&in, c)
 			}
 		}
@@ -553,7 +553,7 @@ func (s *SubService) getLinkWithClient(inbound *model.Inbound, client *model.Cli
 	if in.Protocol == model.WireGuard {
 		email := ""
 		if client != nil {
-			email = client.Email
+			email = client.Name
 		}
 		return s.buildWireguardPanelInfo(&in, email)
 	}
@@ -645,7 +645,7 @@ func (s *SubService) genMieruLinkWithClient(inbound *model.Inbound, client *mode
 			Clients []mieruInlineClient `json:"clients"`
 		}
 		_ = json.Unmarshal([]byte(inbound.Settings), &inline)
-		em := strings.ToLower(strings.TrimSpace(client.Email))
+		em := strings.ToLower(strings.TrimSpace(client.Name))
 		for _, c := range inline.Clients {
 			if strings.ToLower(strings.TrimSpace(c.Email)) == em {
 				pwd = c.Password
@@ -656,7 +656,7 @@ func (s *SubService) genMieruLinkWithClient(inbound *model.Inbound, client *mode
 	if pwd == "" {
 		return ""
 	}
-	return s.buildMieruURI(inbound, client.Email, pwd, raw.Transport, raw.Multiplexing, raw.MTU)
+	return s.buildMieruURI(inbound, client.Name, pwd, raw.Transport, raw.Multiplexing, raw.MTU)
 }
 
 // buildMieruURI emits the SharX mieru:// URI scheme. Mieru has no official URI
@@ -768,7 +768,7 @@ func (s *SubService) genAnyTLSLinkWithClient(inbound *model.Inbound, client *mod
 	}
 	pwd := strings.TrimSpace(client.Password)
 	if pwd == "" {
-		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Name)
 	}
 	return s.buildAnyTLSURI(inbound, pwd)
 }
@@ -814,9 +814,9 @@ func (s *SubService) genNaiveLinkWithClient(inbound *model.Inbound, client *mode
 	}
 	pwd := strings.TrimSpace(client.Password)
 	if pwd == "" {
-		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+		pwd, _ = extractInlineCredentialsForEmail(inbound.Settings, client.Name)
 	}
-	return s.buildNaiveURI(inbound, client.Email, pwd)
+	return s.buildNaiveURI(inbound, client.Name, pwd)
 }
 
 func (s *SubService) buildNaiveURI(inbound *model.Inbound, username, password string) string {
@@ -855,7 +855,7 @@ func (s *SubService) genTuicLinkWithClient(inbound *model.Inbound, client *model
 	if pwd == "" || uuid == "" {
 		// Fall back to inline settings.clients[] only when ClientEntity is missing the
 		// field — TUIC has both uuid and password, so prefer entity values when present.
-		inlinePwd, inlineUUID := extractInlineCredentialsForEmail(inbound.Settings, client.Email)
+		inlinePwd, inlineUUID := extractInlineCredentialsForEmail(inbound.Settings, client.Name)
 		if pwd == "" {
 			pwd = inlinePwd
 		}
@@ -1020,7 +1020,7 @@ func (s *SubService) passwordForSubLink(inbound *model.Inbound, client *model.Cl
 	}
 	switch model.NormalizeProtocol(inbound.Protocol) {
 	case model.Mixed:
-		want := mixedProxyUserFromEmail(client.Email)
+		want := mixedProxyUserFromEmail(client.Name)
 		accs, _ := settings["accounts"].([]any)
 		for _, a := range accs {
 			am, _ := a.(map[string]any)
@@ -1032,7 +1032,7 @@ func (s *SubService) passwordForSubLink(inbound *model.Inbound, client *model.Cl
 			}
 		}
 	case model.Shadowsocks:
-		want := strings.ToLower(strings.TrimSpace(client.Email))
+		want := strings.ToLower(strings.TrimSpace(client.Name))
 		clients, _ := settings["clients"].([]any)
 		for _, c := range clients {
 			cm, _ := c.(map[string]any)
@@ -1068,7 +1068,7 @@ func (s *SubService) genMixedLinkWithClient(inbound *model.Inbound, client *mode
 	if pass == "" {
 		return ""
 	}
-	user := mixedProxyUserFromEmail(client.Email)
+	user := mixedProxyUserFromEmail(client.Name)
 	nodeAddresses, _ := s.getAddressesForInbound(inbound)
 	if len(nodeAddresses) == 0 {
 		return ""
@@ -1111,7 +1111,7 @@ func (s *SubService) genMixedLink(inbound *model.Inbound, email string) string {
 	}
 	for _, c := range clients {
 		if c.Email == email && strings.TrimSpace(c.Password) != "" {
-			return s.genMixedLinkWithClient(inbound, &model.ClientEntity{Email: c.Email, Password: c.Password})
+			return s.genMixedLinkWithClient(inbound, &model.ClientEntity{Name: c.Email, Password: c.Password})
 		}
 	}
 	return ""
@@ -3072,7 +3072,7 @@ func (s *SubService) genHysteriaLinkWithClient(inbound *model.Inbound, client *m
 	if auth == "" {
 		return ""
 	}
-	return s.hysteriaLinkForAuth(inbound, client.Email, auth)
+	return s.hysteriaLinkForAuth(inbound, client.Name, auth)
 }
 
 func (s *SubService) hysteriaLinkForAuth(inbound *model.Inbound, email, auth string) string {
@@ -3366,8 +3366,8 @@ func (s *SubService) genRemarkWithClient(inbound *model.Inbound, client *model.C
 		'p': "",
 		'r': "",
 	}
-	if len(client.Email) > 0 {
-		orders['e'] = client.Email
+	if len(client.Name) > 0 {
+		orders['e'] = client.Name
 	}
 	if len(inbound.Remark) > 0 {
 		orders['i'] = inbound.Remark
@@ -3787,7 +3787,7 @@ func (s *SubService) extractNodeHost(nodeAddress string) string {
 // Returns error if HWID limit is exceeded (should block subscription).
 func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model.ClientEntity) error {
 	logger.Debugf("registerHWIDFromRequest called for client %d (subId: %s, email: %s, hwidEnabled: %v)",
-		clientEntity.Id, clientEntity.SubID, clientEntity.Email, clientEntity.HWIDEnabled)
+		clientEntity.Id, clientEntity.SubID, clientEntity.Name, clientEntity.HWIDEnabled)
 
 	// Check HWID mode - only register in client_header mode
 	settingService := service.SettingService{}
@@ -3808,7 +3808,7 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 	// Check if client has HWID tracking enabled
 	if !clientEntity.HWIDEnabled {
 		logger.Debugf("HWID registration skipped: HWID tracking disabled for client %d (subId: %s, email: %s)",
-			clientEntity.Id, clientEntity.SubID, clientEntity.Email)
+			clientEntity.Id, clientEntity.SubID, clientEntity.Name)
 		return nil
 	}
 
@@ -3822,7 +3822,7 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 		// No HWID header - mark as "unknown" device, don't register
 		// In client_header mode, we don't auto-generate HWID
 		logger.Debugf("No x-hwid header provided for client %d (subId: %s, email: %s) - HWID not registered",
-			clientEntity.Id, clientEntity.SubID, clientEntity.Email)
+			clientEntity.Id, clientEntity.SubID, clientEntity.Name)
 		return nil
 	}
 
@@ -3848,14 +3848,14 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 	if err != nil {
 		if errors.Is(err, service.ErrHWIDAdminBlocked) {
 			logger.Errorf("HWID blocked for client %d (subId: %s, email: %s): %v - BLOCKING subscription",
-				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
+				clientEntity.Id, clientEntity.SubID, clientEntity.Name, err)
 			return fmt.Errorf("HWID limit exceeded: %w", err)
 		}
 		// Check if error is HWID limit exceeded
 		if strings.Contains(err.Error(), "HWID limit exceeded") {
 			// Log as error - this should block subscription access
 			logger.Errorf("HWID limit exceeded for client %d (subId: %s, email: %s): %v - BLOCKING subscription",
-				clientEntity.Id, clientEntity.SubID, clientEntity.Email, err)
+				clientEntity.Id, clientEntity.SubID, clientEntity.Name, err)
 			// Return error to block subscription - this will prevent the subscription from being returned
 			// The calling function should handle this error and return appropriate response to client
 			return fmt.Errorf("HWID limit exceeded: %w", err)
@@ -3868,7 +3868,7 @@ func (s *SubService) registerHWIDFromRequest(c *gin.Context, clientEntity *model
 	} else if hwidRecord != nil {
 		// Successfully registered HWID
 		logger.Debugf("Successfully registered HWID for client %d (subId: %s, email: %s, hwid: %s, hwidId: %d)",
-			clientEntity.Id, clientEntity.SubID, clientEntity.Email, hwid, hwidRecord.Id)
+			clientEntity.Id, clientEntity.SubID, clientEntity.Name, hwid, hwidRecord.Id)
 	}
 	return nil
 }

@@ -4,6 +4,7 @@ import dynamic from "next/dynamic";
 import { useCallback } from "react";
 import type { Monaco, OnMount } from "@monaco-editor/react";
 import { applyMonacoJsonSchemas, type MonacoJsonSchemaEntry } from "@/lib/monacoJson";
+import { registerXrayMonacoSnippets } from "@/lib/xrayMonacoSnippets";
 
 const Editor = dynamic(() => import("@monaco-editor/react"), { ssr: false });
 
@@ -30,8 +31,11 @@ export function MonacoJsonEditor({
       if (schemaBundle.length > 0) {
         applyMonacoJsonSchemas(monaco, schemaBundle);
       }
+      if (path.includes("xray")) {
+        registerXrayMonacoSnippets(monaco);
+      }
     },
-    [schemaBundle],
+    [schemaBundle, path],
   );
 
   return (
@@ -53,6 +57,8 @@ export function MonacoJsonEditor({
         fontSize: 12,
         lineNumbers: "on",
         quickSuggestions: { other: true, comments: false, strings: true },
+        tabCompletion: "on",
+        suggestOnTriggerCharacters: true,
         suggest: { showSnippets: true, showValues: true, showWords: true },
         // Prefer JSON-schema completions; avoid extra word noise from other files
         wordBasedSuggestions: "off",

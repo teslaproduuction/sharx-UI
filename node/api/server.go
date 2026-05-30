@@ -346,10 +346,12 @@ func (s *Server) applyConfig(c *gin.Context) {
 	var requestData struct {
 		Config               json.RawMessage `json:"config"`
 		PanelURL             string          `json:"panelUrl,omitempty"`
+		NodeId               int             `json:"nodeId,omitempty"`
 		Telemt               json.RawMessage `json:"telemt"`
 		Singbox              json.RawMessage `json:"singbox"`
 		CoreProfileHash      string          `json:"coreProfileHash,omitempty"`
 		ExpectedConfigSha256 string          `json:"expectedConfigSha256,omitempty"`
+		LogRotate            json.RawMessage `json:"logRotate,omitempty"`
 	}
 
 	configBytes := body
@@ -360,6 +362,16 @@ func (s *Server) applyConfig(c *gin.Context) {
 		singboxRaw = requestData.Singbox
 		reqCoreProfileHash = strings.TrimSpace(requestData.CoreProfileHash)
 		reqExpectedSHA = strings.TrimSpace(requestData.ExpectedConfigSha256)
+		if len(requestData.LogRotate) > 0 {
+			applyLogRotateFromJSON(requestData.LogRotate)
+		}
+		if requestData.NodeId > 0 {
+			if err := nodeConfig.SetNodeId(requestData.NodeId); err != nil {
+				logger.Warningf("Failed to persist node id: %v", err)
+			} else {
+				logger.Infof("Parsed request with nodeId: %d", requestData.NodeId)
+			}
+		}
 		if requestData.PanelURL != "" {
 			panelURL := requestData.PanelURL
 			logger.Infof("Parsed request with panelUrl: %s", panelURL)

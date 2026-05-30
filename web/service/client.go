@@ -120,7 +120,7 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 				client.Status = status
 				err = db.Model(&model.ClientEntity{}).Where("id = ?", client.Id).Update("status", status).Error
 				if err != nil {
-					logger.Warningf("Failed to update status for client %s: %v", client.Email, err)
+					logger.Warningf("Failed to update status for client %s: %v", client.Name, err)
 				}
 				tgbotService := Tgbot{}
 				if tgbotService.IsRunning() {
@@ -148,10 +148,10 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 								if err == nil {
 									for _, node := range nodes {
 										go func(n *model.Node) {
-											if err := nodeService.RemoveUserFromNode(n, inbound.Tag, client.Email); err != nil {
-												logger.Warningf("GetClients: failed to remove expired client %s from node %s via API: %v", client.Email, n.Name, err)
+											if err := nodeService.RemoveUserFromNode(n, inbound.Tag, client.Name); err != nil {
+												logger.Warningf("GetClients: failed to remove expired client %s from node %s via API: %v", client.Name, n.Name, err)
 											} else {
-												logger.Infof("GetClients: removed expired client %s from node %s via API (instant)", client.Email, n.Name)
+												logger.Infof("GetClients: removed expired client %s from node %s via API (instant)", client.Name, n.Name)
 											}
 										}(node)
 									}
@@ -162,10 +162,10 @@ func (s *ClientService) GetClients(userId int) ([]*model.ClientEntity, error) {
 									processConfig := p.GetConfig()
 									if processConfig != nil {
 										// Instantly remove client from config.json
-										if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, client.Email); err != nil {
-											logger.Warningf("GetClients: failed to instantly remove expired client %s from config.json: %v", client.Email, err)
+										if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, client.Name); err != nil {
+											logger.Warningf("GetClients: failed to instantly remove expired client %s from config.json: %v", client.Name, err)
 										} else {
-											logger.Infof("GetClients: instantly removed expired client %s from config.json (inbound: %s)", client.Email, inbound.Tag)
+											logger.Infof("GetClients: instantly removed expired client %s from config.json (inbound: %s)", client.Name, inbound.Tag)
 											// Schedule async restart to apply changes
 											xrayService := XrayService{}
 											go func() {
@@ -228,11 +228,11 @@ func (s *ClientService) GetClient(id int) (*model.ClientEntity, error) {
 	return &client, nil
 }
 
-// GetClientByEmail retrieves a client by email for a specific user.
-func (s *ClientService) GetClientByEmail(userId int, email string) (*model.ClientEntity, error) {
+// GetClientByName retrieves a client by name for a specific user.
+func (s *ClientService) GetClientByName(userId int, name string) (*model.ClientEntity, error) {
 	db := database.GetDB()
 	var client model.ClientEntity
-	err := db.Where("user_id = ? AND email = ?", userId, strings.ToLower(email)).First(&client).Error
+	err := db.Where("user_id = ? AND name = ?", userId, strings.ToLower(name)).First(&client).Error
 	if err != nil {
 		return nil, err
 	}
@@ -288,10 +288,10 @@ func (s *ClientService) vlessFlowFromAssignedInboundList(inboundIds []int) strin
 // AddClient creates a new client.
 // Returns whether Xray needs restart and any error.
 func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool, error) {
-	// Validate email uniqueness for this user
-	existing, err := s.GetClientByEmail(userId, client.Email)
+	// Validate name uniqueness for this user
+	existing, err := s.GetClientByName(userId, client.Name)
 	if err == nil && existing != nil {
-		return false, common.NewError("Client with email already exists: ", client.Email)
+		return false, common.NewError("Client with name already exists: ", client.Name)
 	}
 
 	// Generate or normalize UUID, then ensure uniqueness for this user
@@ -335,8 +335,8 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	client.Comment = strings.TrimSpace(client.Comment)
 	client.Announce = strings.TrimSpace(client.Announce)
 
-	// Normalize email to lowercase
-	client.Email = strings.ToLower(client.Email)
+	// Normalize name to lowercase
+	client.Name = strings.ToLower(client.Name)
 	client.UserId = userId
 
 	// Set timestamps
@@ -379,7 +379,7 @@ func (s *ClientService) AddClient(userId int, client *model.ClientEntity) (bool,
 	// Use Select to explicitly control which fields are inserted
 	// This ensures that nil GroupId is properly handled as NULL
 	fieldsToInsert := []string{
-		"user_id", "email", "uuid", "security", "password", "flow",
+		"user_id", "name", "uuid", "security", "password", "flow",
 		"total_gb", "expiry_time", "enable", "status",
 		"tg_id", "sub_id", "comment", "reset", "created_at", "updated_at",
 		"up", "down", "all_time", "last_online", "hwid_enabled", "max_hwid",
@@ -472,13 +472,13 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 		return false, common.NewError("Client not found or access denied")
 	}
 
-	// Email is immutable after creation (WireGuard peer tags, stats, subscriptions bind to it).
-	reqEmail := strings.ToLower(strings.TrimSpace(client.Email))
-	storedEmail := strings.ToLower(strings.TrimSpace(existing.Email))
-	if reqEmail != "" && reqEmail != storedEmail {
-		return false, common.NewError("Client email cannot be changed after creation")
+	// Name is immutable after creation (WireGuard peer tags, stats, subscriptions bind to it).
+	reqName := strings.ToLower(strings.TrimSpace(client.Name))
+	storedName := strings.ToLower(strings.TrimSpace(existing.Name))
+	if reqName != "" && reqName != storedName {
+		return false, common.NewError("Client name cannot be changed after creation")
 	}
-	client.Email = existing.Email
+	client.Name = existing.Name
 
 	// Normalize and validate UUID when client supplies one; ensure uniqueness on change
 	if client.UUID != "" {
@@ -591,15 +591,27 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 	if client.MaxHWID != existing.MaxHWID {
 		updates["max_hwid"] = client.MaxHWID
 	}
+	// IP limit settings. Must be always-updated (zero-valued false / 0 are legitimate
+	// states the admin can save), otherwise GORM's "Updates(struct)" semantics drop them
+	// silently. Mirrors the always-update pattern used for `enable` / `total_gb` above.
+	updates["ip_limit_enabled"] = client.IPLimitEnabled
+	updates["max_ips"] = client.MaxIPs
 	updates["updated_at"] = client.UpdatedAt
 
-	// First try to update with all fields including HWID
+	// First try to update with all fields including HWID and IP limit
 	err = tx.Model(&model.ClientEntity{}).Where("id = ? AND user_id = ?", client.Id, userId).Updates(updates).Error
 	if err != nil {
-		// If HWID columns don't exist, remove them and try again
-		if strings.Contains(err.Error(), "no such column: hwid_enabled") || strings.Contains(err.Error(), "no such column: max_hwid") {
-			delete(updates, "hwid_enabled")
-			delete(updates, "max_hwid")
+		// Some columns may not exist on very old databases that skipped migrations 0040 (HWID)
+		// or 0043 (IP limit). Strip the offending columns and retry once.
+		msg := err.Error()
+		stripped := false
+		for _, col := range []string{"hwid_enabled", "max_hwid", "ip_limit_enabled", "max_ips"} {
+			if strings.Contains(msg, "no such column: "+col) {
+				delete(updates, col)
+				stripped = true
+			}
+		}
+		if stripped {
 			err = tx.Model(&model.ClientEntity{}).Where("id = ? AND user_id = ?", client.Id, userId).Updates(updates).Error
 		}
 	}
@@ -675,7 +687,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 			updates["status"] = "active"
 			if err := tx.Model(&model.ClientEntity{}).Where("id = ?", client.Id).Update("status", "active").Error; err == nil {
 				updatedClient.Status = "active"
-				logger.Infof("Client %s is no longer expired, status reset to active", updatedClient.Email)
+				logger.Infof("Client %s is no longer expired, status reset to active", updatedClient.Name)
 			}
 		}
 	}
@@ -737,7 +749,7 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 			enableChanged, needsReAdd, multiMode, xrayService.IsXrayRunning())
 
 		// Single mode: keep config.json in sync (same idea as nodes: live core via API + persisted config).
-		// Touch every affected inbound so email changes and inbound reassignment update the file correctly.
+		// Touch every affected inbound so name changes and inbound reassignment update the file correctly.
 		if !multiMode {
 			if xrayService.IsXrayRunning() {
 				processConfig := xrayService.GetConfig()
@@ -757,25 +769,25 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 							}
 							assigned := assignedSet[inboundId]
 							if !assigned || !finalClient.Enable {
-								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Email); err != nil {
-									logger.Warningf("UpdateClient: failed to remove client %s from config.json (inbound %s): %v", existing.Email, inbound.Tag, err)
+								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Name); err != nil {
+									logger.Warningf("UpdateClient: failed to remove client %s from config.json (inbound %s): %v", existing.Name, inbound.Tag, err)
 								} else {
-									logger.Infof("UpdateClient: removed client %s from config.json (inbound: %s)", existing.Email, inbound.Tag)
+									logger.Infof("UpdateClient: removed client %s from config.json (inbound: %s)", existing.Name, inbound.Tag)
 								}
 								continue
 							}
-							if !strings.EqualFold(existing.Email, finalClient.Email) {
-								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Email); err != nil {
-									logger.Warningf("UpdateClient: failed to remove old email %s from config.json (inbound %s): %v", existing.Email, inbound.Tag, err)
+							if !strings.EqualFold(existing.Name, finalClient.Name) {
+								if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Name); err != nil {
+									logger.Warningf("UpdateClient: failed to remove old name %s from config.json (inbound %s): %v", existing.Name, inbound.Tag, err)
 								}
 							}
 							clientData := make(map[string]interface{})
-							clientData["email"] = finalClient.Email
+							clientData["email"] = finalClient.Name
 							switch inbound.Protocol {
 							case model.Trojan, model.Mixed:
 								clientData["password"] = finalClient.Password
 								if inbound.Protocol == model.Mixed {
-									u := finalClient.Email
+									u := finalClient.Name
 									if i := strings.IndexByte(u, '@'); i > 0 {
 										u = u[:i]
 									}
@@ -806,9 +818,9 @@ func (s *ClientService) UpdateClient(userId int, client *model.ClientEntity) (bo
 								}
 							}
 							if err := xray.UpdateConfigFileAfterUserAddition(processConfig, inbound.Tag, clientData); err != nil {
-								logger.Warningf("UpdateClient: failed to add client %s to config.json: %v", finalClient.Email, err)
+								logger.Warningf("UpdateClient: failed to add client %s to config.json: %v", finalClient.Name, err)
 							} else {
-								logger.Infof("UpdateClient: added client %s to config.json (inbound: %s)", finalClient.Email, inbound.Tag)
+								logger.Infof("UpdateClient: added client %s to config.json (inbound: %s)", finalClient.Name, inbound.Tag)
 							}
 						}
 					}
@@ -981,10 +993,10 @@ func (s *ClientService) DeleteClient(userId int, id int) (bool, error) {
 						continue
 					}
 					// Instantly update config.json (remove client from Settings)
-					if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Email); err != nil {
+					if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, existing.Name); err != nil {
 						logger.Warningf("DeleteClient: failed to instantly update config.json for inbound %s: %v", inbound.Tag, err)
 					} else {
-						logger.Infof("DeleteClient: instantly removed client %s from config.json (inbound: %s)", existing.Email, inbound.Tag)
+						logger.Infof("DeleteClient: instantly removed client %s from config.json (inbound: %s)", existing.Name, inbound.Tag)
 					}
 				}
 			}
@@ -1193,7 +1205,7 @@ func (s *ClientService) ConvertClientEntityToClient(entity *model.ClientEntity) 
 		Security:   entity.Security,
 		Password:   entity.Password,
 		Flow:       entity.Flow,
-		Email:      entity.Email,
+		Email:      entity.Name,
 		TotalGB:    int64(entity.TotalGB), // Convert float64 to int64 for legacy compatibility (rounds down)
 		ExpiryTime: entity.ExpiryTime,
 		Enable:     entity.Enable,
@@ -1228,7 +1240,7 @@ func (s *ClientService) ConvertClientToEntity(client *model.Client, userId int) 
 	}
 	return &model.ClientEntity{
 		UserId:      userId,
-		Email:       strings.ToLower(client.Email),
+		Name:        strings.ToLower(client.Email),
 		UUID:        client.ID,
 		Security:    client.Security,
 		Password:    password,
@@ -1248,15 +1260,15 @@ func (s *ClientService) ConvertClientToEntity(client *model.Client, userId int) 
 	}
 }
 
-// DisableClientsByEmail removes expired clients from Xray API and updates their status.
+// DisableClientsByName removes expired clients from Xray API and updates their status.
 // This is called after AddClientTraffic marks clients as expired.
-func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string, inboundService *InboundService) (bool, error) {
+func (s *ClientService) DisableClientsByName(clientsToDisable map[string]string, inboundService *InboundService) (bool, error) {
 	if len(clientsToDisable) == 0 {
-		logger.Debugf("DisableClientsByEmail: no clients to disable")
+		logger.Debugf("DisableClientsByName: no clients to disable")
 		return false, nil
 	}
 
-	logger.Infof("DisableClientsByEmail: removing %d expired clients from Xray", len(clientsToDisable))
+	logger.Infof("DisableClientsByName: removing %d expired clients from Xray", len(clientsToDisable))
 
 	db := database.GetDB()
 	needRestart := false
@@ -1280,7 +1292,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 				inboundId int
 			}{tag: tag, inboundId: inbound.Id}
 		} else {
-			logger.Warningf("DisableClientsByEmail: failed to find inbound with tag %s for client %s: %v", tag, email, err)
+			logger.Warningf("DisableClientsByName: failed to find inbound with tag %s for client %s: %v", tag, email, err)
 			// Still try to remove with just tag
 			emailToInbound[email] = struct {
 				tag       string
@@ -1300,9 +1312,9 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 					for _, node := range nodes {
 						go func(n *model.Node, tag string, email string) {
 							if err := nodeService.RemoveUserFromNode(n, tag, email); err != nil {
-								logger.Warningf("DisableClientsByEmail: failed to remove expired client %s from node %s via API: %v", email, n.Name, err)
+								logger.Warningf("DisableClientsByName: failed to remove expired client %s from node %s via API: %v", email, n.Name, err)
 							} else {
-								logger.Infof("DisableClientsByEmail: removed expired client %s from node %s via API (instant)", email, n.Name)
+								logger.Infof("DisableClientsByName: removed expired client %s from node %s via API (instant)", email, n.Name)
 							}
 						}(node, inboundInfo.tag, email)
 					}
@@ -1318,10 +1330,10 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 				for email, inboundInfo := range emailToInbound {
 					// Instantly remove client from config.json
 					if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inboundInfo.tag, email); err != nil {
-						logger.Warningf("DisableClientsByEmail: failed to instantly remove client %s from config.json: %v", email, err)
+						logger.Warningf("DisableClientsByName: failed to instantly remove client %s from config.json: %v", email, err)
 						needRestart = true
 					} else {
-						logger.Infof("DisableClientsByEmail: instantly removed client %s from config.json (inbound: %s)", email, inboundInfo.tag)
+						logger.Infof("DisableClientsByName: instantly removed client %s from config.json (inbound: %s)", email, inboundInfo.tag)
 						needRestart = true
 					}
 				}
@@ -1337,7 +1349,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 
 	// Get clients and update their status
 	var clients []*model.ClientEntity
-	if err := db.Where("LOWER(email) IN (?)", emails).Find(&clients).Error; err == nil {
+	if err := db.Where("LOWER(name) IN (?)", emails).Find(&clients).Error; err == nil {
 		for _, client := range clients {
 			// Status should already be set by AddClientTraffic, but ensure it's set
 			if client.Status != "expired_traffic" && client.Status != "expired_time" {
@@ -1368,7 +1380,7 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 	for tag := range allTags {
 		var inbound model.Inbound
 		if err := db.Where("tag = ?", tag).First(&inbound).Error; err == nil {
-			logger.Debugf("DisableClientsByEmail: updating inbound %d (tag: %s) to remove expired clients", inbound.Id, tag)
+			logger.Debugf("DisableClientsByName: updating inbound %d (tag: %s) to remove expired clients", inbound.Id, tag)
 			// Rebuild settings without expired clients
 			allClients, err := s.GetClientsForInbound(inbound.Id)
 			if err == nil {
@@ -1379,26 +1391,26 @@ func (s *ClientService) DisableClientsByEmail(clientsToDisable map[string]string
 						expiredCount++
 					}
 				}
-				logger.Debugf("DisableClientsByEmail: inbound %d has %d total clients, %d expired", inbound.Id, len(allClients), expiredCount)
+				logger.Debugf("DisableClientsByName: inbound %d has %d total clients, %d expired", inbound.Id, len(allClients), expiredCount)
 
 				newSettings, err := inboundService.BuildSettingsFromClientEntities(&inbound, allClients)
 				if err == nil {
 					inbound.Settings = newSettings
 					_, _, err = inboundService.updateInboundWithRetry(&inbound)
 					if err != nil {
-						logger.Warningf("DisableClientsByEmail: failed to update inbound %d: %v", inbound.Id, err)
+						logger.Warningf("DisableClientsByName: failed to update inbound %d: %v", inbound.Id, err)
 						needRestart = true
 					} else {
-						logger.Infof("DisableClientsByEmail: successfully updated inbound %d (tag: %s) without expired clients", inbound.Id, tag)
+						logger.Infof("DisableClientsByName: successfully updated inbound %d (tag: %s) without expired clients", inbound.Id, tag)
 					}
 				} else {
-					logger.Warningf("DisableClientsByEmail: failed to build settings for inbound %d: %v", inbound.Id, err)
+					logger.Warningf("DisableClientsByName: failed to build settings for inbound %d: %v", inbound.Id, err)
 				}
 			} else {
-				logger.Warningf("DisableClientsByEmail: failed to get clients for inbound %d: %v", inbound.Id, err)
+				logger.Warningf("DisableClientsByName: failed to get clients for inbound %d: %v", inbound.Id, err)
 			}
 		} else {
-			logger.Warningf("DisableClientsByEmail: failed to find inbound with tag %s: %v", tag, err)
+			logger.Warningf("DisableClientsByName: failed to find inbound with tag %s: %v", tag, err)
 		}
 	}
 
@@ -1485,14 +1497,14 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 				for _, client := range clients {
 					// Build client data for Xray API
 					clientData := make(map[string]any)
-					clientData["email"] = client.Email
+					clientData["email"] = client.Name
 
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
 					case model.Mixed:
 						clientData["password"] = client.Password
-						u := client.Email
+						u := client.Name
 						if i := strings.IndexByte(u, '@'); i > 0 {
 							u = u[:i]
 						}
@@ -1527,10 +1539,10 @@ func (s *ClientService) ResetAllClientTraffics(userId int) (bool, error) {
 							if processConfig != nil {
 								// Instantly add client to config.json
 								if err := xray.UpdateConfigFileAfterUserAddition(processConfig, inbound.Tag, clientData); err != nil {
-									logger.Warningf("ResetAllClientTraffics: failed to instantly add client %s to config.json: %v", client.Email, err)
+									logger.Warningf("ResetAllClientTraffics: failed to instantly add client %s to config.json: %v", client.Name, err)
 									needRestart = true
 								} else {
-									logger.Infof("ResetAllClientTraffics: instantly added client %s to config.json (inbound: %s)", client.Email, inbound.Tag)
+									logger.Infof("ResetAllClientTraffics: instantly added client %s to config.json (inbound: %s)", client.Name, inbound.Tag)
 									needRestart = true
 								}
 							}
@@ -1625,14 +1637,14 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 
 					// Build client data for Xray API
 					clientData := make(map[string]any)
-					clientData["email"] = client.Email
+					clientData["email"] = client.Name
 
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
 					case model.Mixed:
 						clientData["password"] = client.Password
-						u := client.Email
+						u := client.Name
 						if i := strings.IndexByte(u, '@'); i > 0 {
 							u = u[:i]
 						}
@@ -1669,9 +1681,9 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 							for _, node := range nodes {
 								go func(n *model.Node) {
 									if err := nodeService.AddUserToNode(n, string(inbound.Protocol), inbound.Tag, clientData); err != nil {
-										logger.Warningf("ResetClientTraffic: failed to re-add client %s to node %s via API: %v", client.Email, n.Name, err)
+										logger.Warningf("ResetClientTraffic: failed to re-add client %s to node %s via API: %v", client.Name, n.Name, err)
 									} else {
-										logger.Infof("ResetClientTraffic: re-added client %s to node %s via API after traffic reset", client.Email, n.Name)
+										logger.Infof("ResetClientTraffic: re-added client %s to node %s via API after traffic reset", client.Name, n.Name)
 									}
 								}(node)
 							}
@@ -1685,13 +1697,13 @@ func (s *ClientService) ResetClientTraffic(userId int, clientId int) (bool, erro
 								err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, clientData)
 								if err1 != nil {
 									if strings.Contains(err1.Error(), "already exists") {
-										logger.Debugf("ResetClientTraffic: client %s already exists in Xray (tag: %s)", client.Email, inbound.Tag)
+										logger.Debugf("ResetClientTraffic: client %s already exists in Xray (tag: %s)", client.Name, inbound.Tag)
 									} else {
-										logger.Warningf("ResetClientTraffic: failed to re-add client %s to Xray (tag: %s): %v", client.Email, inbound.Tag, err1)
+										logger.Warningf("ResetClientTraffic: failed to re-add client %s to Xray (tag: %s): %v", client.Name, inbound.Tag, err1)
 										needRestart = true
 									}
 								} else {
-									logger.Infof("ResetClientTraffic: re-added client %s to Xray (tag: %s) after traffic reset", client.Email, inbound.Tag)
+									logger.Infof("ResetClientTraffic: re-added client %s to Xray (tag: %s) after traffic reset", client.Name, inbound.Tag)
 								}
 							} else {
 								logger.Debugf("ResetClientTraffic: failed to get XrayAPI connection: %v", err)
@@ -1755,7 +1767,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 
 	emails := make([]string, len(clients))
 	for i, client := range clients {
-		emails[i] = strings.ToLower(client.Email)
+		emails[i] = strings.ToLower(client.Name)
 	}
 
 	// Find depleted client traffics
@@ -1780,7 +1792,7 @@ func (s *ClientService) DelDepletedClients(userId int) (int, bool, error) {
 	// Get client IDs to delete
 	var clientIdsToDelete []int
 	err = db.Model(&model.ClientEntity{}).
-		Where("user_id = ? AND LOWER(email) IN (?)", userId, depletedEmails).
+		Where("user_id = ? AND LOWER(name) IN (?)", userId, depletedEmails).
 		Pluck("id", &clientIdsToDelete).Error
 	if err != nil {
 		return 0, false, err
@@ -1993,14 +2005,14 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 				for _, client := range clients {
 					// Build client data for Xray API
 					clientData := make(map[string]any)
-					clientData["email"] = client.Email
+					clientData["email"] = client.Name
 
 					switch inbound.Protocol {
 					case model.Trojan:
 						clientData["password"] = client.Password
 					case model.Mixed:
 						clientData["password"] = client.Password
-						u := client.Email
+						u := client.Name
 						if i := strings.IndexByte(u, '@'); i > 0 {
 							u = u[:i]
 						}
@@ -2037,9 +2049,9 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 							for _, node := range nodes {
 								go func(n *model.Node) {
 									if err := nodeService.AddUserToNode(n, string(inbound.Protocol), inbound.Tag, clientData); err != nil {
-										logger.Warningf("BulkResetTraffic: failed to re-add client %s to node %s via API: %v", client.Email, n.Name, err)
+										logger.Warningf("BulkResetTraffic: failed to re-add client %s to node %s via API: %v", client.Name, n.Name, err)
 									} else {
-										logger.Infof("BulkResetTraffic: re-added client %s to node %s via API after traffic reset", client.Email, n.Name)
+										logger.Infof("BulkResetTraffic: re-added client %s to node %s via API after traffic reset", client.Name, n.Name)
 									}
 								}(node)
 							}
@@ -2053,13 +2065,13 @@ func (s *ClientService) BulkResetTraffic(userId int, clientIds []int) (bool, err
 								err1 := api.AddUser(string(inbound.Protocol), inbound.Tag, clientData)
 								if err1 != nil {
 									if strings.Contains(err1.Error(), "already exists") {
-										logger.Debugf("BulkResetTraffic: client %s already exists in Xray (tag: %s)", client.Email, inbound.Tag)
+										logger.Debugf("BulkResetTraffic: client %s already exists in Xray (tag: %s)", client.Name, inbound.Tag)
 									} else {
-										logger.Warningf("BulkResetTraffic: failed to re-add client %s to Xray (tag: %s): %v", client.Email, inbound.Tag, err1)
+										logger.Warningf("BulkResetTraffic: failed to re-add client %s to Xray (tag: %s): %v", client.Name, inbound.Tag, err1)
 										needRestart = true
 									}
 								} else {
-									logger.Infof("BulkResetTraffic: re-added client %s to Xray (tag: %s) after traffic reset", client.Email, inbound.Tag)
+									logger.Infof("BulkResetTraffic: re-added client %s to Xray (tag: %s) after traffic reset", client.Name, inbound.Tag)
 								}
 							} else {
 								logger.Debugf("BulkResetTraffic: failed to get XrayAPI connection: %v", err)
@@ -2273,14 +2285,14 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 						// Enable: Add user via Xray API
 						// Build client data for Xray API
 						clientData := make(map[string]interface{})
-						clientData["email"] = client.Email
+						clientData["email"] = client.Name
 
 						switch inbound.Protocol {
 						case model.Trojan:
 							clientData["password"] = client.Password
 						case model.Mixed:
 							clientData["password"] = client.Password
-							u := client.Email
+							u := client.Name
 							if i := strings.IndexByte(u, '@'); i > 0 {
 								u = u[:i]
 							}
@@ -2318,19 +2330,19 @@ func (s *ClientService) BulkEnable(userId int, clientIds []int, enable bool) (bo
 									if enable {
 										// Instantly add client to config.json
 										if err := xray.UpdateConfigFileAfterUserAddition(processConfig, inbound.Tag, clientData); err != nil {
-											logger.Warningf("BulkEnable: failed to instantly add client %s to config.json: %v", client.Email, err)
+											logger.Warningf("BulkEnable: failed to instantly add client %s to config.json: %v", client.Name, err)
 											needRestart = true
 										} else {
-											logger.Infof("BulkEnable: instantly added client %s to config.json (inbound: %s)", client.Email, inbound.Tag)
+											logger.Infof("BulkEnable: instantly added client %s to config.json (inbound: %s)", client.Name, inbound.Tag)
 											needRestart = true
 										}
 									} else {
 										// Instantly remove client from config.json
-										if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, client.Email); err != nil {
-											logger.Warningf("BulkEnable: failed to instantly remove client %s from config.json: %v", client.Email, err)
+										if err := xray.UpdateConfigFileAfterUserRemoval(processConfig, inbound.Tag, client.Name); err != nil {
+											logger.Warningf("BulkEnable: failed to instantly remove client %s from config.json: %v", client.Name, err)
 											needRestart = true
 										} else {
-											logger.Infof("BulkEnable: instantly removed client %s from config.json (inbound: %s)", client.Email, inbound.Tag)
+											logger.Infof("BulkEnable: instantly removed client %s from config.json (inbound: %s)", client.Name, inbound.Tag)
 											needRestart = true
 										}
 									}

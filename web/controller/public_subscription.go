@@ -195,7 +195,7 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 		var vpnOnline bool
 		inboundSvc := service.InboundService{}
 		for _, e := range inboundSvc.GetOnlineClients() {
-			if strings.EqualFold(strings.TrimSpace(e), client.Email) {
+			if strings.EqualFold(strings.TrimSpace(e), client.Name) {
 				vpnOnline = true
 				break
 			}
@@ -218,7 +218,7 @@ func publicSubscriptionGet(ss *service.SettingService) gin.HandlerFunc {
 			"mtProtoLinks":        mtProtoLinks,
 			"user": gin.H{
 				"shortUuid":                subID,
-				"username":                 client.Email,
+				"username":                 client.Name,
 				"daysLeft":                 daysLeft,
 				"trafficUsed":              common.FormatTraffic(client.Up + client.Down),
 				"trafficLimit":             trafficLimitStr,

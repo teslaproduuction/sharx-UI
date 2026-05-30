@@ -1,4 +1,5 @@
-# SharX Telemt fork: build once with ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
+# Telemt: ./scripts/download-telemt.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt (or DockerInit fallback)
+# SharX Telemt fork build fallback: ./scripts/build-telemt-sharx.sh
 # Phase 2 — fetch + build hiddify-sing-box for worker nodes (same recipe as panel).
 FROM golang:1.25-bookworm AS singbox-fetch
 ARG SINGBOX_REF=extended
@@ -48,14 +49,14 @@ ARG TARGETARCH
 RUN sh /docker-init.sh "${TARGETARCH}" && \
     f=$(ls /build/bin/xray-linux-* 2>/dev/null | head -1) && [ -f "$f" ] && \
     echo "Xray+geo+telemt in /build/bin:" && ls -la /build/bin/
-# Optional overlay: ./scripts/build-telemt-sharx.sh produces prebuilt/linux-{amd64,arm64}/telemt
+# Optional overlay: ./scripts/download-telemt.sh produces prebuilt/linux-{amd64,arm64}/telemt
 RUN ARCH="" && case "${TARGETARCH}" in amd64) ARCH=linux-amd64 ;; arm64) ARCH=linux-arm64 ;; esac && \
     PRE="/build/third_party/telemt-sharx/prebuilt/${ARCH}/telemt" && \
     if [ -n "$ARCH" ] && [ -f "$PRE" ]; then \
       cp "$PRE" /build/bin/telemt && chmod +x /build/bin/telemt && \
-      echo "telemt: SharX fork prebuilt (${ARCH})"; \
+      echo "telemt: prebuilt (${ARCH})"; \
     else \
-      echo "telemt: no SharX prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
+      echo "telemt: no prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
     fi
 WORKDIR /build
 

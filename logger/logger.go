@@ -13,6 +13,7 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/op/go-logging"
+	"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -22,8 +23,7 @@ const (
 )
 
 var (
-	logger  *logging.Logger
-	logFile *os.File
+	logger *logging.Logger
 
 	// defaultSource is emitted in every log entry unless overridden.
 	// Values: panel|node|xray
@@ -153,8 +153,7 @@ func initDefaultBackend() logging.Backend {
 	return logging.NewBackendFormatter(backend, newFormatter(false))
 }
 
-// initFileBackend creates the file logging backend.
-// Creates log directory and truncates log file on startup for fresh logs.
+// initFileBackend creates the file logging backend with lumberjack rotation.
 func initFileBackend() logging.Backend {
 	logDir := config.GetLogFolder()
 	if err := os.MkdirAll(logDir, 0o750); err != nil {
@@ -168,24 +167,25 @@ func initFileBackend() logging.Backend {
 	}
 
 	logPath := filepath.Join(logDir, logFileName)
-	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o660)
-	if err != nil {
-		writeDirect(Entry{
-			Level:     "error",
-			Source:    defaultSource,
-			Msg:       fmt.Sprintf("logger: failed to open log file %s: %v", logPath, err),
-			Component: "logger",
-		})
-		return nil
+	// Read config before acquiring the write lock to avoid a deadlock:
+	// newFileRotator calls getRotateConfig which acquires rotateMu.RLock,
+	// but we already hold rotateMu.Lock (write), causing reentrant deadlock.
+	cfg := getRotateConfig()
+	rotateMu.Lock()
+	if fileRotator != nil {
+		_ = fileRotator.Close()
 	}
-
-	// Close previous log file if exists
-	if logFile != nil {
-		_ = logFile.Close()
+	fileRotator = &lumberjack.Logger{
+		Filename:   logPath,
+		MaxSize:    cfg.MaxSizeMB,
+		MaxAge:     cfg.MaxAgeDays,
+		MaxBackups: cfg.MaxBackups,
+		Compress:   cfg.Compress,
 	}
-	logFile = file
+	writer := fileRotator
+	rotateMu.Unlock()
 
-	backend := logging.NewLogBackend(file, "", 0)
+	backend := logging.NewLogBackend(writer, "", 0)
 	return logging.NewBackendFormatter(backend, newFormatter(true))
 }
 
@@ -202,9 +202,11 @@ func newFormatter(withTime bool) logging.Formatter {
 // CloseLogger closes the log file and cleans up resources.
 // Should be called during application shutdown.
 func CloseLogger() {
-	if logFile != nil {
-		_ = logFile.Close()
-		logFile = nil
+	rotateMu.Lock()
+	defer rotateMu.Unlock()
+	if fileRotator != nil {
+		_ = fileRotator.Close()
+		fileRotator = nil
 	}
 }
 

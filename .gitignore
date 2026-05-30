@@ -17,11 +17,11 @@ tmp/
 # Local agent workspace (notes, plans, scratch)
 .agent/
 
-# # Ignore build and distribution directories
-# backup/
-# bin/
-# dist/
-# release/
+# Ignore build and distribution directories
+backup/
+bin/
+dist/
+release/
 # node_modules/
 
 # # Ignore compiled binaries

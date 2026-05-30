@@ -36,13 +36,13 @@ func (s *ClientService) RotateAllClientKeys() (int, error) {
 		inboundIds, err := s.GetInboundIdsForClient(client.Id)
 		if err != nil {
 			logger.Warningf("RotateAllClientKeys: Failed to get inbounds for client %d (%s): %v",
-				client.Id, client.Email, err)
+				client.Id, client.Name, err)
 			continue
 		}
 
 		if len(inboundIds) == 0 {
 			logger.Debugf("RotateAllClientKeys: Client %d (%s) has no inbounds, skipping",
-				client.Id, client.Email)
+				client.Id, client.Name)
 			continue
 		}
 
@@ -57,22 +57,22 @@ func (s *ClientService) RotateAllClientKeys() (int, error) {
 			newUUID, err := uuid.NewRandom()
 			if err != nil {
 				logger.Warningf("RotateAllClientKeys: Failed to generate UUID for client %d (%s): %v",
-					client.Id, client.Email, err)
+					client.Id, client.Name, err)
 				continue
 			}
 			updatedClient.UUID = newUUID.String()
 			needsUpdate = true
 			logger.Infof("RotateAllClientKeys: Rotating UUID for client %d (%s): %s -> %s",
-				client.Id, client.Email, client.UUID, updatedClient.UUID)
+				client.Id, client.Name, client.UUID, updatedClient.UUID)
 		} else if client.Password != "" {
 			// Trojan/Shadowsocks client - rotate password
 			updatedClient.Password = random.Seq(32)
 			needsUpdate = true
 			logger.Infof("RotateAllClientKeys: Rotating password for client %d (%s)",
-				client.Id, client.Email)
+				client.Id, client.Name)
 		} else {
 			logger.Warningf("RotateAllClientKeys: Client %d (%s) has neither UUID nor password, skipping",
-				client.Id, client.Email)
+				client.Id, client.Name)
 			continue
 		}
 
@@ -84,13 +84,13 @@ func (s *ClientService) RotateAllClientKeys() (int, error) {
 		_, err = s.UpdateClient(client.UserId, &updatedClient)
 		if err != nil {
 			logger.Warningf("RotateAllClientKeys: Failed to update client %d (%s): %v",
-				client.Id, client.Email, err)
+				client.Id, client.Name, err)
 			continue
 		}
 
 		updatedCount++
 		logger.Infof("RotateAllClientKeys: Successfully rotated keys for client %d (%s)",
-			client.Id, client.Email)
+			client.Id, client.Name)
 	}
 
 	logger.Infof("RotateAllClientKeys: Completed. Rotated keys for %d out of %d clients",

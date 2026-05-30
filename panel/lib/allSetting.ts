@@ -89,6 +89,10 @@ export type AllSetting = {
   grafanaVictoriaMetricsUrl: string;
   grafanaEnable: boolean;
   panelLogLevel: string;
+  logRotateMaxSizeMB: number;
+  logRotateMaxAgeDays: number;
+  logRotateMaxBackups: number;
+  logRotateCompress: boolean;
 };
 
 function toBool(v: unknown): boolean {
@@ -201,5 +205,9 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     grafanaVictoriaMetricsUrl: toStr(raw.grafanaVictoriaMetricsUrl),
     grafanaEnable: toBool(raw.grafanaEnable),
     panelLogLevel: toStr(raw.panelLogLevel, "info"),
+    logRotateMaxSizeMB: toInt(raw.logRotateMaxSizeMB, 50),
+    logRotateMaxAgeDays: toInt(raw.logRotateMaxAgeDays, 14),
+    logRotateMaxBackups: toInt(raw.logRotateMaxBackups, 5),
+    logRotateCompress: toBool(raw.logRotateCompress !== undefined ? raw.logRotateCompress : true),
   };
 }

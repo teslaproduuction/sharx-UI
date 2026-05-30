@@ -91,6 +91,9 @@ func runWebServer() {
 	if err := settingService.EnsureXrayLoggingDefaults(); err != nil {
 		logger.Warningf("Failed to ensure xray logging defaults: %v", err)
 	}
+	if allSetting, err := settingService.GetAllSetting(); err == nil {
+		service.ApplyLogRotateFromSettings(allSetting)
+	}
 
 	// Generate (once) and cache the panel-wide node pairing bundle so every node
 	// shares the same SECRET_KEY in its docker-compose.yml.
