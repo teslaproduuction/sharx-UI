@@ -9,9 +9,12 @@ RUN git config --global url."https://github.com/".insteadOf "git@github.com:" &&
         https://github.com/hiddify/hiddify-sing-box.git /src
 WORKDIR /src
 ENV CGO_ENABLED=0
-RUN go build -trimpath \
+ARG SINGBOX_VERSION=
+RUN SBVER="${SINGBOX_VERSION:-$(git -C /src describe --tags --exact-match 2>/dev/null || echo ${SINGBOX_REF}-$(git -C /src rev-parse --short HEAD 2>/dev/null || echo unknown))}" && \
+    echo "sing-box version stamp: ${SBVER}" && \
+    go build -trimpath \
       -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp" \
-      -ldflags "-w -s" \
+      -ldflags "-w -s -X github.com/sagernet/sing-box/constant.Version=${SBVER}" \
       -o /out/sing-box ./cmd/sing-box
 
 # Build stage
