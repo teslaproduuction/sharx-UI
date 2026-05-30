@@ -1342,6 +1342,10 @@ func parseUnifiedLogLine(line string) (websocket.UnifiedLogEntry, bool) {
 		source = websocket.LogStreamSourceXray
 	case "node":
 		source = websocket.LogStreamSourceNode
+	case "telemt":
+		source = websocket.LogStreamSourceTelemt
+	case "singbox":
+		source = websocket.LogStreamSourceSingbox
 	default:
 		source = websocket.LogStreamSourcePanel
 	}

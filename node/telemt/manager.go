@@ -259,7 +259,7 @@ func (m *Manager) Apply(payloads []Payload) error {
 		cmd := exec.CommandContext(ctx, bin, cfgPath)
 		cmd.Dir = root
 		cmd.Env = os.Environ()
-		tagSink := io.MultiWriter(os.Stderr, m.logWriter().PrefixWriter("["+tag+"] "))
+		tagSink := io.MultiWriter(os.Stderr, m.logWriter().PrefixWriter("["+tag+"] "), sidecarlog.NewLoggerWriter("telemt"))
 		cmd.Stdout = tagSink
 		cmd.Stderr = tagSink
 		if err := cmd.Start(); err != nil {
