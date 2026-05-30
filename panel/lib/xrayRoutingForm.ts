@@ -5,6 +5,9 @@
 export type FieldRuleFormRow = {
   id: string;
   outboundTag: string;
+  /** Xray load-balancer tag. Mutually exclusive with outboundTag; when set the rule
+   *  dispatches to a balancer (see {@link BalancerFormRow}) instead of a single outbound. */
+  balancerTag: string;
   /** one entry per line: domain lines (geosite:, domain:, full:, etc.) */
   domainLines: string;
   /** one CIDR/entry per line (geoip:, ip:, etc.) */
@@ -19,14 +22,29 @@ export type FieldRuleFormRow = {
   user: string;
 };
 
+/** Xray `routing.balancers[]` — picks a live outbound from `selector` by `strategy`.
+ *  This is the primitive cascade fallback / observatory health-routing rides on. */
+export type BalancerFormRow = {
+  id: string;
+  tag: string;
+  /** outbound tag prefixes the balancer load-balances across (one per line). */
+  selectorLines: string;
+  /** random | roundRobin | leastPing | leastLoad */
+  strategyType: string;
+};
+
 export type RoutingFormState = {
   domainStrategy: string;
   rules: FieldRuleFormRow[];
+  balancers: BalancerFormRow[];
 };
+
+export const BALANCER_STRATEGIES = ["random", "roundRobin", "leastPing", "leastLoad"] as const;
 
 const SIMPLE_RULE_KEYS = new Set([
   "type",
   "outboundTag",
+  "balancerTag",
   "domain",
   "ip",
   "port",
@@ -89,6 +107,29 @@ const TOP_ROUTING_ALLOW = new Set([
   "rule",
 ]);
 
+const SIMPLE_BALANCER_KEYS = new Set(["tag", "selector", "strategy", "fallbackTag"]);
+
+function balancerNeedsAdvanced(b: unknown): boolean {
+  const m = asRecord(b);
+  if (!m) return true;
+  for (const k of Object.keys(m)) {
+    if (!SIMPLE_BALANCER_KEYS.has(k) && m[k] != null) return true;
+  }
+  if (typeof m.tag !== "string") return true;
+  if (m.selector != null && !Array.isArray(m.selector)) return true;
+  const st = m.strategy;
+  if (st != null) {
+    const sm = asRecord(st);
+    if (!sm) return true;
+    for (const k of Object.keys(sm)) {
+      if (k !== "type" && k !== "settings" && sm[k] != null) return true;
+    }
+    // settings on a strategy (e.g. leastLoad params) → keep, but only simple primitives
+    if (sm.settings != null && asRecord(sm.settings) == null) return true;
+  }
+  return false;
+}
+
 export function routingNeedsAdvancedJson(routing: unknown): boolean {
   const o = asRecord(routing);
   if (!o) return true;
@@ -98,13 +139,17 @@ export function routingNeedsAdvancedJson(routing: unknown): boolean {
   if (o.domainMatcher != null) return true;
   if (o.rule != null) return true;
   const balancers = o.balancers;
-  if (Array.isArray(balancers) && balancers.length > 0) return true;
+  if (balancers != null) {
+    if (!Array.isArray(balancers)) return true;
+    for (const b of balancers) {
+      if (balancerNeedsAdvanced(b)) return true;
+    }
+  }
   const rules = o.rules;
   if (!Array.isArray(rules)) return true;
   for (const r of rules) {
     const m = asRecord(r);
     if (!m) return true;
-    if (m.balancerTag != null) return true;
     if (m.attrs != null) return true;
     const t = m.type;
     if (t != null && t !== "field") return true;
@@ -112,7 +157,7 @@ export function routingNeedsAdvancedJson(routing: unknown): boolean {
       if (!SIMPLE_RULE_KEYS.has(k)) return true;
     }
     for (const k of Object.keys(m)) {
-      if (k === "type" || k === "outboundTag") continue;
+      if (k === "type" || k === "outboundTag" || k === "balancerTag") continue;
       const v = m[k];
       if (v != null) {
         if (Array.isArray(v)) {
@@ -132,6 +177,7 @@ function ruleToFormRow(m: Record<string, unknown>, id: string): FieldRuleFormRow
   return {
     id,
     outboundTag: typeof m.outboundTag === "string" ? m.outboundTag : "",
+    balancerTag: typeof m.balancerTag === "string" ? m.balancerTag : "",
     domainLines: linesFromArray(m.domain),
     ipLines: linesFromArray(m.ip),
     port: m.port != null ? String(m.port) : "",
@@ -150,8 +196,10 @@ function ruleToFormRow(m: Record<string, unknown>, id: string): FieldRuleFormRow
 
 function formRowToRule(row: FieldRuleFormRow): Record<string, unknown> | null {
   const otag = row.outboundTag.trim();
+  const btag = row.balancerTag.trim();
   const hasAny =
     otag ||
+    btag ||
     row.domainLines.trim() ||
     row.ipLines.trim() ||
     row.port.trim() ||
@@ -162,7 +210,9 @@ function formRowToRule(row: FieldRuleFormRow): Record<string, unknown> | null {
     row.user.trim();
   if (!hasAny) return null;
   const r: Record<string, unknown> = { type: "field" };
-  if (otag) r.outboundTag = otag;
+  // balancerTag wins when both set — Xray ignores outboundTag if balancerTag present.
+  if (btag) r.balancerTag = btag;
+  else if (otag) r.outboundTag = otag;
   const d = stringArrayToLines(row.domainLines);
   if (d.length) r.domain = d;
   const ips = stringArrayToLines(row.ipLines);
@@ -185,25 +235,101 @@ function formRowToRule(row: FieldRuleFormRow): Record<string, unknown> | null {
 
 export const DEFAULT_DOMAIN_STRATEGIES = ["AsIs", "IPIfNonMatch", "IPOnDemand"] as const;
 
-export function defaultRoutingForm(): RoutingFormState {
+export function emptyRuleRow(outboundTag = ""): FieldRuleFormRow {
   return {
-    domainStrategy: "AsIs",
-    rules: [
-      {
-        id: randomId(),
-        outboundTag: "direct",
-        domainLines: "",
-        ipLines: "geoip:private",
-        port: "",
-        network: "",
-        protocolLines: "",
-        inboundTag: "",
-        source: "",
-        user: "",
-      },
-    ],
+    id: randomId(),
+    outboundTag,
+    balancerTag: "",
+    domainLines: "",
+    ipLines: "",
+    port: "",
+    network: "",
+    protocolLines: "",
+    inboundTag: "",
+    source: "",
+    user: "",
   };
 }
+
+export function emptyBalancerRow(): BalancerFormRow {
+  return { id: randomId(), tag: "", selectorLines: "", strategyType: "leastPing" };
+}
+
+export function defaultRoutingForm(): RoutingFormState {
+  return {
+    domainStrategy: "IPIfNonMatch",
+    rules: [
+      {
+        ...emptyRuleRow("direct"),
+        ipLines: "geoip:private",
+      },
+    ],
+    balancers: [],
+  };
+}
+
+/**
+ * One-click rule presets, 3X-UI style. Each builds a ready field-rule row.
+ * Kept data-only so the UI can render localized labels by key.
+ */
+export type RoutingPreset = {
+  key: string;
+  /** default English label — UI overrides via i18n `pages.xray.routingBuilder.presets.<key>` */
+  label: string;
+  hint: string;
+  build: () => FieldRuleFormRow;
+};
+
+export const ROUTING_PRESETS: RoutingPreset[] = [
+  {
+    key: "blockAds",
+    label: "Block ads",
+    hint: "geosite:category-ads-all → block",
+    build: () => ({ ...emptyRuleRow("block"), domainLines: "geosite:category-ads-all" }),
+  },
+  {
+    key: "blockTorrent",
+    label: "Block BitTorrent",
+    hint: "protocol bittorrent → block",
+    build: () => ({ ...emptyRuleRow("block"), protocolLines: "bittorrent" }),
+  },
+  {
+    key: "directPrivate",
+    label: "Direct LAN / private",
+    hint: "geoip:private → direct",
+    build: () => ({ ...emptyRuleRow("direct"), ipLines: "geoip:private" }),
+  },
+  {
+    key: "directCN",
+    label: "Direct China",
+    hint: "geosite:cn + geoip:cn → direct",
+    build: () => ({ ...emptyRuleRow("direct"), domainLines: "geosite:cn", ipLines: "geoip:cn" }),
+  },
+  {
+    key: "directIR",
+    label: "Direct Iran",
+    hint: "geosite:category-ir + geoip:ir → direct",
+    build: () => ({ ...emptyRuleRow("direct"), domainLines: "geosite:category-ir", ipLines: "geoip:ir" }),
+  },
+  {
+    key: "directRU",
+    label: "Direct Russia",
+    hint: "geosite:category-ru + geoip:ru → direct",
+    build: () => ({ ...emptyRuleRow("direct"), domainLines: "geosite:category-ru", ipLines: "geoip:ru" }),
+  },
+  {
+    key: "blockPorn",
+    label: "Block adult",
+    hint: "geosite:category-porn → block",
+    build: () => ({ ...emptyRuleRow("block"), domainLines: "geosite:category-porn" }),
+  },
+  {
+    key: "blockPrivateDns",
+    label: "Block private DNS leak",
+    hint: "port 853 (DoT) → block",
+    build: () => ({ ...emptyRuleRow("block"), port: "853" }),
+  },
+];
 
 /**
  * @param sectionJson `routing` key JSON
@@ -235,19 +361,48 @@ export function parseRoutingSection(sectionJson: string): {
       if (m) rules.push(ruleToFormRow(m, randomId()));
     }
   }
-  if (rules.length === 0) {
+  const balancers: BalancerFormRow[] = [];
+  if (Array.isArray(o.balancers)) {
+    for (const b of o.balancers) {
+      const m = asRecord(b);
+      if (!m) continue;
+      const st = asRecord(m.strategy);
+      balancers.push({
+        id: randomId(),
+        tag: typeof m.tag === "string" ? m.tag : "",
+        selectorLines: linesFromArray(m.selector),
+        strategyType: st && typeof st.type === "string" ? st.type : "random",
+      });
+    }
+  }
+  if (rules.length === 0 && balancers.length === 0) {
     return {
-      state: { domainStrategy: ds, rules: defaultRoutingForm().rules },
+      state: { domainStrategy: ds, rules: defaultRoutingForm().rules, balancers: [] },
       needsAdvanced: false,
       error: null,
     };
   }
-  return { state: { domainStrategy: ds, rules }, needsAdvanced: false, error: null };
+  return { state: { domainStrategy: ds, rules, balancers }, needsAdvanced: false, error: null };
+}
+
+function balancerRowToObject(b: BalancerFormRow): Record<string, unknown> | null {
+  const tag = b.tag.trim();
+  if (!tag) return null;
+  const selector = stringArrayToLines(b.selectorLines);
+  const out: Record<string, unknown> = { tag };
+  if (selector.length) out.selector = selector;
+  if (b.strategyType.trim()) out.strategy = { type: b.strategyType.trim() };
+  return out;
 }
 
 export function serializeRoutingSection(state: RoutingFormState): string {
   const rules = state.rules.map((row) => formRowToRule(row)).filter((x): x is Record<string, unknown> => x != null);
-  return JSON.stringify({ domainStrategy: state.domainStrategy, rules }, null, 2);
+  const balancers = (state.balancers ?? [])
+    .map(balancerRowToObject)
+    .filter((x): x is Record<string, unknown> => x != null);
+  const out: Record<string, unknown> = { domainStrategy: state.domainStrategy, rules };
+  if (balancers.length) out.balancers = balancers;
+  return JSON.stringify(out, null, 2);
 }
 
 export function analyzeRoutingSection(sectionJson: string): "visual" | "advanced" {
