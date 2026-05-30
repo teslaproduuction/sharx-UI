@@ -1,18 +1,25 @@
 "use client";
 
-import { Copy, FileJson, RefreshCw } from "lucide-react";
+import { Boxes, Copy, FileJson, Network, RefreshCw, RotateCw, ScrollText, Server, Square } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
 import { panel } from "@/lib/paths";
 import { PageScaffold, PageHeader, Surface } from "@/components/panel";
-import { Button, Spinner, useToast } from "@/components/ui";
+import { Button, Modal, Spinner, useToast } from "@/components/ui";
 
 type SingboxResp = { config: unknown; configHash: string };
 type SingboxOverridesResp = { overrides: string };
 type TelemtPayload = { inboundId: number; tag: string; toml: string };
 
 type Tab = "xray" | "singbox" | "telemt";
+type CoreKind = "xray" | "singbox" | "telemt";
+type CoresStatus = {
+  xray: { running: boolean };
+  singbox: { running: boolean; configHash: string };
+  telemt: { running: boolean; instanceCount: number };
+};
+type LogLine = { tsUnixMs: number; text: string };
 
 export default function Page() {
   const { t } = useTranslation();
@@ -26,6 +33,77 @@ export default function Page() {
   const [overrides, setOverrides] = useState<string>("{}");
   const [overridesDirty, setOverridesDirty] = useState(false);
   const [overridesSaving, setOverridesSaving] = useState(false);
+
+  // Control cards: live status + stop/restart + logs.
+  const [status, setStatus] = useState<CoresStatus | null>(null);
+  const [busyCore, setBusyCore] = useState<CoreKind | null>(null);
+  const [logsCore, setLogsCore] = useState<CoreKind | null>(null);
+  const [logLines, setLogLines] = useState<LogLine[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+
+  const loadStatus = useCallback(async () => {
+    const r = await getJson<CoresStatus>(panel("cores/status"));
+    if (r.success && r.obj) setStatus(r.obj);
+  }, []);
+
+  useEffect(() => {
+    void loadStatus();
+    const id = setInterval(() => void loadStatus(), 5000);
+    return () => clearInterval(id);
+  }, [loadStatus]);
+
+  const controlCore = useCallback(
+    async (core: CoreKind, action: "stop" | "restart") => {
+      setBusyCore(core);
+      const path =
+        core === "xray"
+          ? action === "stop"
+            ? "server/stopXrayService"
+            : "server/restartXrayService"
+          : `cores/${core}/${action}`;
+      const r = await postJson(panel(path), {}, true);
+      setBusyCore(null);
+      if (r.success) {
+        toast.success(
+          r.msg ||
+            t(`pages.cores.${action}OkToast`, {
+              core,
+              defaultValue: action === "stop" ? `${core} stopped` : `${core} restarted`,
+            }),
+        );
+        void loadStatus();
+      } else {
+        toast.error(r.msg || t("pages.cores.actionFailed", { defaultValue: "Action failed" }));
+      }
+    },
+    [loadStatus, t, toast],
+  );
+
+  const openLogs = useCallback(
+    async (core: CoreKind) => {
+      setLogsCore(core);
+      setLogLines([]);
+      setLogsLoading(true);
+      const path = core === "xray" ? "server/xraylogs/500" : `cores/${core}/logs`;
+      const r =
+        core === "xray"
+          ? await postJson<string[]>(panel(path), {}, true)
+          : await getJson<LogLine[]>(panel(path));
+      setLogsLoading(false);
+      if (r.success && Array.isArray(r.obj)) {
+        const lines: LogLine[] =
+          core === "xray"
+            ? (r.obj as unknown as string[]).map((s) => ({ tsUnixMs: 0, text: String(s) }))
+            : (r.obj as LogLine[]);
+        setLogLines(lines);
+      }
+    },
+    [],
+  );
+
+  const refreshLogs = useCallback(() => {
+    if (logsCore) void openLogs(logsCore);
+  }, [logsCore, openLogs]);
 
   const load = useCallback(async (which: Tab) => {
     setLoading(true);
@@ -90,6 +168,53 @@ export default function Page() {
         icon={FileJson}
         iconTone="info"
       />
+      {/* Unified control cards: status + stop/restart + logs */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <CoreCard
+          kind="xray"
+          icon={Network}
+          title="Xray"
+          running={status?.xray.running ?? null}
+          meta={t("pages.cores.cardXrayMeta", { defaultValue: "Core proxy engine" })}
+          busy={busyCore === "xray"}
+          onStop={() => void controlCore("xray", "stop")}
+          onRestart={() => void controlCore("xray", "restart")}
+          onLogs={() => void openLogs("xray")}
+          t={t}
+        />
+        <CoreCard
+          kind="singbox"
+          icon={Boxes}
+          title="Sing-box"
+          running={status?.singbox.running ?? null}
+          meta={
+            status?.singbox.configHash
+              ? `${t("pages.cores.configHash", { defaultValue: "Hash" })}: ${status.singbox.configHash.slice(0, 12)}…`
+              : t("pages.cores.cardSingboxMeta", { defaultValue: "mieru / AnyTLS / TUIC / Naive" })
+          }
+          busy={busyCore === "singbox"}
+          onStop={() => void controlCore("singbox", "stop")}
+          onRestart={() => void controlCore("singbox", "restart")}
+          onLogs={() => void openLogs("singbox")}
+          t={t}
+        />
+        <CoreCard
+          kind="telemt"
+          icon={Server}
+          title="Telemt"
+          running={status?.telemt.running ?? null}
+          meta={t("pages.cores.cardTelemtMeta", {
+            count: status?.telemt.instanceCount ?? 0,
+            defaultValue: `${status?.telemt.instanceCount ?? 0} instance(s)`,
+          })}
+          busy={busyCore === "telemt"}
+          onStop={() => void controlCore("telemt", "stop")}
+          onRestart={() => void controlCore("telemt", "restart")}
+          onLogs={() => void openLogs("telemt")}
+          t={t}
+        />
+      </div>
+
       <Surface padding="md" className="space-y-3">
         <p className="text-xs text-[var(--fg-muted)]">
           {t("pages.cores.subtitle", { defaultValue: "Inspect cores." })}
@@ -217,6 +342,123 @@ export default function Page() {
           </>
         )}
       </Surface>
+
+      <Modal
+        open={logsCore != null}
+        onClose={() => setLogsCore(null)}
+        title={t("pages.cores.logsTitle", { core: logsCore ?? "", defaultValue: `${logsCore} logs` })}
+        width={840}
+      >
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-[var(--fg-subtle)]">
+              {t("pages.cores.logsHint", { defaultValue: "Last 500 stdout/stderr lines. Errors highlighted." })}
+            </p>
+            <Button variant="secondary" onClick={refreshLogs} disabled={logsLoading}>
+              <RefreshCw className="mr-1 size-4 inline" />
+              {t("pages.cores.refreshButton", { defaultValue: "Refresh" })}
+            </Button>
+          </div>
+          {logsLoading ? (
+            <div className="grid min-h-48 place-items-center"><Spinner size={28} /></div>
+          ) : logLines.length === 0 ? (
+            <p className="py-8 text-center text-sm text-[var(--fg-muted)]">
+              {t("pages.cores.logsEmpty", { defaultValue: "No log lines captured yet (sidecar may be stopped)." })}
+            </p>
+          ) : (
+            <pre className="max-h-[60vh] overflow-auto rounded-lg border border-[var(--border)] bg-[var(--bg-elevated)] p-3 text-[11px] font-mono leading-relaxed">
+              {logLines.map((l, i) => {
+                const isErr = /error|fatal|panic|fail|exit|refused|denied/i.test(l.text);
+                return (
+                  <div key={i} className={isErr ? "text-rose-400" : "text-[var(--fg)]"}>
+                    {l.tsUnixMs ? (
+                      <span className="mr-2 text-[var(--fg-subtle)]">
+                        {new Date(l.tsUnixMs).toLocaleTimeString()}
+                      </span>
+                    ) : null}
+                    {l.text}
+                  </div>
+                );
+              })}
+            </pre>
+          )}
+        </div>
+      </Modal>
     </PageScaffold>
+  );
+}
+
+function CoreCard({
+  icon: Icon,
+  title,
+  running,
+  meta,
+  busy,
+  onStop,
+  onRestart,
+  onLogs,
+  t,
+}: {
+  kind: CoreKind;
+  icon: typeof Network;
+  title: string;
+  running: boolean | null;
+  meta: string;
+  busy: boolean;
+  onStop: () => void;
+  onRestart: () => void;
+  onLogs: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}) {
+  return (
+    <Surface padding="md" className="space-y-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="grid size-9 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] text-[var(--accent)]">
+            <Icon size={18} />
+          </span>
+          <div>
+            <p className="text-sm font-semibold text-[var(--fg)]">{title}</p>
+            <p className="text-[11px] text-[var(--fg-muted)]">{meta}</p>
+          </div>
+        </div>
+        <StatusPill running={running} t={t} />
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="secondary" className="!gap-1.5 !text-xs" onClick={onRestart} disabled={busy}>
+          <RotateCw size={14} />
+          {t("pages.cores.restartButton", { defaultValue: "Restart" })}
+        </Button>
+        <Button variant="secondary" className="!gap-1.5 !text-xs text-rose-300" onClick={onStop} disabled={busy || running === false}>
+          <Square size={14} />
+          {t("pages.cores.stopButton", { defaultValue: "Stop" })}
+        </Button>
+        <Button variant="ghost" className="!gap-1.5 !text-xs" onClick={onLogs}>
+          <ScrollText size={14} />
+          {t("pages.cores.logsButton", { defaultValue: "Logs" })}
+        </Button>
+      </div>
+    </Surface>
+  );
+}
+
+function StatusPill({ running, t }: { running: boolean | null; t: ReturnType<typeof useTranslation>["t"] }) {
+  if (running == null) {
+    return (
+      <span className="rounded-full bg-[var(--bg-elevated)] px-2 py-0.5 text-[10px] text-[var(--fg-muted)]">
+        …
+      </span>
+    );
+  }
+  return running ? (
+    <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+      <span className="size-1.5 rounded-full bg-emerald-400" />
+      {t("pages.cores.running", { defaultValue: "running" })}
+    </span>
+  ) : (
+    <span className="inline-flex items-center gap-1 rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] font-medium text-rose-300">
+      <span className="size-1.5 rounded-full bg-rose-400" />
+      {t("pages.cores.stopped", { defaultValue: "stopped" })}
+    </span>
   );
 }

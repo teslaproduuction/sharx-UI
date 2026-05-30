@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"sync"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/sidecarlog"
 )
 
 // Payload is one inbound worth of Telemt configuration (TOML file contents).
@@ -34,6 +36,23 @@ type Manager struct {
 	replayMu sync.RWMutex
 	replayOK bool
 	replay   []Payload
+
+	// Combined recent stdout/stderr ring across all Telemt instances (panel log viewer).
+	logs *sidecarlog.Ring
+}
+
+// Logs returns up to the last n captured output lines across all Telemt instances.
+func (m *Manager) Logs(n int) []sidecarlog.Line {
+	return m.logWriter().Lines(n)
+}
+
+func (m *Manager) logWriter() *sidecarlog.Ring {
+	// The ring is internally synchronized; never take m.mu here (Apply holds it
+	// while spawning, so locking would deadlock).
+	if m.logs == nil {
+		m.logs = sidecarlog.New(500)
+	}
+	return m.logs
 }
 
 type procState struct {
@@ -43,7 +62,7 @@ type procState struct {
 
 // NewManager creates a Telemt manager.
 func NewManager() *Manager {
-	return &Manager{running: make(map[string]*procState)}
+	return &Manager{running: make(map[string]*procState), logs: sidecarlog.New(500)}
 }
 
 func (m *Manager) commitReplaySnapshot(payloads []Payload) {
@@ -193,8 +212,9 @@ func (m *Manager) Apply(payloads []Payload) error {
 		cmd := exec.CommandContext(ctx, bin, cfgPath)
 		cmd.Dir = root
 		cmd.Env = os.Environ()
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		tagSink := io.MultiWriter(os.Stderr, m.logWriter().PrefixWriter("["+tag+"] "))
+		cmd.Stdout = tagSink
+		cmd.Stderr = tagSink
 		if err := cmd.Start(); err != nil {
 			cancel()
 			return fmt.Errorf("telemt start %s: %w", tag, err)

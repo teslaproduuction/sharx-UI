@@ -7,9 +7,22 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/sidecarlog"
 	"github.com/konstpic/sharx-code/v2/node/telemt"
 	"github.com/konstpic/sharx-code/v2/xray"
 )
+
+// LocalTelemtLogs returns up to the last n combined stdout/stderr lines across
+// all panel-host Telemt instances (tag-prefixed). Empty if none have started.
+func LocalTelemtLogs(n int) []sidecarlog.Line {
+	panelTelemtMu.Lock()
+	mgr := panelTelemt
+	panelTelemtMu.Unlock()
+	if mgr == nil {
+		return []sidecarlog.Line{}
+	}
+	return mgr.Logs(n)
+}
 
 var (
 	panelTelemtMu sync.Mutex

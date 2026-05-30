@@ -16,8 +16,21 @@ import (
 
 	"github.com/konstpic/sharx-code/v2/config"
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/sidecarlog"
 	"github.com/konstpic/sharx-code/v2/node/singbox"
 )
+
+// LocalSingboxLogs returns up to the last n stdout/stderr lines of the panel-host
+// sing-box child (empty if it has never started).
+func LocalSingboxLogs(n int) []sidecarlog.Line {
+	panelSingboxMu.Lock()
+	mgr := panelSingbox
+	panelSingboxMu.Unlock()
+	if mgr == nil {
+		return []sidecarlog.Line{}
+	}
+	return mgr.Logs(n)
+}
 
 var (
 	panelSingboxMu sync.Mutex

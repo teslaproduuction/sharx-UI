@@ -2725,6 +2725,22 @@
       "flowInbound": "inbound + routing rule",
       "flowNoMembers": "pick members ↓",
       "flowInternet": "internet"
+    },
+    "cores": {
+      "cardXrayMeta": "Core proxy engine",
+      "cardSingboxMeta": "mieru / AnyTLS / TUIC / Naive",
+      "cardTelemtMeta": "{{count}} instance(s)",
+      "running": "running",
+      "stopped": "stopped",
+      "restartButton": "Restart",
+      "stopButton": "Stop",
+      "logsButton": "Logs",
+      "logsTitle": "{{core}} logs",
+      "logsHint": "Last 500 stdout/stderr lines. Errors highlighted.",
+      "logsEmpty": "No log lines captured yet (sidecar may be stopped).",
+      "actionFailed": "Action failed",
+      "stopOkToast": "{{core}} stopped",
+      "restartOkToast": "{{core}} restarted"
     }
   }
 }

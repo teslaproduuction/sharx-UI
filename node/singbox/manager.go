@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
+	"github.com/konstpic/sharx-code/v2/node/sidecarlog"
 )
 
 // Payload is the single sing-box config blob produced by the panel for this node.
@@ -52,11 +54,28 @@ type Manager struct {
 	// v2ray_api StatsService client — lazily dialed on first QueryStats.
 	statsMu sync.Mutex
 	stats   *StatsClient
+
+	// Recent stdout/stderr ring for the panel "Cores" log viewer.
+	logs *sidecarlog.Ring
 }
 
 // NewManager returns an empty manager; the process is started lazily on first Apply.
 func NewManager() *Manager {
-	return &Manager{}
+	return &Manager{logs: sidecarlog.New(500)}
+}
+
+// Logs returns up to the last n captured stdout/stderr lines of the sing-box child.
+func (m *Manager) Logs(n int) []sidecarlog.Line {
+	return m.logs.Lines(n)
+}
+
+// logWriter returns the ring buffer, lazily initialised (managers built as a
+// zero value still capture).
+func (m *Manager) logWriter() *sidecarlog.Ring {
+	if m.logs == nil {
+		m.logs = sidecarlog.New(500)
+	}
+	return m.logs
 }
 
 // SetWorkRoot overrides the default /app/singbox directory (used by tests / panel
@@ -240,8 +259,10 @@ func (m *Manager) Apply(p Payload) error {
 		cmd := exec.Command(bin, "run", "-c", cfgPath)
 		cmd.Dir = root
 		cmd.Env = os.Environ()
-		cmd.Stdout = os.Stderr
-		cmd.Stderr = os.Stderr
+		m.logWriter().Clear()
+		sink := io.MultiWriter(os.Stderr, m.logWriter())
+		cmd.Stdout = sink
+		cmd.Stderr = sink
 		if err := cmd.Start(); err != nil {
 			return fmt.Errorf("singbox: start: %w", err)
 		}
@@ -293,8 +314,10 @@ func (m *Manager) Apply(p Payload) error {
 	cmd := exec.Command(bin, "run", "-c", cfgPath)
 	cmd.Dir = root
 	cmd.Env = os.Environ()
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	m.logWriter().Clear()
+	rsink := io.MultiWriter(os.Stderr, m.logWriter())
+	cmd.Stdout = rsink
+	cmd.Stderr = rsink
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("singbox: restart spawn: %w", err)
 	}
