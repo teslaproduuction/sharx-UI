@@ -2785,6 +2785,14 @@
       "importedUri": "Импортирован {{kind}}",
       "importUnknown": "Вставь URI tuic/hy2/anytls или WireGuard .conf",
       "awgNote": "WireGuard / WARP работает. AmneziaWG 1.5-обфускация (jc/jmin/jmax/i1…) применяется (сборка sing-box от shtorm-7). В AWG 1.5 размеры s1-s4 обычно 0."
+    },
+    "outbounds": {
+      "colLive": "Live (204)",
+      "liveTestButton": "Live 204 тест (через прокси)",
+      "liveTestAllButton": "Live 204 все",
+      "colHealth": "Доступность (TCP)",
+      "testButton": "TCP-проверка",
+      "testAllButton": "Тест все (TCP)"
     }
   }
 }

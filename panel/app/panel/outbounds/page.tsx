@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowLeftRight, Trash2, Zap } from "lucide-react";
+import { ArrowLeftRight, Globe, Trash2, Zap } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -100,6 +100,25 @@ export default function Page() {
     for (const r of rows) await testOne(r.id);
   };
 
+  // Live 204 probe — fetches generate_204 THROUGH the outbound (SOCKS/HTTP +
+  // sidecar bridges); falls back to TCP for protocols we can't proxy from Go.
+  const [live, setLive] = useState<
+    Record<number, { ok: boolean; latencyMs: number; status?: number; mode: string; error?: string } | "busy">
+  >({});
+  const liveOne = async (id: number) => {
+    setLive((m) => ({ ...m, [id]: "busy" }));
+    type R = { ok: boolean; latencyMs: number; status?: number; mode: string; error?: string };
+    const r = await postJson<R>(panel(`outbound/testLive/${id}`), {}, true);
+    if (r.success && r.obj) {
+      setLive((m) => ({ ...m, [id]: r.obj! }));
+    } else {
+      setLive((m) => ({ ...m, [id]: { ok: false, latencyMs: 0, mode: "204", error: r.msg || "test failed" } }));
+    }
+  };
+  const liveAll = async () => {
+    for (const r of rows) await liveOne(r.id);
+  };
+
   return (
     <PageScaffold compact>
       <PageHeader
@@ -117,7 +136,11 @@ export default function Page() {
           </Button>
           <Button variant="secondary" onClick={() => void testAll()} disabled={rows.length === 0}>
             <Zap className="mr-1 size-4 inline" />
-            {t("pages.outbounds.testAllButton", { defaultValue: "Test all" })}
+            {t("pages.outbounds.testAllButton", { defaultValue: "Test all (TCP)" })}
+          </Button>
+          <Button variant="secondary" onClick={() => void liveAll()} disabled={rows.length === 0}>
+            <Globe className="mr-1 size-4 inline" />
+            {t("pages.outbounds.liveTestAllButton", { defaultValue: "Live 204 all" })}
           </Button>
         </div>
       </Surface>
@@ -138,7 +161,8 @@ export default function Page() {
                 <th className="p-3">{t("pages.outbounds.colRemark", { defaultValue: "Remark" })}</th>
                 <th className="p-3">{t("pages.outbounds.colTag", { defaultValue: "Tag" })}</th>
                 <th className="p-3">{t("pages.outbounds.colProtocol", { defaultValue: "Protocol" })}</th>
-                <th className="p-3">{t("pages.outbounds.colHealth", { defaultValue: "Health" })}</th>
+                <th className="p-3">{t("pages.outbounds.colHealth", { defaultValue: "Health (TCP)" })}</th>
+                <th className="p-3">{t("pages.outbounds.colLive", { defaultValue: "Live (204)" })}</th>
                 <th className="p-3">{t("pages.outbounds.colActions", { defaultValue: "Actions" })}</th>
               </tr>
             </thead>
@@ -164,10 +188,33 @@ export default function Page() {
                       );
                     })()}
                   </td>
+                  <td className="p-3 text-xs">
+                    {(() => {
+                      const s = live[r.id];
+                      if (s === "busy") return <span className="text-[var(--fg-subtle)]">…</span>;
+                      if (!s) return <span className="text-[var(--fg-subtle)]">—</span>;
+                      const label = s.mode === "tcp" ? `${s.latencyMs}ms tcp` : `${s.latencyMs}ms`;
+                      return s.ok ? (
+                        <span
+                          className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] text-emerald-400"
+                          title={s.mode === "204" ? `204 in ${s.latencyMs}ms (status ${s.status ?? 204})` : s.error || ""}
+                        >
+                          {label}
+                        </span>
+                      ) : (
+                        <span className="rounded-full bg-rose-500/15 px-2 py-0.5 text-[10px] text-rose-400" title={s.error || ""}>
+                          {s.error ? (s.error.length > 24 ? s.error.slice(0, 24) + "…" : s.error) : "fail"}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="p-3">
                     <div className="flex gap-1">
-                      <Button variant="secondary" className="!p-2" onClick={() => void testOne(r.id)} title={t("pages.outbounds.testButton", { defaultValue: "Test" })}>
+                      <Button variant="secondary" className="!p-2" onClick={() => void testOne(r.id)} title={t("pages.outbounds.testButton", { defaultValue: "TCP reach test" })}>
                         <Zap className="size-4" />
+                      </Button>
+                      <Button variant="secondary" className="!p-2" onClick={() => void liveOne(r.id)} title={t("pages.outbounds.liveTestButton", { defaultValue: "Live 204 test (through proxy)" })}>
+                        <Globe className="size-4" />
                       </Button>
                       <Button variant="danger" className="!p-2" onClick={() => del(r.id)}>
                         <Trash2 className="size-4" />

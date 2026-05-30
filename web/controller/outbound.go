@@ -34,6 +34,23 @@ func (a *OutboundController) initRouter(g *gin.RouterGroup) {
 	g.POST("/update/:id", a.updateOutbound)
 	g.POST("/parseUri", a.parseUri)
 	g.POST("/test/:id", a.testOutbound)
+	g.POST("/testLive/:id", a.testOutboundLive)
+}
+
+// testOutboundLive fetches a generate_204 URL THROUGH the outbound (SOCKS/HTTP
+// + local sidecar bridges) and reports latency/status, or falls back to TCP.
+func (a *OutboundController) testOutboundLive(c *gin.Context) {
+	id, err := strconv.Atoi(c.Param("id"))
+	if err != nil || id <= 0 {
+		jsonMsg(c, "invalid id", err)
+		return
+	}
+	ob, err := a.outboundService.GetOutbound(id)
+	if err != nil {
+		jsonMsg(c, "Failed to load outbound", err)
+		return
+	}
+	jsonObj(c, service.TestOutboundLive(ob, 6000), nil)
 }
 
 // testOutbound runs a TCP reachability probe against the outbound's target
