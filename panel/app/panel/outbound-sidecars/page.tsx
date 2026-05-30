@@ -145,7 +145,12 @@ function parseAmneziaConf(text: string): { config: Record<string, unknown>; name
   for (const k of ["i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"]) {
     if (iface[k] !== undefined && iface[k] !== "") amnezia[k] = iface[k];
   }
-  const addr = (iface.address || "").split(",").map((s) => s.trim()).filter(Boolean);
+  // WARP/AWG .conf list bare IPs; sing-box wireguard needs CIDR (/32, /128).
+  const addr = (iface.address || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => (s.includes("/") ? s : s.includes(":") ? `${s}/128` : `${s}/32`));
   const allowed = (peer.allowedips || "0.0.0.0/0, ::/0").split(",").map((s) => s.trim()).filter(Boolean);
   const config: Record<string, unknown> = {
     server,
