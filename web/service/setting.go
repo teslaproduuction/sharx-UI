@@ -118,6 +118,7 @@ var defaultValueMap = map[string]string{
 	// Multi-node mode
 	"multiNodeMode":     "false", // "true" for multi-mode, "false" for single-mode
 	"panelHostWorkload": "false", // hybrid: panel host also runs a local node (id=0) when multi-mode is on
+	"sniRouting443":     "false", // Phase 11: Caddy layer4 SNI router fronts :443 for share_tls_443 inbounds
 	// Dashboard public IPv6 detection
 	"enableIPv6":                         "false",
 	"nodeStatsCollectionIntervalSec":     "3",
@@ -1069,6 +1070,18 @@ func (s *SettingService) GetPanelHostWorkload() (bool, error) {
 // SetPanelHostWorkload toggles hybrid panel-host-as-node mode.
 func (s *SettingService) SetPanelHostWorkload(enabled bool) error {
 	return s.setBool("panelHostWorkload", enabled)
+}
+
+// GetSniRouting443 reports whether the Caddy layer4 SNI router fronts :443
+// (Phase 11). When on, TCP inbounds flagged share_tls_443 are reachable on :443
+// by their SNI; the panel pushes the routes to Caddy's admin API.
+func (s *SettingService) GetSniRouting443() (bool, error) {
+	return s.getBool("sniRouting443")
+}
+
+// SetSniRouting443 toggles the :443 SNI router.
+func (s *SettingService) SetSniRouting443(enabled bool) error {
+	return s.setBool("sniRouting443", enabled)
 }
 
 // GetEnableIPv6 returns whether public IPv6 detection is enabled for dashboard status.

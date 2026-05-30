@@ -47,6 +47,29 @@ func (c *CoresController) initRouter(g *gin.RouterGroup) {
 	// Telemt version switcher (prebuilt release tarballs — hot-swappable).
 	g.GET("/telemt/versions", c.telemtVersions)
 	g.POST("/telemt/install/:version", c.telemtInstall)
+
+	// Phase 11 — :443 SNI router (Caddy layer4).
+	g.GET("/sni/routes", c.sniRoutes)
+	g.POST("/sni/sync", c.sniSync)
+}
+
+// sniRoutes returns the current SNI→backend map for the :443 router overview.
+func (c *CoresController) sniRoutes(ctx *gin.Context) {
+	routes, err := service.CollectSniRoutes()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ss := service.SettingService{}
+	enabled, _ := ss.GetSniRouting443()
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{"enabled": enabled, "routes": routes}})
+}
+
+// sniSync force-pushes the layer4 config to Caddy's admin API (used after toggling
+// the setting or editing inbound SNIs without a full Xray restart).
+func (c *CoresController) sniSync(ctx *gin.Context) {
+	service.PushLayer4ToCaddy()
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "SNI router synced"})
 }
 
 func (c *CoresController) telemtVersions(ctx *gin.Context) {
