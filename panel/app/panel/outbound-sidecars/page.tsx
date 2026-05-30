@@ -491,7 +491,7 @@ export default function Page() {
               {t("pages.outboundSidecars.targetSection", { kind, defaultValue: `Target (${kind})` })}
             </p>
             {kind === "wireguard_client" ? (
-              <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[11px] text-amber-300">
+              <p className="rounded-md border border-[var(--border)] bg-[color-mix(in_oklab,var(--accent)_6%,transparent)] px-2 py-1 text-[11px] text-[var(--fg-muted)]">
                 {t("pages.outboundSidecars.awgNote", {
                   defaultValue:
                     "Plain WireGuard / WARP works. AmneziaWG obfuscation (jc/jmin/i1…) is parsed but NOT applied — the bundled sing-box build has no AWG support yet, so those fields are dropped.",
