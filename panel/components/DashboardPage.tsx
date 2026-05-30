@@ -90,9 +90,9 @@ type StatusData = {
   xray: { state: string; errorMsg: string; version: string };
   nodes?: { online: number; total: number };
   nodesXray?: { total: number; running: number; stopped: number; error: number; unknown: number };
-  telemt?: { state: string; count: number; errorMsg?: string };
+  telemt?: { state: string; count: number; errorMsg?: string; uptimeSec?: number; version?: string };
   nodesTelemt?: { total: number; running: number; stopped: number; unknown: number };
-  singbox?: { state: string; configHash?: string; errorMsg?: string };
+  singbox?: { state: string; configHash?: string; errorMsg?: string; uptimeSec?: number; version?: string };
   nodesSingbox?: { total: number; running: number; stopped: number; unknown: number };
   database: {
     size: number;
@@ -1429,6 +1429,11 @@ export function DashboardPage() {
                     {teleUi.msg}
                   </span>
                 </div>
+                {st.telemt?.version ? (
+                  <p className="text-[10px] text-[var(--fg-muted)] sm:text-xs">
+                    {t("pages.index.versionLabel", { defaultValue: "Version" })}: {st.telemt.version}
+                  </p>
+                ) : null}
                 {st.telemt?.errorMsg && !multi ? (
                   <p className="line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.telemt.errorMsg}>{st.telemt.errorMsg}</p>
                 ) : null}
@@ -1458,6 +1463,11 @@ export function DashboardPage() {
                     {sbxUi.msg}{sbxUi.hash ? ` · ${sbxUi.hash}` : ""}
                   </span>
                 </div>
+                {st.singbox?.version ? (
+                  <p className="text-[10px] text-[var(--fg-muted)] sm:text-xs">
+                    {t("pages.index.versionLabel", { defaultValue: "Version" })}: {st.singbox.version}
+                  </p>
+                ) : null}
                 {st.singbox?.errorMsg && !multi ? (
                   <p className="line-clamp-2 text-[10px] text-[var(--fg-muted)] sm:text-xs" title={st.singbox.errorMsg}>{st.singbox.errorMsg}</p>
                 ) : null}
@@ -1515,6 +1525,16 @@ export function DashboardPage() {
               {!multi && (
                 <PillTag tone="green">
                   {t("pages.index.xrayUptimeLabel")}: {formatSecond(st.appStats?.uptime || 0)}
+                </PillTag>
+              )}
+              {!multi && (st.telemt?.uptimeSec ?? 0) > 0 && (
+                <PillTag tone="green">
+                  {t("pages.index.telemtShort")}: {formatSecond(st.telemt?.uptimeSec || 0)}
+                </PillTag>
+              )}
+              {!multi && (st.singbox?.uptimeSec ?? 0) > 0 && (
+                <PillTag tone="green">
+                  {t("pages.index.singboxShort", { defaultValue: "Sing-box" })}: {formatSecond(st.singbox?.uptimeSec || 0)}
                 </PillTag>
               )}
               {multi && nx && nx.total > 0 && (

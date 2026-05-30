@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/konstpic/sharx-code/v2/logger"
 	"github.com/konstpic/sharx-code/v2/node/sidecarlog"
@@ -39,11 +40,56 @@ type Manager struct {
 
 	// Combined recent stdout/stderr ring across all Telemt instances (panel log viewer).
 	logs *sidecarlog.Ring
+
+	startedAt time.Time // earliest instance start of the current run
+	version   string    // cached `telemt version` (best-effort)
 }
 
 // Logs returns up to the last n captured output lines across all Telemt instances.
 func (m *Manager) Logs(n int) []sidecarlog.Line {
 	return m.logWriter().Lines(n)
+}
+
+// UptimeSeconds returns how long the longest-running Telemt instance has been up (0 if none).
+func (m *Manager) UptimeSeconds() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.running) == 0 || m.startedAt.IsZero() {
+		return 0
+	}
+	return int64(time.Since(m.startedAt).Seconds())
+}
+
+// Version returns the cached Telemt binary version (best-effort).
+func (m *Manager) Version() string {
+	m.mu.Lock()
+	v := m.version
+	m.mu.Unlock()
+	if v != "" {
+		return v
+	}
+	return detectTelemtVersion(findTelemtBinary())
+}
+
+func detectTelemtVersion(bin string) string {
+	if bin == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	for _, arg := range []string{"--version", "version", "-v"} {
+		out, err := exec.CommandContext(ctx, bin, arg).CombinedOutput()
+		if err == nil {
+			line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+			if line != "" {
+				if i := strings.LastIndex(line, " "); i >= 0 && i+1 < len(line) {
+					return strings.TrimSpace(line[i+1:])
+				}
+				return line
+			}
+		}
+	}
+	return ""
 }
 
 func (m *Manager) logWriter() *sidecarlog.Ring {
@@ -141,6 +187,7 @@ func (m *Manager) Stop() {
 		}
 		delete(m.running, tag)
 	}
+	m.startedAt = time.Time{}
 }
 
 // Apply replaces running Telemt instances with the given payloads. Missing tags are stopped.
@@ -228,6 +275,12 @@ func (m *Manager) Apply(payloads []Payload) error {
 		}(tag, cmd, ctx)
 
 		m.running[tag] = &procState{cancel: cancel, hash: hhex}
+		if m.startedAt.IsZero() {
+			m.startedAt = time.Now()
+		}
+		if m.version == "" {
+			m.version = detectTelemtVersion(bin)
+		}
 	}
 
 	m.commitReplaySnapshot(payloads)

@@ -56,10 +56,14 @@ func (c *CoresController) status(ctx *gin.Context) {
 		"singbox": gin.H{
 			"running":    service.LocalSingboxRunning(),
 			"configHash": service.LocalSingboxConfigHash(),
+			"uptimeSec":  service.LocalSingboxUptimeSeconds(),
+			"version":    service.LocalSingboxVersion(),
 		},
 		"telemt": gin.H{
 			"running":       service.LocalTelemtSidecarCount() > 0,
 			"instanceCount": service.LocalTelemtSidecarCount(),
+			"uptimeSec":     service.LocalTelemtUptimeSeconds(),
+			"version":       service.LocalTelemtVersion(),
 		},
 	}})
 }

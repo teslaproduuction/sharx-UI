@@ -12,6 +12,28 @@ import (
 	"github.com/konstpic/sharx-code/v2/xray"
 )
 
+// LocalTelemtUptimeSeconds returns the longest-running panel-host Telemt instance uptime (0 if none).
+func LocalTelemtUptimeSeconds() int64 {
+	panelTelemtMu.Lock()
+	mgr := panelTelemt
+	panelTelemtMu.Unlock()
+	if mgr == nil {
+		return 0
+	}
+	return mgr.UptimeSeconds()
+}
+
+// LocalTelemtVersion returns the Telemt binary version (best-effort).
+func LocalTelemtVersion() string {
+	panelTelemtMu.Lock()
+	mgr := panelTelemt
+	panelTelemtMu.Unlock()
+	if mgr == nil {
+		return telemt.NewManager().Version()
+	}
+	return mgr.Version()
+}
+
 // LocalTelemtLogs returns up to the last n combined stdout/stderr lines across
 // all panel-host Telemt instances (tag-prefixed). Empty if none have started.
 func LocalTelemtLogs(n int) []sidecarlog.Line {
