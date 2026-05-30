@@ -1899,6 +1899,8 @@ export function DashboardPage() {
             <option value="panel">panel</option>
             <option value="xray">xray</option>
             <option value="node">node</option>
+            <option value="telemt">telemt</option>
+            <option value="singbox">singbox</option>
           </SelectNative>
           <Input
             className="min-w-[160px] flex-1"

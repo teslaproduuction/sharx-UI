@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/konstpic/sharx-code/v2/logger"
 )
 
 // Line is one captured output line with a capture timestamp (unix ms).
@@ -119,6 +121,62 @@ func (w *prefixWriter) Write(p []byte) (int, error) {
 		w.ring.mu.Lock()
 		w.ring.appendLocked(w.prefix + ln)
 		w.ring.mu.Unlock()
+	}
+	return len(p), nil
+}
+
+// loggerWriter forwards each complete output line of a sidecar child into the
+// central structured logger (logger.Emit) tagged with a source ("telemt" /
+// "singbox"), so the lines surface in the unified panel "Журнал" log viewer and
+// the live SSE stream alongside panel/xray/node — with an inferred level so
+// errors are highlighted.
+type loggerWriter struct {
+	source  string
+	mu      sync.Mutex
+	partial string
+}
+
+// NewLoggerWriter returns an io.Writer that emits each line to the central
+// logger under the given source.
+func NewLoggerWriter(source string) *loggerWriter {
+	return &loggerWriter{source: source}
+}
+
+func inferLevel(s string) string {
+	l := strings.ToLower(s)
+	switch {
+	case strings.Contains(l, "panic"), strings.Contains(l, "fatal"),
+		strings.Contains(l, "error"), strings.Contains(l, "failed"),
+		strings.Contains(l, "refused"):
+		return "error"
+	case strings.Contains(l, "warn"):
+		return "warn"
+	default:
+		return "info"
+	}
+}
+
+func (w *loggerWriter) Write(p []byte) (int, error) {
+	if w == nil {
+		return len(p), nil
+	}
+	w.mu.Lock()
+	w.partial += string(p)
+	var lines []string
+	for {
+		idx := strings.IndexByte(w.partial, '\n')
+		if idx < 0 {
+			break
+		}
+		lines = append(lines, strings.TrimRight(w.partial[:idx], "\r"))
+		w.partial = w.partial[idx+1:]
+	}
+	w.mu.Unlock()
+	for _, ln := range lines {
+		if strings.TrimSpace(ln) == "" {
+			continue
+		}
+		logger.Emit(logger.Entry{Source: w.source, Level: inferLevel(ln), Msg: ln})
 	}
 	return len(p), nil
 }

@@ -305,7 +305,7 @@ func (m *Manager) Apply(p Payload) error {
 		cmd.Dir = root
 		cmd.Env = os.Environ()
 		m.logWriter().Clear()
-		sink := io.MultiWriter(os.Stderr, m.logWriter())
+		sink := io.MultiWriter(os.Stderr, m.logWriter(), sidecarlog.NewLoggerWriter("singbox"))
 		cmd.Stdout = sink
 		cmd.Stderr = sink
 		if err := cmd.Start(); err != nil {
@@ -364,7 +364,7 @@ func (m *Manager) Apply(p Payload) error {
 	cmd.Dir = root
 	cmd.Env = os.Environ()
 	m.logWriter().Clear()
-	rsink := io.MultiWriter(os.Stderr, m.logWriter())
+	rsink := io.MultiWriter(os.Stderr, m.logWriter(), sidecarlog.NewLoggerWriter("singbox"))
 	cmd.Stdout = rsink
 	cmd.Stderr = rsink
 	if err := cmd.Start(); err != nil {

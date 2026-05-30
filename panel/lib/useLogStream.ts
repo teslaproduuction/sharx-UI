@@ -4,7 +4,7 @@ import { useEffect, useRef } from "react";
 import { panel } from "./paths";
 
 export type LogEntry = {
-  source: "panel" | "xray" | "node";
+  source: "panel" | "xray" | "node" | "telemt" | "singbox";
   channel?: string;
   level: string;
   message: string;
@@ -39,7 +39,9 @@ function normalizeEntry(raw: unknown): LogEntry | null {
   if (!message) return null;
   const srcRaw = String(e.source ?? "panel").toLowerCase();
   const source: LogEntry["source"] =
-    srcRaw === "xray" || srcRaw === "node" ? srcRaw : "panel";
+    srcRaw === "xray" || srcRaw === "node" || srcRaw === "telemt" || srcRaw === "singbox"
+      ? (srcRaw as LogEntry["source"])
+      : "panel";
   const ts = Number(e.ts ?? e.tsUnixMs ?? Date.now());
   return {
     source,

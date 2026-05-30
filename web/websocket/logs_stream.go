@@ -2,9 +2,11 @@ package websocket
 
 // Log stream sources are encoded into logger.Entry.Source.
 const (
-	LogStreamSourcePanel = "panel"
-	LogStreamSourceXray  = "xray"
-	LogStreamSourceNode  = "node"
+	LogStreamSourcePanel   = "panel"
+	LogStreamSourceXray    = "xray"
+	LogStreamSourceNode    = "node"
+	LogStreamSourceTelemt  = "telemt"
+	LogStreamSourceSingbox = "singbox"
 )
 
 // UnifiedLogEntry is the payload shape consumed by dashboard logs UI.
