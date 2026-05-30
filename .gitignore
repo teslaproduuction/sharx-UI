@@ -47,4 +47,8 @@ docker-compose.override.yml
 .env.local
 .env.*.local
 !.env.example.agent.zip
-data/geofile-assets/
+
+# Local runtime data — MUST NOT be committed (TLS keys, singbox/telemt configs
+# with private keys, geo assets). Created at runtime / docker smoke-testing.
+/data/
+panel/tsconfig.tsbuildinfo
