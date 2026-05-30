@@ -31,15 +31,18 @@ func LocalSingboxUptimeSeconds() int64 {
 	return mgr.UptimeSeconds()
 }
 
-// LocalSingboxVersion returns the sing-box binary version (best-effort).
+// cachedSingboxVersion memoizes the probed version so /cores/status (polled every
+// few seconds) never re-spawns `sing-box version` per call. The binary doesn't
+// change at runtime, so a one-shot probe is safe.
+var (
+	singboxVerOnce  sync.Once
+	singboxVerValue string
+)
+
+// LocalSingboxVersion returns the sing-box binary version (best-effort, cached).
 func LocalSingboxVersion() string {
-	panelSingboxMu.Lock()
-	mgr := panelSingbox
-	panelSingboxMu.Unlock()
-	if mgr == nil {
-		return singbox.NewManager().Version()
-	}
-	return mgr.Version()
+	singboxVerOnce.Do(func() { singboxVerValue = singbox.NewManager().Version() })
+	return singboxVerValue
 }
 
 // LocalSingboxLogs returns up to the last n stdout/stderr lines of the panel-host

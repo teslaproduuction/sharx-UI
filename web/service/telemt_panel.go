@@ -23,15 +23,17 @@ func LocalTelemtUptimeSeconds() int64 {
 	return mgr.UptimeSeconds()
 }
 
-// LocalTelemtVersion returns the Telemt binary version (best-effort).
+// cachedTelemtVersion memoizes the probed version so /cores/status never
+// re-spawns `telemt version` per call (it tries several flags, up to seconds).
+var (
+	telemtVerOnce  sync.Once
+	telemtVerValue string
+)
+
+// LocalTelemtVersion returns the Telemt binary version (best-effort, cached).
 func LocalTelemtVersion() string {
-	panelTelemtMu.Lock()
-	mgr := panelTelemt
-	panelTelemtMu.Unlock()
-	if mgr == nil {
-		return telemt.NewManager().Version()
-	}
-	return mgr.Version()
+	telemtVerOnce.Do(func() { telemtVerValue = telemt.NewManager().Version() })
+	return telemtVerValue
 }
 
 // LocalTelemtLogs returns up to the last n combined stdout/stderr lines across
