@@ -1,8 +1,15 @@
 package option
 
+// MieruPortBinding is the per-port transport binding for the mieru inbound.
+// shtorm-7 option/mieru.go has no equivalent (its outbound uses ServerPortRanges
+// strings); we define it here for the inbound only.
+type MieruPortBinding struct {
+	Protocol  string `json:"protocol,omitempty"`
+	PortRange string `json:"portRange,omitempty"`
+	Port      uint16 `json:"port,omitempty"`
+}
+
 // MieruInboundOptions is the server-side configuration for the mieru inbound.
-// Grafted from hiddify/hiddify-sing-box; depends on MieruPortBinding already
-// present in shtorm-7/sing-box-extended option/mieru.go.
 type MieruInboundOptions struct {
 	ListenOptions
 	Users        []MieruUser        `json:"users,omitempty"`

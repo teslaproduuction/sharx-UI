@@ -39,11 +39,8 @@ func validateMieruTransport(transport []option.MieruPortBinding) error {
 	return nil
 }
 
-func beginAndEndPortFromPortRange(portRange string) (int, int, error) {
-	var begin, end int
-	_, err := fmt.Sscanf(portRange, "%d-%d", &begin, &end)
-	return begin, end, err
-}
+// beginAndEndPortFromPortRange is also declared in outbound.go (shtorm-7);
+// do not redeclare it here — both files share the same package.
 
 func getTransportProtocol(transport string) *mierupb.TransportProtocol {
 	switch strings.ToUpper(transport) {
