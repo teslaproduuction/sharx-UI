@@ -33,6 +33,69 @@ func (c *CoresController) initRouter(g *gin.RouterGroup) {
 	g.GET("/xray", c.xray)
 	g.GET("/singbox", c.singbox)
 	g.GET("/telemt", c.telemt)
+
+	// Live status of all three cores (running / config hash / instance count).
+	g.GET("/status", c.status)
+	// Panel-host sidecar control + logs (singbox + telemt). Xray control reuses
+	// the existing /server/* endpoints.
+	g.POST("/singbox/stop", c.singboxStop)
+	g.POST("/singbox/restart", c.singboxRestart)
+	g.GET("/singbox/logs", c.singboxLogs)
+	g.POST("/telemt/stop", c.telemtStop)
+	g.POST("/telemt/restart", c.telemtRestart)
+	g.GET("/telemt/logs", c.telemtLogs)
+}
+
+// status reports liveness of each core for the unified Cores dashboard cards.
+func (c *CoresController) status(ctx *gin.Context) {
+	xrayRunning := c.xrayCfg.IsXrayRunning()
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": gin.H{
+		"xray": gin.H{
+			"running": xrayRunning,
+		},
+		"singbox": gin.H{
+			"running":    service.LocalSingboxRunning(),
+			"configHash": service.LocalSingboxConfigHash(),
+		},
+		"telemt": gin.H{
+			"running":       service.LocalTelemtSidecarCount() > 0,
+			"instanceCount": service.LocalTelemtSidecarCount(),
+		},
+	}})
+}
+
+func (c *CoresController) singboxStop(ctx *gin.Context) {
+	service.StopLocalSingboxStandalone()
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "sing-box stopped"})
+}
+
+func (c *CoresController) singboxRestart(ctx *gin.Context) {
+	if err := service.ApplyLocalSingboxStandalone(nil); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "sing-box restarted"})
+}
+
+func (c *CoresController) singboxLogs(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": service.LocalSingboxLogs(500)})
+}
+
+func (c *CoresController) telemtStop(ctx *gin.Context) {
+	service.StopLocalTelemtStandalone()
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "telemt stopped"})
+}
+
+func (c *CoresController) telemtRestart(ctx *gin.Context) {
+	if err := service.ApplyLocalTelemtStandalone(nil); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "telemt restarted"})
+}
+
+func (c *CoresController) telemtLogs(ctx *gin.Context) {
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": service.LocalTelemtLogs(500)})
 }
 
 // xray returns the rendered xray config the panel would send to local xray.

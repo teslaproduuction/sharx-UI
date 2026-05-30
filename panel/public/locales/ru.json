@@ -2725,6 +2725,22 @@
       "flowInbound": "inbound + routing-правило",
       "flowNoMembers": "выберите members ↓",
       "flowInternet": "интернет"
+    },
+    "cores": {
+      "cardXrayMeta": "Основной прокси-движок",
+      "cardSingboxMeta": "mieru / AnyTLS / TUIC / Naive",
+      "cardTelemtMeta": "инстансов: {{count}}",
+      "running": "работает",
+      "stopped": "остановлен",
+      "restartButton": "Перезапуск",
+      "stopButton": "Стоп",
+      "logsButton": "Логи",
+      "logsTitle": "Логи {{core}}",
+      "logsHint": "Последние 500 строк stdout/stderr. Ошибки подсвечены.",
+      "logsEmpty": "Логов пока нет (сидекар может быть остановлен).",
+      "actionFailed": "Действие не удалось",
+      "stopOkToast": "{{core}} остановлен",
+      "restartOkToast": "{{core}} перезапущен"
     }
   }
 }
