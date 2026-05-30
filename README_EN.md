@@ -10,6 +10,15 @@ This version brings a modern, Docker-first architecture, **multi-node** workers,
 
 ## What's New
 
+### v2.0.0 — Sing-box backend + AmneziaWG + :443 SNI router
+- **Sing-box singleton sidecar**: mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 inbounds with per-user billing stats (v2ray_api gRPC merged into the Xray puller).
+- **Real AmneziaWG 1.5 + mieru server inbound in one sing-box** — built from `shtorm-7/sing-box-extended` with the mieru inbound grafted in. WARP anti-DPI obfuscation works.
+- **:443 SNI router** (Caddy layer4): share `:443` across VLESS/Trojan/AnyTLS by SNI; Hy2/TUIC on `:443/udp`. Share links advertise `:443` automatically (`SNI_ROUTING_443=true`).
+- **Cores management page**: Stop / Restart / Logs / version + uptime per core (Xray / Sing-box / Telemt), Telemt version switcher, sidecar logs in the unified log viewer.
+- **Outbound live 204 test** (latency or error, through the proxy) + **AmneziaWG `.conf` drag-drop import** + tuic/hy2/anytls URI import.
+- **Hybrid panel-as-node** (orchestrator + local workload), **3X-UI-style L7 routing constructor**, cascade builder guide, **Cloudflare WARP egress**.
+- Merged konstpic **v1.4.5** upstream. Full notes: [`release-notes/v2.0.0.md`](release-notes/v2.0.0.md).
+
 ### Node Mode (1 panel – multiple nodes)
 - **Centralized management**: one panel manages several worker nodes
 - **Enable multi-node** in the panel settings first
