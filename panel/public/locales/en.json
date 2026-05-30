@@ -2778,7 +2778,7 @@
       "importBadUri": "Unsupported URI (use tuic / hysteria2 / anytls; vless/vmess → Outbounds page)",
       "importedUri": "Imported {{kind}}",
       "importUnknown": "Paste a tuic/hy2/anytls URI or a WireGuard .conf",
-      "awgNote": "Plain WireGuard / WARP works. AmneziaWG obfuscation (jc/jmin/i1…) is parsed but NOT applied — the bundled sing-box build has no AWG support yet, so those fields are dropped."
+      "awgNote": "WireGuard / WARP works. AmneziaWG 1.5 obfuscation (jc/jmin/jmax/i1…) is applied via the shtorm-7 sing-box build. Note: in AWG 1.5 the s1-s4 sizes are usually 0."
     }
   }
 }

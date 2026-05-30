@@ -6,7 +6,7 @@ ARG SINGBOX_REF=extended
 RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
     git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
-        https://github.com/hiddify/hiddify-sing-box.git /src
+        https://github.com/shtorm-7/sing-box-extended.git /src
 WORKDIR /src
 ENV CGO_ENABLED=0
 ARG SINGBOX_VERSION=

@@ -49,7 +49,7 @@ RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /
 # then recursive-clone so go.mod's `replace ./replace/psiphon-tls` etc resolve.
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
     git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
-        https://github.com/hiddify/hiddify-sing-box.git /src
+        https://github.com/shtorm-7/sing-box-extended.git /src
 WORKDIR /src
 ENV CGO_ENABLED=0
 # Build tags chosen to enable every server-side protocol we ship in Phase 2-4
