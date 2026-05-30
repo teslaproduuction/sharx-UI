@@ -177,6 +177,7 @@ type ServerService struct {
 	cachedCpuSpeedMhz  float64
 	lastCpuInfoAttempt time.Time
 	memHistory         []MemSample
+	diskHistory        []MemSample
 	workerHistory      map[int][]workerResourceSample
 	workerNames        map[int]string
 	geofileTaskMu      sync.Mutex
@@ -280,9 +281,10 @@ type MemSample struct {
 }
 
 type workerResourceSample struct {
-	T   int64
-	Cpu float64
-	Mem float64
+	T    int64
+	Cpu  float64
+	Mem  float64
+	Disk float64
 }
 
 // AggregateMemHistory returns bucketed host memory usage percent (0..100).
@@ -342,7 +344,64 @@ func (s *ServerService) AggregateMemHistory(bucketSeconds int, maxPoints int) []
 	return out
 }
 
-func aggregateWorkerResourceField(hist []workerResourceSample, bucketSeconds, maxPoints int, useCpu bool) []map[string]any {
+// AggregateDiskHistory returns bucketed host disk usage percent (0..100).
+func (s *ServerService) AggregateDiskHistory(bucketSeconds int, maxPoints int) []map[string]any {
+	if bucketSeconds <= 0 || maxPoints <= 0 {
+		return nil
+	}
+	cutoff := time.Now().Add(-time.Duration(bucketSeconds*maxPoints) * time.Second).Unix()
+	s.mu.Lock()
+	hist := s.diskHistory
+	startIdx := 0
+	for i := len(hist) - 1; i >= 0; i-- {
+		if hist[i].T < cutoff {
+			startIdx = i + 1
+			break
+		}
+	}
+	if startIdx >= len(hist) {
+		s.mu.Unlock()
+		return []map[string]any{}
+	}
+	slice := hist[startIdx:]
+	tmp := make([]MemSample, len(slice))
+	copy(tmp, slice)
+	s.mu.Unlock()
+	if len(tmp) == 0 {
+		return []map[string]any{}
+	}
+	var out []map[string]any
+	var acc []float64
+	bSize := int64(bucketSeconds)
+	curBucket := (tmp[0].T / bSize) * bSize
+	flush := func(ts int64) {
+		if len(acc) == 0 {
+			return
+		}
+		sum := 0.0
+		for _, v := range acc {
+			sum += v
+		}
+		avg := sum / float64(len(acc))
+		out = append(out, map[string]any{"t": ts, "disk": avg})
+		acc = acc[:0]
+	}
+	for _, p := range tmp {
+		b := (p.T / bSize) * bSize
+		if b != curBucket {
+			flush(curBucket)
+			curBucket = b
+		}
+		acc = append(acc, p.Mem)
+	}
+	flush(curBucket)
+	if len(out) > maxPoints {
+		out = out[len(out)-maxPoints:]
+	}
+	return out
+}
+
+func aggregateWorkerResourceField(hist []workerResourceSample, bucketSeconds, maxPoints int, field string) []map[string]any {
 	if bucketSeconds <= 0 || maxPoints <= 0 || len(hist) == 0 {
 		return []map[string]any{}
 	}
@@ -362,9 +421,9 @@ func aggregateWorkerResourceField(hist []workerResourceSample, bucketSeconds, ma
 	var acc []float64
 	bSize := int64(bucketSeconds)
 	curBucket := (tmp[0].T / bSize) * bSize
-	valKey := "mem"
-	if useCpu {
-		valKey = "cpu"
+	valKey := field
+	if valKey != "cpu" && valKey != "mem" && valKey != "disk" {
+		valKey = "mem"
 	}
 	flush := func(ts int64) {
 		if len(acc) == 0 {
@@ -384,9 +443,12 @@ func aggregateWorkerResourceField(hist []workerResourceSample, bucketSeconds, ma
 			flush(curBucket)
 			curBucket = b
 		}
-		if useCpu {
+		switch field {
+		case "cpu":
 			acc = append(acc, p.Cpu)
-		} else {
+		case "disk":
+			acc = append(acc, p.Disk)
+		default:
 			acc = append(acc, p.Mem)
 		}
 	}
@@ -404,7 +466,7 @@ func (s *ServerService) AggregateWorkerCpuHistory(nodeID int, bucketSeconds int,
 	tmp := make([]workerResourceSample, len(hist))
 	copy(tmp, hist)
 	s.mu.Unlock()
-	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, true)
+	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, "cpu")
 }
 
 // AggregateWorkerMemHistory returns bucketed memory percent for a worker node (multi-node mode).
@@ -414,11 +476,21 @@ func (s *ServerService) AggregateWorkerMemHistory(nodeID int, bucketSeconds int,
 	tmp := make([]workerResourceSample, len(hist))
 	copy(tmp, hist)
 	s.mu.Unlock()
-	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, false)
+	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, "mem")
+}
+
+// AggregateWorkerDiskHistory returns bucketed disk usage percent for a worker node (multi-node mode).
+func (s *ServerService) AggregateWorkerDiskHistory(nodeID int, bucketSeconds int, maxPoints int) []map[string]any {
+	s.mu.Lock()
+	hist := s.workerHistory[nodeID]
+	tmp := make([]workerResourceSample, len(hist))
+	copy(tmp, hist)
+	s.mu.Unlock()
+	return aggregateWorkerResourceField(tmp, bucketSeconds, maxPoints, "disk")
 }
 
 // AppendWorkerResourceSample records one host resource sample from a worker (panel-polled).
-func (s *ServerService) AppendWorkerResourceSample(nodeID int, name string, t time.Time, cpu, memPct float64) {
+func (s *ServerService) AppendWorkerResourceSample(nodeID int, name string, t time.Time, cpu, memPct, diskPct float64) {
 	const capacity = 9000
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -431,7 +503,7 @@ func (s *ServerService) AppendWorkerResourceSample(nodeID int, name string, t ti
 	if name != "" {
 		s.workerNames[nodeID] = name
 	}
-	p := workerResourceSample{T: t.Unix(), Cpu: cpu, Mem: memPct}
+	p := workerResourceSample{T: t.Unix(), Cpu: cpu, Mem: memPct, Disk: diskPct}
 	h := s.workerHistory[nodeID]
 	if n := len(h); n > 0 && h[n-1].T == p.T {
 		h[n-1] = p
@@ -859,6 +931,21 @@ func (s *ServerService) AppendMemSample(t time.Time, memPct float64) {
 	}
 	if len(s.memHistory) > capacity {
 		s.memHistory = s.memHistory[len(s.memHistory)-capacity:]
+	}
+}
+
+func (s *ServerService) AppendDiskSample(t time.Time, diskPct float64) {
+	const capacity = 9000
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := MemSample{T: t.Unix(), Mem: diskPct}
+	if n := len(s.diskHistory); n > 0 && s.diskHistory[n-1].T == p.T {
+		s.diskHistory[n-1] = p
+	} else {
+		s.diskHistory = append(s.diskHistory, p)
+	}
+	if len(s.diskHistory) > capacity {
+		s.diskHistory = s.diskHistory[len(s.diskHistory)-capacity:]
 	}
 }
 

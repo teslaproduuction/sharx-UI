@@ -69,7 +69,13 @@ func extractPortForPush(address string) string {
 	return ""
 }
 
-// FindNodeByPushAddress matches a node row by the URL the worker sends in log/geo push (exact or same port).
+// FindNodeByPushAddress matches a node row by the URL the worker sends in log/geo push.
+// Strategy:
+// 1) Exact normalized URL match
+// 2) Port-only fallback ONLY when it uniquely identifies one node
+//
+// Returning the first node by port is unsafe in multi-node setups where many workers
+// use the same API port (e.g. 8080) and can collapse all pushes to node id=1.
 func (s *NodeService) FindNodeByPushAddress(nodeAddress string) (*model.Node, error) {
 	nodes, err := s.GetAllNodes()
 	if err != nil {
@@ -77,11 +83,31 @@ func (s *NodeService) FindNodeByPushAddress(nodeAddress string) (*model.Node, er
 	}
 	reqAddr := strings.TrimSuffix(strings.TrimSpace(nodeAddress), "/")
 	reqPort := extractPortForPush(reqAddr)
+
+	// Exact match first.
 	for _, n := range nodes {
 		nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
-		nodePort := extractPortForPush(nodeAddr)
-		if nodeAddr == reqAddr || (reqPort != "" && nodePort != "" && nodePort == reqPort) {
+		if nodeAddr == reqAddr {
 			return n, nil
+		}
+	}
+
+	// Port fallback only when unambiguous.
+	if reqPort != "" {
+		var byPort []*model.Node
+		for _, n := range nodes {
+			nodeAddr := strings.TrimSuffix(strings.TrimSpace(n.Address), "/")
+			nodePort := extractPortForPush(nodeAddr)
+			if nodePort != "" && nodePort == reqPort {
+				byPort = append(byPort, n)
+			}
+		}
+		if len(byPort) == 1 {
+			return byPort[0], nil
+		}
+		if len(byPort) > 1 {
+			logger.Warningf("node push address %q matched %d nodes by port %s; exact address match required",
+				reqAddr, len(byPort), reqPort)
 		}
 	}
 	return nil, nil
@@ -1116,7 +1142,7 @@ type perNodeClientDelta struct {
 	Down   int64
 }
 
-// loadClientNodeTrafficForUser returns LOWER(email) -> nodeId -> up/down (bytes, Xray orientation) from DB.
+// loadClientNodeTrafficForUser returns LOWER(name) -> nodeId -> up/down (bytes, Xray orientation) from DB.
 func loadClientNodeTrafficForUser(userId int) (map[string]map[int]struct{ Up, Down int64 }, error) {
 	db := database.GetDB()
 	type trRow struct {
@@ -1127,7 +1153,7 @@ func loadClientNodeTrafficForUser(userId int) (map[string]map[int]struct{ Up, Do
 	}
 	var trRows []trRow
 	err := db.Table("client_node_traffics AS cnt").
-		Select("LOWER(TRIM(ce.email)) AS email, cnt.node_id, cnt.up, cnt.down").
+		Select("LOWER(TRIM(ce.name)) AS email, cnt.node_id, cnt.up, cnt.down").
 		Joins("INNER JOIN client_entities AS ce ON ce.id = cnt.client_id").
 		Where("ce.user_id = ?", userId).
 		Scan(&trRows).Error
@@ -1152,7 +1178,7 @@ SELECT ce.id
 FROM client_entities AS ce
 INNER JOIN client_inbound_mappings AS cim ON cim.client_id = ce.id
 INNER JOIN inbound_node_mappings AS inm ON inm.inbound_id = cim.inbound_id AND inm.node_id = ?
-WHERE LOWER(TRIM(ce.email)) = LOWER(TRIM(?))
+WHERE LOWER(TRIM(ce.name)) = LOWER(TRIM(?))
 LIMIT 1`
 	if err := db.Raw(q, nodeId, email).Scan(&id).Error; err != nil {
 		return 0, err
@@ -1240,11 +1266,11 @@ func (s *NodeService) GetClientTrafficPerNodeMatrix(userId int) (*ClientTrafficP
 				continue
 			}
 			out.Rows = append(out.Rows, ClientTrafficPerNodeRow{
-				Email: c.Email,
+				Email: c.Name,
 				Values: []ClientTrafficPerNodeCell{{
 					Up:     c.Up,
 					Down:   c.Down,
-					Online: onlineGlobal[strings.ToLower(c.Email)],
+					Online: onlineGlobal[strings.ToLower(c.Name)],
 					OK:     true,
 				}},
 			})
@@ -1252,7 +1278,7 @@ func (s *NodeService) GetClientTrafficPerNodeMatrix(userId int) (*ClientTrafficP
 		totals := make(map[string]int64, len(clients))
 		for _, cl := range clients {
 			if cl != nil {
-				totals[strings.ToLower(cl.Email)] = cl.Up + cl.Down
+				totals[strings.ToLower(cl.Name)] = cl.Up + cl.Down
 			}
 		}
 		sort.Slice(out.Rows, func(i, j int) bool {
@@ -1381,7 +1407,7 @@ func (s *NodeService) GetClientTrafficPerNodeMatrix(userId int) (*ClientTrafficP
 		if c == nil {
 			continue
 		}
-		el := strings.ToLower(c.Email)
+		el := strings.ToLower(c.Name)
 		vals := make([]ClientTrafficPerNodeCell, len(nodesWithInbounds))
 		for i, n := range nodesWithInbounds {
 			a := aggs[n.Id]
@@ -1406,7 +1432,7 @@ func (s *NodeService) GetClientTrafficPerNodeMatrix(userId int) (*ClientTrafficP
 				OK:     true,
 			}
 		}
-		rows = append(rows, ClientTrafficPerNodeRow{Email: c.Email, Values: vals})
+		rows = append(rows, ClientTrafficPerNodeRow{Email: c.Name, Values: vals})
 	}
 
 	nodeTrafficSum := func(email string) int64 {
@@ -1946,7 +1972,7 @@ func (s *NodeService) CollectNodeStats() error {
 						logger.Infof("Traffic limit exceeded for %d clients, removing from Xray via API", len(clientsToDisable))
 						// Remove expired clients from Xray API asynchronously (don't block traffic processing)
 						go func() {
-							_, err := clientService.DisableClientsByEmail(clientsToDisable, inboundService)
+							_, err := clientService.DisableClientsByName(clientsToDisable, inboundService)
 							if err != nil {
 								logger.Warningf("Failed to disable expired clients via API: %v", err)
 							}
@@ -2103,7 +2129,7 @@ func (s *NodeService) AssignInboundToNodesWithBindings(inboundId int, bindings [
 			return fmt.Errorf("failed to get inbounds for node %d: %w", nodeId, err)
 		}
 		for _, existingInbound := range existingInbounds {
-			if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port && existingInbound.Listen == inbound.Listen {
+			if existingInbound.Id != inboundId && existingInbound.Port == inbound.Port && existingInbound.Listen == inbound.Listen && (existingInbound.Protocol == "hysteria2") == (inbound.Protocol == "hysteria2") {
 				return fmt.Errorf("node %d is already assigned to inbound %d with port %d. One node cannot be assigned to two inbounds with the same port", nodeId, existingInbound.Id, inbound.Port)
 			}
 		}
@@ -2426,12 +2452,20 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 
 	requestBody := map[string]interface{}{
 		"config": json.RawMessage(xrayConfig),
+		"nodeId": node.Id,
 	}
 	if panelURL != "" {
 		requestBody["panelUrl"] = panelURL
 	}
 	if telemt != nil {
-		requestBody["telemt"] = *telemt
+		// Force a non-nil slice so JSON encodes as `[]` (clear all Telemt) rather than
+		// `null` — workers treat `null`/missing as "leave Telemt untouched", which would
+		// leave stale sidecars running after the admin unassigns Telemt from the node.
+		payload := *telemt
+		if payload == nil {
+			payload = []TelemtNodePayload{}
+		}
+		requestBody["telemt"] = payload
 	}
 	// Phase 2 — sing-box singleton sidecar config for this worker. Built from
 	// every enabled sing-box-managed inbound (mieru/anytls/naive/tuic) currently
@@ -2449,6 +2483,12 @@ func (s *NodeService) ApplyConfigToNode(node *model.Node, xrayConfig []byte, tel
 		if meta.ExpectedPayloadSha256 != "" {
 			requestBody["expectedConfigSha256"] = meta.ExpectedPayloadSha256
 		}
+	}
+	settingSvc := SettingService{}
+	if allSetting, err := settingSvc.GetAllSetting(); err == nil {
+		requestBody["logRotate"] = LogRotatePayload(allSetting)
+	} else {
+		requestBody["logRotate"] = LogRotatePayload(nil)
 	}
 
 	requestJSON, err := json.Marshal(requestBody)

@@ -623,11 +623,11 @@ func extractClientEntityUsers(inbound *model.Inbound) []sbxUser {
 	}
 	out := make([]sbxUser, 0, len(clients))
 	for _, c := range clients {
-		if c == nil || !c.Enable || strings.TrimSpace(c.Email) == "" {
+		if c == nil || !c.Enable || strings.TrimSpace(c.Name) == "" {
 			continue
 		}
 		out = append(out, sbxUser{
-			Name:     c.Email,
+			Name:     c.Name,
 			Password: c.Password,
 			UUID:     c.UUID,
 		})

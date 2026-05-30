@@ -21,7 +21,8 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY panel/ ./
 RUN npm run build && cp -R out /webpanel
 
-# SharX Telemt fork: ./scripts/build-telemt-sharx.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt
+# Telemt: ./scripts/download-telemt.sh → third_party/telemt-sharx/prebuilt/linux-*/telemt (or DockerInit fallback)
+# SharX Telemt fork build fallback: ./scripts/build-telemt-sharx.sh
 
 # ========================================================
 # Stage: hiddify-sing-box (Phase 2 — singleton sidecar for mieru/AnyTLS/Naive/TUIC)
@@ -103,7 +104,7 @@ COPY sub/ ./sub/
 COPY node/ ./node/
 # Go API and services (.dockerignore omits web/panel/; static UI comes from panelui below).
 COPY web/ ./web/
-# Optional Telemt SharX fork binary (see scripts/build-telemt-sharx.sh); small layer, avoids Rust in image build.
+# Optional Telemt prebuilt binary (see scripts/download-telemt.sh); small layer, avoids compile in image build.
 COPY third_party/telemt-sharx/prebuilt/ ./third_party/telemt-sharx/prebuilt/
 COPY main.go ./
 COPY DockerInit.sh DockerEntrypoint.sh ./
@@ -127,9 +128,9 @@ RUN ARCH="" && case "${TARGETARCH}" in amd64) ARCH=linux-amd64 ;; arm64) ARCH=li
     PRE="/app/third_party/telemt-sharx/prebuilt/${ARCH}/telemt" && \
     if [ -n "$ARCH" ] && [ -f "$PRE" ]; then \
       cp "$PRE" /app/build/bin/telemt && chmod +x /app/build/bin/telemt && \
-      echo "telemt: SharX fork prebuilt (${ARCH})"; \
+      echo "telemt: prebuilt (${ARCH})"; \
     else \
-      echo "telemt: no SharX prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
+      echo "telemt: no prebuilt at prebuilt/${ARCH:-skip}/telemt — keeping DockerInit binary"; \
     fi
 
 # Phase 2 — embed hiddify-sing-box binary alongside Xray/Telemt for the singleton sidecar.

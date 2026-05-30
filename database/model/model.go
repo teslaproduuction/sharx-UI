@@ -129,7 +129,7 @@ type OutboundTraffics struct {
 // InboundClientIps stores IP addresses associated with inbound clients for access control.
 type InboundClientIps struct {
 	Id          int    `json:"id" gorm:"primaryKey;autoIncrement"`
-	ClientEmail string `json:"clientEmail" form:"clientEmail" gorm:"unique"`
+	ClientName string `json:"clientName" form:"clientName" gorm:"column:client_name;unique"`
 	Ips         string `json:"ips" form:"ips"`
 }
 
@@ -364,7 +364,7 @@ type Client struct {
 type ClientEntity struct {
 	Id         int     `json:"id" gorm:"primaryKey;autoIncrement"`                   // Unique identifier
 	UserId     int     `json:"userId" gorm:"index"`                                  // Associated user ID
-	Email      string  `json:"email" form:"email" gorm:"uniqueIndex:idx_user_email"` // Client email identifier (unique per user)
+	Name       string  `json:"name" form:"name" gorm:"uniqueIndex:idx_user_name"` // Client name identifier (unique per user, immutable)
 	UUID       string  `json:"uuid" form:"uuid"`                                     // UUID/ID for VMESS/VLESS
 	Security   string  `json:"security" form:"security"`                             // Security method (e.g., "auto", "aes-128-gcm")
 	Password   string  `json:"password" form:"password"`                             // Client password (for Trojan/Shadowsocks)
@@ -403,6 +403,10 @@ type ClientEntity struct {
 	HWIDEnabled bool          `json:"hwidEnabled" form:"hwidEnabled" gorm:"column:hwid_enabled;default:false"` // Whether HWID restriction is enabled for this client
 	MaxHWID     int           `json:"maxHwid" form:"maxHwid" gorm:"column:max_hwid;default:1"`                 // Maximum number of allowed HWID devices (0 = unlimited)
 	HWIDs       []*ClientHWID `json:"hwids,omitempty" form:"-" gorm:"-"`                                       // Registered HWIDs for this client (loaded from client_hwids table, not stored in ClientEntity table)
+
+	// Concurrent unique source IP limit (separate from HWID)
+	IPLimitEnabled bool `json:"ipLimitEnabled" form:"ipLimitEnabled" gorm:"column:ip_limit_enabled;default:false"`
+	MaxIPs         int  `json:"maxIPs" form:"maxIPs" gorm:"column:max_ips;default:1"`
 
 	// Subscription customization
 	Announce string `json:"announce,omitempty" form:"announce" gorm:"column:announce"` // Custom announcement text for this client (overrides subscription header, max 200 chars, supports base64)

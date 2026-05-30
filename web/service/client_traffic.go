@@ -83,7 +83,7 @@ func MergePanelClientLastConnectedNodeInto(c *model.ClientEntity) {
 	if c == nil {
 		return
 	}
-	if nodeName, ok := panelClientLastConnectedNode(c.Email); ok {
+	if nodeName, ok := panelClientLastConnectedNode(c.Name); ok {
 		c.LastConnectedNode = nodeName
 	}
 }
@@ -198,7 +198,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 
 	// Load ClientEntity records for these emails
 	var clientEntities []*model.ClientEntity
-	err := tx.Model(&model.ClientEntity{}).Where("LOWER(email) IN (?)", emails).Find(&clientEntities).Error
+	err := tx.Model(&model.ClientEntity{}).Where("LOWER(name) IN (?)", emails).Find(&clientEntities).Error
 	if err != nil {
 		return nil, nil, err
 	}
@@ -207,7 +207,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 	if len(clientEntities) < len(emailTrafficMap) {
 		foundByEmail := make(map[string]struct{}, len(clientEntities))
 		for _, c := range clientEntities {
-			foundByEmail[strings.ToLower(strings.TrimSpace(c.Email))] = struct{}{}
+			foundByEmail[strings.ToLower(strings.TrimSpace(c.Name))] = struct{}{}
 		}
 		unmatched := make([]string, 0)
 		for k := range emailTrafficMap {
@@ -244,7 +244,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					if sourceKey == "" {
 						continue
 					}
-					targetKey := strings.ToLower(strings.TrimSpace(c.Email))
+					targetKey := strings.ToLower(strings.TrimSpace(c.Name))
 					if targetKey == "" || targetKey == sourceKey {
 						continue
 					}
@@ -300,7 +300,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 
 	// Update traffic for each client
 	for _, client := range clientEntities {
-		email := strings.ToLower(client.Email)
+		email := strings.ToLower(client.Name)
 		trafficData, ok := emailTrafficMap[email]
 		if !ok {
 			continue
@@ -355,7 +355,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 			if trafficData.Up > 0 || trafficData.Down > 0 {
 				logger.Debugf("AddClientTraffic: client %s - incoming Up: %d, Down: %d, Total: %d | "+
 					"adding Up: %d, Down: %d | current total: %d bytes (Up: %.2f MB, Down: %.2f MB)",
-					client.Email, trafficData.Up, trafficData.Down, newTotal, newDown, newUp, client.Up+client.Down,
+					client.Name, trafficData.Up, trafficData.Down, newTotal, newDown, newUp, client.Up+client.Down,
 					float64(client.Up)/(1024*1024), float64(client.Down)/(1024*1024))
 			}
 		}
@@ -423,7 +423,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					"UpDiff: %d, DownDiff: %d, TimeDiff: %d sec, "+
 					"BytesPerSecUp: %.2f, BytesPerSecDown: %.2f, "+
 					"UpSpeed: %d bps (%.2f Mbps, %.2f Gbps), DownSpeed: %d bps (%.2f Mbps, %.2f Gbps)",
-					client.Email, upDiff, downDiff, timeDiff,
+					client.Name, upDiff, downDiff, timeDiff,
 					bytesPerSecUp, bytesPerSecDown,
 					client.UpSpeed, float64(client.UpSpeed)/(1024*1024), float64(client.UpSpeed)/(1024*1024*1024),
 					client.DownSpeed, float64(client.DownSpeed)/(1024*1024), float64(client.DownSpeed)/(1024*1024*1024))
@@ -482,7 +482,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					found := false
 					for _, inboundId := range clientInboundIds {
 						if tag, ok := inboundIdMap[inboundId]; ok {
-							clientsToDisable[client.Email] = tag
+							clientsToDisable[client.Name] = tag
 							found = true
 							break
 						}
@@ -491,13 +491,13 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					if !found {
 						var inbound model.Inbound
 						if err := tx.Model(&model.Inbound{}).Where("id = ?", clientInboundIds[0]).First(&inbound).Error; err == nil {
-							clientsToDisable[client.Email] = inbound.Tag
+							clientsToDisable[client.Name] = inbound.Tag
 						}
 					}
 				}
 
 				logger.Infof("Client %s marked with status %s: trafficExceeded=%v, timeExpired=%v, currentUsed=%d, newTraffic=%d, finalUsed=%d, total=%d",
-					client.Email, client.Status, finalTrafficExceeded, timeExpired, currentUsed, newTotal, finalUsed, trafficLimit)
+					client.Name, client.Status, finalTrafficExceeded, timeExpired, currentUsed, newTotal, finalUsed, trafficLimit)
 				go func(oldClient model.ClientEntity, newClient *model.ClientEntity) {
 					tgbotService := Tgbot{}
 					if tgbotService.IsRunning() {
@@ -525,7 +525,7 @@ func (s *ClientService) AddClientTraffic(tx *gorm.DB, traffics []*xray.ClientTra
 					}
 				}(client)
 			}
-			addOnline(client.Email)
+			addOnline(client.Name)
 		}
 	}
 
@@ -707,16 +707,16 @@ func (s *ClientService) AddHysteriaInboundTrafficFallbackFromCumulative(tx *gorm
 
 		c := enabled[0]
 		logger.Debugf("Hy2 fallback: apply tag=%s delta(up=%d,down=%d) to client=%s",
-			inb.Tag, d.up, d.down, c.Email)
+			inb.Tag, d.up, d.down, c.Name)
 		c.Up += d.down
 		c.Down += d.up
 		c.AllTime += d.up + d.down
 		c.LastOnline = nowMs
-		key := strings.ToLower(strings.TrimSpace(c.Email))
+		key := strings.ToLower(strings.TrimSpace(c.Name))
 		if key != "" {
 			if _, ok := onlineSet[key]; !ok {
 				onlineSet[key] = struct{}{}
-				onlineList = append(onlineList, c.Email)
+				onlineList = append(onlineList, c.Name)
 			}
 		}
 	}
@@ -885,11 +885,11 @@ func (s *ClientService) applyHysteriaTagDeltas(tx *gorm.DB, tagDelta map[string]
 		state.prevTime = currentTime
 		state.mu.Unlock()
 		liveSpeeds[c.Id] = bpsPair{up: c.UpSpeed, down: c.DownSpeed}
-		key := strings.ToLower(strings.TrimSpace(c.Email))
+		key := strings.ToLower(strings.TrimSpace(c.Name))
 		if key != "" {
 			if _, ok := onlineSet[key]; !ok {
 				onlineSet[key] = struct{}{}
-				onlineList = append(onlineList, c.Email)
+				onlineList = append(onlineList, c.Name)
 			}
 		}
 	}

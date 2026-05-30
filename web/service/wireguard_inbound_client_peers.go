@@ -41,7 +41,7 @@ func randomWireGuardPreSharedKeyB64() (string, error) {
 }
 
 func wireGuardPeerAnyEmail(m map[string]any) string {
-	for _, key := range []string{"email", "clientEmail", "panelEmail"} {
+	for _, key := range []string{"name", "clientName", "panelName", "email", "clientEmail", "panelEmail"} {
 		if s, _ := m[key].(string); strings.TrimSpace(s) != "" {
 			return strings.TrimSpace(s)
 		}
@@ -49,9 +49,11 @@ func wireGuardPeerAnyEmail(m map[string]any) string {
 	return ""
 }
 
-func wireGuardSetPeerEmail(m map[string]any, email string) {
-	m["email"] = email
-	m["clientEmail"] = email
+func wireGuardSetPeerEmail(m map[string]any, name string) {
+	m["name"] = name
+	m["clientName"] = name
+	m["email"] = name
+	m["clientEmail"] = name
 }
 
 func isWireGuardClientActive(c *model.ClientEntity) bool {
@@ -206,7 +208,7 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 	active := make([]*model.ClientEntity, 0, len(clientEntities))
 	assigned := make([]*model.ClientEntity, 0, len(clientEntities))
 	for _, c := range clientEntities {
-		if c == nil || strings.TrimSpace(c.Email) == "" {
+		if c == nil || strings.TrimSpace(c.Name) == "" {
 			continue
 		}
 		assigned = append(assigned, c)
@@ -214,8 +216,8 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 			active = append(active, c)
 		}
 	}
-	sort.Slice(active, func(i, j int) bool { return active[i].Email < active[j].Email })
-	sort.Slice(assigned, func(i, j int) bool { return assigned[i].Email < assigned[j].Email })
+	sort.Slice(active, func(i, j int) bool { return active[i].Name < active[j].Name })
+	sort.Slice(assigned, func(i, j int) bool { return assigned[i].Name < assigned[j].Name })
 
 	inactivePeersAny, _ := settings[PanelWireGuardInactivePeersSettingsKey].([]any)
 	for _, p := range inactivePeersAny {
@@ -235,7 +237,7 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 
 	assignedSet := make(map[string]struct{}, len(assigned))
 	for _, c := range assigned {
-		assignedSet[strings.ToLower(strings.TrimSpace(c.Email))] = struct{}{}
+		assignedSet[strings.ToLower(strings.TrimSpace(c.Name))] = struct{}{}
 	}
 	for k := range byEmail {
 		if _, ok := assignedSet[k]; !ok {
@@ -263,13 +265,13 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 
 	// Ensure keys and IPs for every assigned client; inactive peers stay in the vault with stable keys.
 	for _, c := range assigned {
-		ek := strings.ToLower(strings.TrimSpace(c.Email))
+		ek := strings.ToLower(strings.TrimSpace(c.Name))
 		peer, ok := byEmail[ek]
 		if !ok {
 			peer = make(map[string]any)
 			byEmail[ek] = peer
 		}
-		wireGuardSetPeerEmail(peer, c.Email)
+		wireGuardSetPeerEmail(peer, c.Name)
 
 		pk := strings.TrimSpace(strAny(peer["publicKey"]))
 		priv := strings.TrimSpace(strAny(peer["privateKey"]))
@@ -330,7 +332,7 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 		out = append(out, m)
 	}
 	for _, c := range active {
-		ek := strings.ToLower(strings.TrimSpace(c.Email))
+		ek := strings.ToLower(strings.TrimSpace(c.Name))
 		if p := byEmail[ek]; p != nil {
 			out = append(out, p)
 		}
@@ -342,7 +344,7 @@ func mergeWireGuardSettingsWithClients(settings map[string]any, clientEntities [
 		if isWireGuardClientActive(c) {
 			continue
 		}
-		ek := strings.ToLower(strings.TrimSpace(c.Email))
+		ek := strings.ToLower(strings.TrimSpace(c.Name))
 		if p := byEmail[ek]; p != nil {
 			inactiveOut = append(inactiveOut, p)
 		}

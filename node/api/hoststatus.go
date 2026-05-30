@@ -2,6 +2,7 @@ package api
 
 import (
 	"github.com/konstpic/sharx-code/v2/util/sys"
+	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/mem"
 )
 
@@ -27,6 +28,14 @@ func hostMetricsForStatusJSON() map[string]interface{} {
 	out["hostMem"] = map[string]interface{}{
 		"current": vm.Used,
 		"total":   vm.Total,
+	}
+	if du, err := disk.Usage("/"); err == nil && du != nil {
+		out["hostDisk"] = map[string]interface{}{
+			"current": du.Used,
+			"total":   du.Total,
+		}
+	} else {
+		out["hostDisk"] = map[string]interface{}{"current": uint64(0), "total": uint64(0)}
 	}
 	return out
 }

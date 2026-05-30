@@ -600,6 +600,48 @@ export function SettingsPage() {
                 <option value="error">error</option>
               </SelectNative>
             </Row>
+            <Row label={t("pages.settings.logRotateMaxSize", { defaultValue: "Log max size (MB)" })} hint={t("pages.settings.logRotateMaxSizeDesc", { defaultValue: "Rotate panel and node log files when they exceed this size." })}>
+              <Input
+                type="number"
+                min={1}
+                max={1024}
+                className="max-w-[120px]"
+                value={form.logRotateMaxSizeMB}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  patch("logRotateMaxSizeMB", Number.isFinite(v) ? Math.min(1024, Math.max(1, v)) : 50);
+                }}
+              />
+            </Row>
+            <Row label={t("pages.settings.logRotateMaxAge", { defaultValue: "Log retention (days)" })} hint={t("pages.settings.logRotateMaxAgeDesc", { defaultValue: "Delete rotated log files older than this many days." })}>
+              <Input
+                type="number"
+                min={1}
+                max={365}
+                className="max-w-[120px]"
+                value={form.logRotateMaxAgeDays}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  patch("logRotateMaxAgeDays", Number.isFinite(v) ? Math.min(365, Math.max(1, v)) : 14);
+                }}
+              />
+            </Row>
+            <Row label={t("pages.settings.logRotateMaxBackups", { defaultValue: "Rotated log files" })} hint={t("pages.settings.logRotateMaxBackupsDesc", { defaultValue: "Number of rotated log files to keep per service." })}>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                className="max-w-[120px]"
+                value={form.logRotateMaxBackups}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  patch("logRotateMaxBackups", Number.isFinite(v) ? Math.min(100, Math.max(1, v)) : 5);
+                }}
+              />
+            </Row>
+            <Row label={t("pages.settings.logRotateCompress", { defaultValue: "Compress rotated logs" })} hint={t("pages.settings.logRotateCompressDesc", { defaultValue: "Gzip old log files to save disk space." })}>
+              <Switch checked={form.logRotateCompress} onChange={(on) => patch("logRotateCompress", on)} ariaLabel={t("pages.settings.logRotateCompress", { defaultValue: "Compress rotated logs" })} />
+            </Row>
             <Row label={t("pages.settings.multiNodeMode")} hint={t("pages.settings.multiNodeModeDesc")}>
               <Switch
                 checked={form.multiNodeMode}

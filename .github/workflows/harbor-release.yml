@@ -99,15 +99,17 @@ jobs:
   telemt-prebuilt:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 10
+    env:
+      TELEMT_VERSION: "3.4.12"
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Build Telemt SharX fork (linux/amd64)
+      - name: Download Telemt release (linux/amd64)
         run: |
-          chmod +x scripts/build-telemt-sharx.sh
-          ./scripts/build-telemt-sharx.sh amd64
+          chmod +x scripts/download-telemt.sh
+          ./scripts/download-telemt.sh amd64
 
       - name: Upload telemt binary
         uses: actions/upload-artifact@v4

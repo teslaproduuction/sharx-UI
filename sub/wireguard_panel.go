@@ -100,7 +100,7 @@ func findWireguardPeerForClient(peers []any, clientEmail string) map[string]any 
 		if !ok {
 			continue
 		}
-		for _, key := range []string{"email", "clientEmail", "panelEmail"} {
+		for _, key := range []string{"name", "clientName", "panelName", "email", "clientEmail", "panelEmail"} {
 			if s, _ := m[key].(string); strings.ToLower(strings.TrimSpace(s)) == el {
 				return m
 			}
@@ -110,20 +110,20 @@ func findWireguardPeerForClient(peers []any, clientEmail string) map[string]any 
 }
 
 // findWireguardPeerForClientActiveOrInactive looks in Xray `peers` first, then panel-only inactive vault.
-func findWireguardPeerForClientActiveOrInactive(settings map[string]any, clientEmail string) map[string]any {
+func findWireguardPeerForClientActiveOrInactive(settings map[string]any, clientName string) map[string]any {
 	if settings == nil {
 		return nil
 	}
 	peers, _ := settings["peers"].([]any)
-	if m := findWireguardPeerForClient(peers, clientEmail); m != nil {
+	if m := findWireguardPeerForClient(peers, clientName); m != nil {
 		return m
 	}
 	inactive, _ := settings[service.PanelWireGuardInactivePeersSettingsKey].([]any)
-	return findWireguardPeerForClient(inactive, clientEmail)
+	return findWireguardPeerForClient(inactive, clientName)
 }
 
 // buildWireguardPanelInfo returns text for the panel "View connection keys" modal (not a v2ray:// URL).
-// Optional clientEmail matches a server peer with "email" / "clientEmail" / "panelEmail" in settings JSON.
+// clientName matches a server peer with "name" / "clientName" / "email" / "clientEmail" in settings JSON.
 func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail string) string {
 	if inbound == nil || model.NormalizeProtocol(inbound.Protocol) != model.WireGuard {
 		return ""
@@ -236,15 +236,11 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 	}
 
 	if serverPub != "" {
-		b.WriteString("\n---\n")
 		peerMatch := findWireguardPeerForClientActiveOrInactive(settings, clientEmail)
-		b.WriteString("Example: paste into a WireGuard app (or .conf).\n\n")
 		b.WriteString("[Interface]\n")
 		if peerMatch != nil {
 			if priv, _ := peerMatch["privateKey"].(string); strings.TrimSpace(priv) != "" {
 				b.WriteString("PrivateKey = " + strings.TrimSpace(priv) + "\n")
-			} else {
-				b.WriteString("# PrivateKey = <device private key, public key must be on the server peer row>\n")
 			}
 			if aip, ok := peerMatch["allowedIPs"].([]any); ok && len(aip) > 0 {
 				first := strings.TrimSpace(fmt.Sprint(aip[0]))
@@ -253,28 +249,18 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 						first += "/32"
 					}
 					b.WriteString("Address = " + first + "\n")
-				} else {
-					b.WriteString("# Address = <from AllowedIPs for this device>\n")
 				}
-			} else {
-				b.WriteString("# Address = <e.g. 10.8.0.2/32 — from AllowedIPs for this device>\n")
 			}
 			if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
 				b.WriteString("DNS = " + strings.Join(dns, ", ") + "\n")
 			}
-		} else {
-			b.WriteString("# PrivateKey = <your device: generate in the app, then put the public key on the server peer row>\n")
-			b.WriteString("# Address = <e.g. 10.8.0.2/32 — from AllowedIPs for this device>\n")
-			if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
-				b.WriteString("DNS = " + strings.Join(dns, ", ") + "\n")
-			}
+		} else if dns := wireguardClientDNSFromSettings(settings); len(dns) > 0 {
+			b.WriteString("DNS = " + strings.Join(dns, ", ") + "\n")
 		}
 		b.WriteString("\n[Peer]\n")
 		b.WriteString("PublicKey = " + serverPub + "\n")
 		if firstEndpoint != "" {
 			b.WriteString("Endpoint = " + firstEndpoint + "\n")
-		} else {
-			b.WriteString("# Endpoint = host:port (set when Endpoint appears above)\n")
 		}
 		if peerMatch != nil {
 			if psk, _ := peerMatch["preSharedKey"].(string); strings.TrimSpace(psk) != "" {
@@ -282,11 +268,7 @@ func (s *SubService) buildWireguardPanelInfo(inbound *model.Inbound, clientEmail
 			}
 			if ka := anyInt64(peerMatch["keepAlive"]); ka > 0 {
 				b.WriteString(fmt.Sprintf("PersistentKeepalive = %d\n", ka))
-			} else {
-				b.WriteString(fmt.Sprintf("PersistentKeepalive = 25\n"))
 			}
-		} else {
-			b.WriteString("PersistentKeepalive = 25\n")
 		}
 		b.WriteString("AllowedIPs = 0.0.0.0/0, ::/0\n")
 	}

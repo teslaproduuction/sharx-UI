@@ -519,6 +519,8 @@ export type TelemtFormState = {
   metricsPort: string;
   apiEnabled: boolean;
   apiListen: string;
+  /** [server].proxy_protocol — accept PROXY Protocol from upstream (nginx/haproxy). */
+  proxyProtocol: boolean;
 };
 
 export function defaultTelemtForm(): TelemtFormState {
@@ -540,6 +542,7 @@ export function defaultTelemtForm(): TelemtFormState {
     metricsPort: "",
     apiEnabled: true,
     apiListen: "127.0.0.1:9091",
+    proxyProtocol: false,
   };
 }
 
@@ -599,6 +602,7 @@ export function parseTelemtSettingsToForm(settingsStr: string): TelemtFormState 
     if (typeof tm.apiListen === "string" && tm.apiListen.trim()) {
       base.apiListen = tm.apiListen.trim();
     }
+    if (typeof tm.proxyProtocol === "boolean") base.proxyProtocol = tm.proxyProtocol;
   } catch {
     /* keep base */
   }
@@ -640,6 +644,7 @@ export function buildTelemtSettingsJson(form: TelemtFormState): string {
     (telemt.censorship as Record<string, unknown>).unknownSniAction = unk;
   }
   if (Number.isFinite(mp) && mp > 0) telemt.metricsPort = mp;
+  if (form.proxyProtocol) telemt.proxyProtocol = true;
   return JSON.stringify({ telemt });
 }
 
@@ -681,6 +686,8 @@ export type SniffingFormState = {
   destFakedns: boolean;
   metadataOnly: boolean;
   routeOnly: boolean;
+  /** Comma or newline-separated list of domains to exclude from sniffing */
+  domainsExcluded: string;
 };
 
 export function defaultSniffingForm(): SniffingFormState {
@@ -692,6 +699,7 @@ export function defaultSniffingForm(): SniffingFormState {
     destFakedns: false,
     metadataOnly: false,
     routeOnly: false,
+    domainsExcluded: "",
   };
 }
 
@@ -710,6 +718,12 @@ export function parseSniffingToForm(json: string): SniffingFormState {
       base.destQuic = set.has("quic");
       base.destFakedns = set.has("fakedns");
     }
+    const de = root.domainsExcluded;
+    if (Array.isArray(de)) {
+      base.domainsExcluded = de.filter((x) => typeof x === "string").join("\n");
+    } else if (typeof de === "string" && de.trim()) {
+      base.domainsExcluded = de;
+    }
   } catch {
     /* defaults */
   }
@@ -722,12 +736,18 @@ export function buildSniffingFromForm(state: SniffingFormState): string {
   if (state.destTls) destOverride.push("tls");
   if (state.destQuic) destOverride.push("quic");
   if (state.destFakedns) destOverride.push("fakedns");
-  return JSON.stringify({
+  const obj: Record<string, unknown> = {
     enabled: state.enabled,
     destOverride,
     metadataOnly: state.metadataOnly,
     routeOnly: state.routeOnly,
-  });
+  };
+  const excluded = state.domainsExcluded
+    .split(/[,\n]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (excluded.length > 0) obj.domainsExcluded = excluded;
+  return JSON.stringify(obj);
 }
 
 /** Stream JSON for Hysteria / Hysteria2 inbounds (network hysteria). */
@@ -798,7 +818,7 @@ export const REALITY_FINGERPRINTS = [
 export type XhttpHeaderRow = { name: string; value: string };
 
 /** MODE_OPTION from 3x-ui inbound xHTTPStreamSettings. */
-export const XHTTP_MODES = ["auto", "packet-up", "stream-up", "stream-one"] as const;
+export const XHTTP_MODES = ["auto", "packet-up", "stream-up", "stream-one", "gun-stream"] as const;
 
 function xhttpHeadersFromXrayJson(raw: unknown): XhttpHeaderRow[] {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return [];
@@ -830,16 +850,34 @@ function xhttpHeadersToV2Map(rows: XhttpHeaderRow[]): Record<string, string> {
   return o;
 }
 
+/** KCP / QUIC obfuscation header types. */
+export type HeaderObfuscationType = "none" | "srtp" | "utp" | "wechat-video" | "dtls" | "wireguard";
+
 /** Structured stream / transport fields (non-hysteria); serialized to Xray streamSettings JSON. */
 export type StreamFormState = {
-  network: "tcp" | "ws" | "grpc" | "quic" | "xhttp";
+  network: "tcp" | "ws" | "grpc" | "quic" | "xhttp" | "httpupgrade" | "kcp" | "h2";
   security: "none" | "tls" | "reality";
   tcpHeaderType: "none" | "http";
   acceptProxyProtocol: boolean;
   /** QUIC transport (when network === quic) */
   quicSecurity: "none" | "aes-128-gcm" | "chacha20-poly1305";
   quicKey: string;
-  quicHeaderType: "none" | "utp" | "wechat-video" | "dtls" | "wireguard" | "srtp";
+  quicHeaderType: HeaderObfuscationType;
+  /** KCP (mKCP) transport */
+  kcpHeaderType: HeaderObfuscationType;
+  kcpSeed: string;
+  kcpCongestion: boolean;
+  kcpMtu: number;
+  kcpTti: number;
+  kcpUplinkCapacity: number;
+  kcpDownlinkCapacity: number;
+  kcpReadBuffer: number;
+  kcpWriteBuffer: number;
+  /** HTTP/2 transport (h2) */
+  h2Path: string;
+  h2Host: string;
+  h2ReadIdleTimeout: number;
+  h2HealthCheckTimeout: number;
   tlsServerName: string;
   tlsAlpn: string;
   tlsAllowInsecure: boolean;
@@ -876,7 +914,32 @@ export type StreamFormState = {
   xhttpUplinkDataKey: string;
   xhttpUplinkChunkSize: number;
   grpcServiceName: string;
+  grpcMultiMode: boolean;
+  grpcIdleTimeout: number;
+  grpcHealthCheckTimeout: number;
+  grpcPermitWithoutStream: boolean;
+  /** TCP HTTP header camouflage extended fields (when tcpHeaderType === "http") */
+  tcpHttpPath: string;
+  tcpHttpRequestHeaders: XhttpHeaderRow[];
+  tcpHttpResponseStatus: string;
+  tcpHttpResponseReason: string;
+  tcpHttpResponseHeaders: XhttpHeaderRow[];
+  /** Hysteria2 masquerade URL (returns real HTTP response to browser clients) */
+  hysteria2Masquerade: string;
+  /** Inbound sockopt */
+  sockoptTcpFastOpen: boolean;
+  sockoptTproxy: "off" | "redirect" | "tproxy";
+  sockoptMark: number;
+  sockoptTcpKeepAlive: number;
+  /** TLS extra: OCSP stapling cache TTL (seconds, 0 = disabled) */
+  tlsOcspStapling: number;
+  /** TLS mutual auth: require client certificate */
+  tlsVerifyClientCertificate: boolean;
+  /** TLS: pinned peer certificate SHA-256 hashes (comma or newline separated) */
+  tlsPinnedSha256: string;
   hysteriaUdpIdleTimeout: number;
+  hysteriaObfsType: "" | "salamander";
+  hysteriaObfsPassword: string;
   /** Hysteria QUIC-TLS (3x-ui–style tlsSettings); unused for TCP/WS editor paths. */
   tlsMaxVersion: "" | "1.2" | "1.3";
   tlsRejectUnknownSni: boolean;
@@ -916,6 +979,19 @@ export function defaultStreamForm(): StreamFormState {
     quicSecurity: "none",
     quicKey: "",
     quicHeaderType: "none",
+    kcpHeaderType: "none",
+    kcpSeed: "",
+    kcpCongestion: false,
+    kcpMtu: 1350,
+    kcpTti: 20,
+    kcpUplinkCapacity: 50,
+    kcpDownlinkCapacity: 20,
+    kcpReadBuffer: 2,
+    kcpWriteBuffer: 2,
+    h2Path: "/",
+    h2Host: "",
+    h2ReadIdleTimeout: 10,
+    h2HealthCheckTimeout: 15,
     tlsServerName: "",
     tlsAlpn: "http/1.1",
     tlsAllowInsecure: false,
@@ -950,7 +1026,26 @@ export function defaultStreamForm(): StreamFormState {
     xhttpUplinkDataKey: "",
     xhttpUplinkChunkSize: 0,
     grpcServiceName: "",
+    grpcMultiMode: false,
+    grpcIdleTimeout: 0,
+    grpcHealthCheckTimeout: 0,
+    grpcPermitWithoutStream: false,
+    tcpHttpPath: "/",
+    tcpHttpRequestHeaders: [],
+    tcpHttpResponseStatus: "200",
+    tcpHttpResponseReason: "OK",
+    tcpHttpResponseHeaders: [],
+    hysteria2Masquerade: "",
+    sockoptTcpFastOpen: false,
+    sockoptTproxy: "off",
+    sockoptMark: 0,
+    sockoptTcpKeepAlive: 0,
+    tlsOcspStapling: 0,
+    tlsVerifyClientCertificate: false,
+    tlsPinnedSha256: "",
     hysteriaUdpIdleTimeout: 60,
+    hysteriaObfsType: "",
+    hysteriaObfsPassword: "",
     tlsMaxVersion: "",
     tlsRejectUnknownSni: false,
     tlsDisableSystemRoot: false,
@@ -991,6 +1086,8 @@ export function defaultStreamFormHysteria(): StreamFormState {
     tlsUtlsFingerprint: "chrome",
     tlsEchForceQuery: "none",
     hysteriaUdpIdleTimeout: 60,
+    hysteriaObfsType: "",
+    hysteriaObfsPassword: "",
   };
 }
 
@@ -1056,6 +1153,30 @@ function parseHysteriaTlsFormFields(
       base.hysteriaUdpIdleTimeout = Math.round(timeout);
     }
   }
+  const fm = root.finalmask as Record<string, unknown> | undefined;
+  const udp = fm?.udp;
+  if (Array.isArray(udp)) {
+    for (const item of udp) {
+      if (!item || typeof item !== "object") continue;
+      const m = item as Record<string, unknown>;
+      if (m.type === "salamander") {
+        const settings =
+          m.settings && typeof m.settings === "object"
+            ? (m.settings as Record<string, unknown>)
+            : null;
+        const settingsPwd =
+          settings && typeof settings.password === "string" ? settings.password : "";
+        const legacyPwd = typeof m.password === "string" ? m.password : "";
+        const pwd = settingsPwd.trim() ? settingsPwd : legacyPwd;
+        if (pwd.trim()) {
+          base.hysteriaObfsType = "salamander";
+          base.hysteriaObfsPassword = pwd;
+          break;
+        }
+      }
+    }
+  }
+  if (typeof root.masquerade === "string") base.hysteria2Masquerade = root.masquerade;
   const tls = root.tlsSettings as Record<string, unknown> | undefined;
   if (!tls) return;
   if (typeof tls.serverName === "string") base.tlsServerName = tls.serverName;
@@ -1145,12 +1266,19 @@ function buildHysteriaStreamSettingsFromForm(
   };
   // Match common Xray Hy2 setups (e.g. other panels): BBR on QUIC stack; keeps client/server congestion aligned.
   if (version === 2) {
-    out.finalmask = {
+    const finalmask: Record<string, unknown> = {
       quicParams: {
         debug: false,
         congestion: "bbr",
       },
     };
+    const obfsPwd = state.hysteriaObfsPassword.trim();
+    if (state.hysteriaObfsType === "salamander" && [...obfsPwd].length >= 4) {
+      finalmask.udp = [{ type: "salamander", settings: { password: obfsPwd } }];
+    }
+    out.finalmask = finalmask;
+    const masquerade = state.hysteria2Masquerade.trim();
+    if (masquerade) out.masquerade = masquerade;
   }
   return JSON.stringify(out);
 }
@@ -1167,16 +1295,19 @@ function certArrayToPem(lines: unknown): string {
   return lines.filter((x) => typeof x === "string").join("\n");
 }
 
-function isQuicHeaderType(s: string): s is StreamFormState["quicHeaderType"] {
+function isObfuscationHeaderType(s: string): s is HeaderObfuscationType {
   return (
     s === "none" ||
+    s === "srtp" ||
     s === "utp" ||
     s === "wechat-video" ||
     s === "dtls" ||
-    s === "wireguard" ||
-    s === "srtp"
+    s === "wireguard"
   );
 }
+
+/** @deprecated use isObfuscationHeaderType */
+const isQuicHeaderType = isObfuscationHeaderType;
 
 function alpnToString(alpn: unknown): string {
   if (!Array.isArray(alpn)) return "http/1.1";
@@ -1233,9 +1364,10 @@ function parseStreamSettingsShadowsocksForm(json: string): StreamFormState {
     const root = JSON.parse(json) as Record<string, unknown>;
     const net = root.network;
     base.network = net === "ws" ? "ws" : "tcp";
+    if (root.acceptProxyProtocol === true) base.acceptProxyProtocol = true;
     const tcp = root.tcpSettings as Record<string, unknown> | undefined;
     if (tcp) {
-      base.acceptProxyProtocol = tcp.acceptProxyProtocol === true;
+      if (!base.acceptProxyProtocol) base.acceptProxyProtocol = tcp.acceptProxyProtocol === true;
       base.tcpHeaderType = parseHeaderType(tcp);
     }
     const ws = root.wsSettings as Record<string, unknown> | undefined;
@@ -1314,7 +1446,16 @@ export function parseStreamSettingsToForm(
   try {
     const root = JSON.parse(json) as Record<string, unknown>;
     const net = root.network;
-    if (net === "ws" || net === "grpc" || net === "tcp" || net === "quic" || net === "xhttp") {
+    if (
+      net === "ws" ||
+      net === "grpc" ||
+      net === "tcp" ||
+      net === "quic" ||
+      net === "xhttp" ||
+      net === "httpupgrade" ||
+      net === "kcp" ||
+      net === "h2"
+    ) {
       base.network = net;
     }
     const sec = root.security;
@@ -1357,10 +1498,38 @@ export function parseStreamSettingsToForm(
         if (typeof rst.mldsa65Verify === "string") base.realityMldsa65Verify = rst.mldsa65Verify;
       }
     }
+    // Top-level acceptProxyProtocol (all transports) takes precedence.
+    if (root.acceptProxyProtocol === true) base.acceptProxyProtocol = true;
     const tcp = root.tcpSettings as Record<string, unknown> | undefined;
     if (tcp) {
-      base.acceptProxyProtocol = tcp.acceptProxyProtocol === true;
+      if (!base.acceptProxyProtocol) base.acceptProxyProtocol = tcp.acceptProxyProtocol === true;
       base.tcpHeaderType = parseHeaderType(tcp);
+      if (base.tcpHeaderType === "http") {
+        const hdr = tcp.header as Record<string, unknown> | undefined;
+        const req = hdr?.request as Record<string, unknown> | undefined;
+        const resp = hdr?.response as Record<string, unknown> | undefined;
+        if (req) {
+          const paths = req.path;
+          if (Array.isArray(paths) && typeof paths[0] === "string") base.tcpHttpPath = paths[0];
+          else if (typeof paths === "string") base.tcpHttpPath = paths;
+          base.tcpHttpRequestHeaders = xhttpHeadersFromXrayJson(req.headers);
+        }
+        if (resp) {
+          if (typeof resp.status === "string") base.tcpHttpResponseStatus = resp.status;
+          if (typeof resp.reason === "string") base.tcpHttpResponseReason = resp.reason;
+          base.tcpHttpResponseHeaders = xhttpHeadersFromXrayJson(resp.headers);
+        }
+      }
+    }
+    const sockopt = root.sockopt as Record<string, unknown> | undefined;
+    if (sockopt) {
+      if (sockopt.tcpFastOpen === true) base.sockoptTcpFastOpen = true;
+      const tp = sockopt.tproxy;
+      if (tp === "redirect" || tp === "tproxy") base.sockoptTproxy = tp;
+      if (typeof sockopt.mark === "number" && sockopt.mark > 0) base.sockoptMark = sockopt.mark;
+      if (typeof sockopt.tcpKeepAliveInterval === "number" && sockopt.tcpKeepAliveInterval >= 0) {
+        base.sockoptTcpKeepAlive = sockopt.tcpKeepAliveInterval;
+      }
     }
     const ws = root.wsSettings as Record<string, unknown> | undefined;
     if (ws) {
@@ -1369,9 +1538,20 @@ export function parseStreamSettingsToForm(
       const host = headers?.Host ?? headers?.host;
       if (typeof host === "string") base.wsHost = host;
     }
+    const hu = root.httpupgradeSettings as Record<string, unknown> | undefined;
+    if (hu) {
+      if (typeof hu.path === "string") base.wsPath = hu.path;
+      const headers = hu.headers as Record<string, unknown> | undefined;
+      const host = headers?.Host ?? headers?.host;
+      if (typeof host === "string") base.wsHost = host;
+    }
     const grpc = root.grpcSettings as Record<string, unknown> | undefined;
-    if (grpc && typeof grpc.serviceName === "string") {
-      base.grpcServiceName = grpc.serviceName;
+    if (grpc) {
+      if (typeof grpc.serviceName === "string") base.grpcServiceName = grpc.serviceName;
+      if (typeof grpc.multiMode === "boolean") base.grpcMultiMode = grpc.multiMode;
+      if (typeof grpc.idle_timeout === "number" && grpc.idle_timeout >= 0) base.grpcIdleTimeout = grpc.idle_timeout;
+      if (typeof grpc.health_check_timeout === "number" && grpc.health_check_timeout >= 0) base.grpcHealthCheckTimeout = grpc.health_check_timeout;
+      if (typeof grpc.permit_without_stream === "boolean") base.grpcPermitWithoutStream = grpc.permit_without_stream;
     }
     const quic = root.quicSettings as Record<string, unknown> | undefined;
     if (quic) {
@@ -1382,8 +1562,42 @@ export function parseStreamSettingsToForm(
       if (typeof quic.key === "string") base.quicKey = quic.key;
       const qh = quic.header as Record<string, unknown> | undefined;
       const qht = qh?.type;
-      if (typeof qht === "string" && isQuicHeaderType(qht)) {
+      if (typeof qht === "string" && isObfuscationHeaderType(qht)) {
         base.quicHeaderType = qht;
+      }
+    }
+    if (net === "kcp") {
+      const kcp = root.kcpSettings as Record<string, unknown> | undefined;
+      if (kcp) {
+        const kh = kcp.header as Record<string, unknown> | undefined;
+        const kht = kh?.type;
+        if (typeof kht === "string" && isObfuscationHeaderType(kht)) base.kcpHeaderType = kht;
+        if (typeof kcp.seed === "string") base.kcpSeed = kcp.seed;
+        if (typeof kcp.congestion === "boolean") base.kcpCongestion = kcp.congestion;
+        if (typeof kcp.mtu === "number" && kcp.mtu > 0) base.kcpMtu = kcp.mtu;
+        if (typeof kcp.tti === "number" && kcp.tti > 0) base.kcpTti = kcp.tti;
+        if (typeof kcp.uplinkCapacity === "number" && kcp.uplinkCapacity >= 0) base.kcpUplinkCapacity = kcp.uplinkCapacity;
+        if (typeof kcp.downlinkCapacity === "number" && kcp.downlinkCapacity >= 0) base.kcpDownlinkCapacity = kcp.downlinkCapacity;
+        if (typeof kcp.readBufferSize === "number" && kcp.readBufferSize > 0) base.kcpReadBuffer = kcp.readBufferSize;
+        if (typeof kcp.writeBufferSize === "number" && kcp.writeBufferSize > 0) base.kcpWriteBuffer = kcp.writeBufferSize;
+      }
+    }
+    if (net === "h2") {
+      const h2 = root.httpSettings as Record<string, unknown> | undefined;
+      if (h2) {
+        if (typeof h2.path === "string") base.h2Path = h2.path;
+        const h2host = h2.host;
+        if (Array.isArray(h2host) && h2host.length > 0 && typeof h2host[0] === "string") {
+          base.h2Host = h2host.join(",");
+        } else if (typeof h2host === "string") {
+          base.h2Host = h2host;
+        }
+        if (typeof h2.read_idle_timeout === "number" && h2.read_idle_timeout > 0) {
+          base.h2ReadIdleTimeout = h2.read_idle_timeout;
+        }
+        if (typeof h2.health_check_timeout === "number" && h2.health_check_timeout > 0) {
+          base.h2HealthCheckTimeout = h2.health_check_timeout;
+        }
       }
     }
     if (net === "xhttp") {
@@ -1432,6 +1646,16 @@ export function parseStreamSettingsToForm(
         if (typeof tls.cipherSuites === "string") {
           base.tlsCipherSuites = tls.cipherSuites;
         }
+        if (typeof tls.ocspStapling === "number" && tls.ocspStapling >= 0) {
+          base.tlsOcspStapling = tls.ocspStapling;
+        }
+        if (tls.verifyClientCertificate === true) base.tlsVerifyClientCertificate = true;
+        const pinned = tls.pinnedPeerCertificateChainSha256;
+        if (Array.isArray(pinned)) {
+          base.tlsPinnedSha256 = pinned.filter((x) => typeof x === "string").join("\n");
+        } else if (typeof pinned === "string" && pinned.trim()) {
+          base.tlsPinnedSha256 = pinned;
+        }
         const certs = tls.certificates;
         if (Array.isArray(certs) && certs.length > 0 && typeof certs[0] === "object" && certs[0] !== null) {
           const c0 = certs[0] as Record<string, unknown>;
@@ -1479,10 +1703,33 @@ export function buildStreamSettingsFromForm(
     security: state.security,
   };
 
+  // Always store acceptProxyProtocol at the top level so the Go builder can lift it
+  // to the Xray inbound level (works for all transports, not just TCP).
+  if (state.acceptProxyProtocol) {
+    out.acceptProxyProtocol = true;
+  }
+
   if (state.network === "tcp") {
+    const tcpHeader: Record<string, unknown> = { type: state.tcpHeaderType };
+    if (state.tcpHeaderType === "http") {
+      const reqHeaders = xhttpHeadersToV2Map(state.tcpHttpRequestHeaders);
+      const respHeaders = xhttpHeadersToV2Map(state.tcpHttpResponseHeaders);
+      tcpHeader.request = {
+        version: "1.1",
+        method: "GET",
+        path: [state.tcpHttpPath.trim() || "/"],
+        headers: Object.keys(reqHeaders).length > 0 ? reqHeaders : undefined,
+      };
+      tcpHeader.response = {
+        version: "1.1",
+        status: state.tcpHttpResponseStatus.trim() || "200",
+        reason: state.tcpHttpResponseReason.trim() || "OK",
+        headers: Object.keys(respHeaders).length > 0 ? respHeaders : undefined,
+      };
+    }
     out.tcpSettings = {
       acceptProxyProtocol: state.acceptProxyProtocol,
-      header: { type: state.tcpHeaderType },
+      header: tcpHeader,
     };
   } else if (state.network === "ws") {
     const headers: Record<string, string> = {};
@@ -1493,11 +1740,24 @@ export function buildStreamSettingsFromForm(
       path: state.wsPath.trim() || "/",
       headers,
     };
-  } else if (state.network === "grpc") {
-    out.grpcSettings = {
-      serviceName: state.grpcServiceName.trim(),
-      multiMode: false,
+  } else if (state.network === "httpupgrade") {
+    const headers: Record<string, string> = {};
+    if (state.wsHost.trim()) {
+      headers.Host = state.wsHost.trim();
+    }
+    out.httpupgradeSettings = {
+      path: state.wsPath.trim() || "/",
+      headers,
     };
+  } else if (state.network === "grpc") {
+    const grpcSettings: Record<string, unknown> = {
+      serviceName: state.grpcServiceName.trim(),
+      multiMode: state.grpcMultiMode,
+    };
+    if (state.grpcIdleTimeout > 0) grpcSettings.idle_timeout = state.grpcIdleTimeout;
+    if (state.grpcHealthCheckTimeout > 0) grpcSettings.health_check_timeout = state.grpcHealthCheckTimeout;
+    if (state.grpcPermitWithoutStream) grpcSettings.permit_without_stream = true;
+    out.grpcSettings = grpcSettings;
   } else if (state.network === "quic") {
     out.quicSettings = {
       security: state.quicSecurity,
@@ -1529,6 +1789,45 @@ export function buildStreamSettingsFromForm(
       uplinkDataKey: state.xhttpUplinkDataKey.trim(),
       uplinkChunkSize: Math.max(0, Math.round(Number(state.xhttpUplinkChunkSize)) || 0),
     };
+  } else if (state.network === "kcp") {
+    out.kcpSettings = {
+      mtu: Math.max(576, Math.round(Number(state.kcpMtu)) || 1350),
+      tti: Math.max(1, Math.round(Number(state.kcpTti)) || 20),
+      uplinkCapacity: Math.max(0, Math.round(Number(state.kcpUplinkCapacity)) || 50),
+      downlinkCapacity: Math.max(0, Math.round(Number(state.kcpDownlinkCapacity)) || 20),
+      congestion: state.kcpCongestion,
+      readBufferSize: Math.max(1, Math.round(Number(state.kcpReadBuffer)) || 2),
+      writeBufferSize: Math.max(1, Math.round(Number(state.kcpWriteBuffer)) || 2),
+      header: { type: state.kcpHeaderType },
+      seed: state.kcpSeed.trim(),
+    };
+  } else if (state.network === "h2") {
+    const h2hosts = state.h2Host
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    const h2Settings: Record<string, unknown> = {
+      path: state.h2Path.trim() || "/",
+      host: h2hosts,
+    };
+    if (state.h2ReadIdleTimeout > 0) h2Settings.read_idle_timeout = state.h2ReadIdleTimeout;
+    if (state.h2HealthCheckTimeout > 0) h2Settings.health_check_timeout = state.h2HealthCheckTimeout;
+    out.httpSettings = h2Settings;
+  }
+
+  // Sockopt for inbound (stored inside streamSettings, Xray lifts it automatically)
+  const hasSockopt =
+    state.sockoptTcpFastOpen ||
+    state.sockoptTproxy !== "off" ||
+    state.sockoptMark > 0 ||
+    state.sockoptTcpKeepAlive > 0;
+  if (hasSockopt) {
+    const sockopt: Record<string, unknown> = {};
+    if (state.sockoptTcpFastOpen) sockopt.tcpFastOpen = true;
+    if (state.sockoptTproxy !== "off") sockopt.tproxy = state.sockoptTproxy;
+    if (state.sockoptMark > 0) sockopt.mark = state.sockoptMark;
+    if (state.sockoptTcpKeepAlive > 0) sockopt.tcpKeepAliveInterval = state.sockoptTcpKeepAlive;
+    out.sockopt = sockopt;
   }
 
   if (state.security === "reality") {
@@ -1564,7 +1863,7 @@ export function buildStreamSettingsFromForm(
       .map((s) => s.trim())
       .filter(Boolean);
     const certificates = tlsCertificatesFromStreamForm(state);
-    out.tlsSettings = {
+    const tlsSettings: Record<string, unknown> = {
       serverName: state.tlsServerName.trim(),
       alpn: alpn.length > 0 ? alpn : ["http/1.1"],
       allowInsecure: state.tlsAllowInsecure,
@@ -1573,6 +1872,14 @@ export function buildStreamSettingsFromForm(
       cipherSuites: state.tlsCipherSuites.trim(),
       preferServerCipherSuites: false,
     };
+    if (state.tlsOcspStapling > 0) tlsSettings.ocspStapling = state.tlsOcspStapling;
+    if (state.tlsVerifyClientCertificate) tlsSettings.verifyClientCertificate = true;
+    const pinned = state.tlsPinnedSha256
+      .split(/[,\n]+/)
+      .map((s) => s.trim())
+      .filter(Boolean);
+    if (pinned.length > 0) tlsSettings.pinnedPeerCertificateChainSha256 = pinned;
+    out.tlsSettings = tlsSettings;
   }
 
   return JSON.stringify(out);
@@ -1669,6 +1976,9 @@ export type FirstClientPatch = {
   naiveServerForm?: NaiveServerFormState;
   /** TUIC (Phase 2). */
   tuicForm?: TUICFormState;
+  /** VLESS encryption/decryption (upstream v1.3.9 — post-quantum ML-KEM handshake). */
+  vlessEncryption?: string;
+  vlessDecryption?: string;
 };
 
 export function buildSettingsJson(
@@ -1699,7 +2009,8 @@ export function buildSettingsJson(
             updated_at: now,
           },
         ],
-        decryption: "none",
+        decryption: opts.vlessDecryption || "none",
+        encryption: opts.vlessEncryption || "none",
         fallbacks: fallbackRowsSettingsToJson(opts.vlessTrojanFallbacks ?? []),
       };
       return JSON.stringify(o);
@@ -1849,6 +2160,8 @@ export function parseFirstClientFromSettings(
       if (protocol === "vless" || protocol === "trojan") {
         return {
           vlessTrojanFallbacks: parseVlessTrojanFallbackRowsFromSettings(settingsStr, protocol),
+          vlessDecryption: typeof root.decryption === "string" ? root.decryption : "none",
+          vlessEncryption: typeof root.encryption === "string" ? root.encryption : "none"
         };
       }
       return {};
@@ -1861,6 +2174,8 @@ export function parseFirstClientFromSettings(
     if (typeof c.auth === "string") out.hysteriaAuth = c.auth;
     else if (typeof c.password === "string" && (protocol === "hysteria" || protocol === "hysteria2"))
       out.hysteriaAuth = c.password;
+    if (typeof root.encryption === "string") out.vlessEncryption = root.encryption;
+    if (typeof root.decryption === "string") out.vlessDecryption = root.decryption;
     if (typeof root.method === "string") out.ssMethod = root.method;
     if (typeof root.password === "string") out.ssPassword = root.password;
     if (protocol === "vless" || protocol === "trojan") {
@@ -1946,6 +2261,8 @@ export function mergeFirstClientIntoSettings(
     case "vless":
       first.id = typeof first.id === "string" && first.id ? first.id : newClientUUID();
       first.flow = patch.vlessFlow.trim();
+      root.decryption = patch.vlessDecryption || "none";
+      root.encryption = patch.vlessEncryption || "none";
       break;
     case "vmess":
       first.id = typeof first.id === "string" && first.id ? first.id : newClientUUID();
@@ -1969,7 +2286,15 @@ export function mergeFirstClientIntoSettings(
   }
 
   if (protocol === "vless" || protocol === "trojan") {
-    root.fallbacks = fallbackRowsSettingsToJson(patch.vlessTrojanFallbacks ?? []);
+      const fallbacks = fallbackRowsSettingsToJson(
+        patch.vlessTrojanFallbacks ?? []
+      );
+
+      if (fallbacks.length > 0) {
+         root.fallbacks = fallbacks;
+      } else {
+         delete root.fallbacks;
+      }
   }
 
   clients = [first, ...clients.slice(1)];

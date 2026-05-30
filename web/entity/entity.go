@@ -130,6 +130,12 @@ type AllSetting struct {
 	// Panel log level setting (overrides XUI_LOG_LEVEL env var)
 	// Valid values: "debug", "info", "notice", "warning", "error"
 	PanelLogLevel string `json:"panelLogLevel" form:"panelLogLevel"` // Panel log level (default: "info")
+
+	// Log rotation (panel + node workers)
+	LogRotateMaxSizeMB  int  `json:"logRotateMaxSizeMB" form:"logRotateMaxSizeMB"`
+	LogRotateMaxAgeDays int  `json:"logRotateMaxAgeDays" form:"logRotateMaxAgeDays"`
+	LogRotateMaxBackups int  `json:"logRotateMaxBackups" form:"logRotateMaxBackups"`
+	LogRotateCompress   bool `json:"logRotateCompress" form:"logRotateCompress"`
 	// JSON subscription routing rules
 }
 

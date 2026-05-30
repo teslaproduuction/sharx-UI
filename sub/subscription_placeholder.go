@@ -19,7 +19,7 @@ func trafficFromClientEntity(c *model.ClientEntity) xray.ClientTraffic {
 	}
 	trafficLimit := int64(c.TotalGB * 1024 * 1024 * 1024)
 	return xray.ClientTraffic{
-		Email:      c.Email,
+		Email:      c.Name,
 		Up:         c.Up,
 		Down:       c.Down,
 		Total:      trafficLimit,

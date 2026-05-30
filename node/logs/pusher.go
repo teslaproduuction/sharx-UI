@@ -106,6 +106,7 @@ func InitLogPusher(nodeAddress string) {
 type nodeConfigData struct {
 	PanelURL    string `json:"panelUrl"`
 	NodeAddress string `json:"nodeAddress"`
+	NodeId      int    `json:"nodeId,omitempty"`
 }
 
 // getNodeConfig is a helper to get node config without circular dependency.
@@ -314,6 +315,9 @@ func (lp *LogPusher) pushLogs(items []nodeLogItem) {
 	reqBody := map[string]interface{}{
 		"nodeAddress": lp.nodeAddress,
 		"entries":     entries,
+	}
+	if cfg := getNodeConfig(); cfg != nil && cfg.NodeId > 0 {
+		reqBody["nodeId"] = cfg.NodeId
 	}
 
 	jsonData, err := json.Marshal(reqBody)

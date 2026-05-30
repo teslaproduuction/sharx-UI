@@ -63,7 +63,7 @@ services:
       # XUI_WEB_CERT_FILE:  /cert/fullchain.pem
       # XUI_WEB_KEY_FILE: /cert/privkey.pem
       # XUI_WEB_DOMAIN: panel.example.com
-      # XUI_WEB_PORT: 8443
+      XUI_WEB_PORT: 2053
       
       # PostgreSQL: при network_mode: host контейнер не в sharx_network — имя postgres не резолвится.
       # Порт БД проброшен на хост (5432:5432), подключайтесь к 127.0.0.1.
