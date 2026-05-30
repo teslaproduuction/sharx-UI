@@ -32,46 +32,25 @@ RUN npm run build && cp -R out /webpanel
 # Prebuilt linux-amd64-glibc.tar.gz from upstream releases — no Go build step
 # (panel/node hosts may have only 1 GB RAM; we never build sing-box on the node).
 # ========================================================
-FROM golang:1.26-bookworm AS singbox-fetch
-# Build from hiddify-sing-box master HEAD with CGO disabled so the resulting
-# binary is statically-linked and runs on plain alpine (no glibc compat layer).
-#
-# Rationale for source build vs the prebuilt tarball:
-#   - Prebuilt v1.13.0.h5 was tagged before the mieru inbound landed — it ships
-#     `unknown inbound type: mieru` despite the source tree having protocol/mieru.
-#   - The prebuilt tarball is also dynamically linked against /lib64/ld-linux-*,
-#     which alpine does not provide.
-# Build tags include every server-side protocol we plan to use across Phase 2-4
-# (mieru/AnyTLS/Naive/TUIC/Hy2 inbounds + outbounds via protocol/ registry).
-ARG SINGBOX_REF=extended
-RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
-# Rewrite SSH submodule URLs to HTTPS so we can pull without an SSH key,
-# then recursive-clone so go.mod's `replace ./replace/psiphon-tls` etc resolve.
-RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
-    git clone --depth=1 --branch ${SINGBOX_REF} --recurse-submodules --shallow-submodules \
-        https://github.com/shtorm-7/sing-box-extended.git /src
-WORKDIR /src
-ENV CGO_ENABLED=0
-# Build tags chosen to enable every server-side protocol we ship in Phase 2-4
-# (mieru/AnyTLS/Naive/TUIC/Hysteria2/Reality + the v2ray gRPC stats API hiddify
-# patched for per-user accounting). with_wireguard pulls psiphon — we only need
-# wireguard outbound for the cascade later, so drop it for the Phase 2 baseline.
-# Stamp a real version into constant.Version so `sing-box version` / the panel
-# Cores card show something other than "unknown". A shallow branch clone has no
-# tag history, so describe falls back to the short commit sha (e.g.
-# "extended-a1b2c3d"). Override with --build-arg SINGBOX_VERSION=1.12.0-hiddify.
-ARG SINGBOX_VERSION=
-RUN SBVER="${SINGBOX_VERSION:-$(git -C /src describe --tags --exact-match 2>/dev/null || echo ${SINGBOX_REF}-$(git -C /src rev-parse --short HEAD 2>/dev/null || echo unknown))}" && \
-    echo "sing-box version stamp: ${SBVER}" && \
-    go build -trimpath \
-      -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp,with_wireguard" \
-      -ldflags "-w -s -X github.com/sagernet/sing-box/constant.Version=${SBVER}" \
-      -o /out/sing-box ./cmd/sing-box
-# Note: with_naive_outbound is intentionally OFF — naive client embeds cronet-go
-# which requires CGO + Chromium's cronet C library. AnyTLS/TUIC/Mieru/Hy2
-# clients are pure Go and compile without extra tags. If/when we want native
-# naive client, add a separate CGO-enabled build stage.
-RUN /out/sing-box version | head -3 && /out/sing-box version | grep -i mieru || echo "mieru tag check skipped"
+FROM alpine AS singbox-fetch
+# Prebuilt shtorm-7/sing-box-extended release (musl build — runs on plain alpine).
+# This fork keeps AmneziaWG (the `amnezia` endpoint option) + per-user v2ray_api
+# stats + mieru/anytls/tuic/naive. The hiddify/hiddify-sing-box fork DROPPED the
+# amnezia option, so we ship shtorm-7's prebuilt directly. Downloading the release
+# avoids a from-source build (its go.mod needs go 1.26 + a heavy build-tag set).
+# The release already reports `sing-box version 1.13.12-extended-2.1.5`.
+ARG TARGETARCH
+ARG SINGBOX_EXT_VERSION=1.13.12-extended-2.1.5
+RUN apk add --no-cache curl tar ca-certificates && mkdir -p /out && \
+    case "${TARGETARCH}" in \
+      amd64) A=amd64 ;; \
+      arm64) A=arm64 ;; \
+      *)     A=amd64 ;; \
+    esac && \
+    curl -fsSL "https://github.com/shtorm-7/sing-box-extended/releases/download/v${SINGBOX_EXT_VERSION}/sing-box-${SINGBOX_EXT_VERSION}-linux-${A}-musl.tar.gz" -o /tmp/sb.tar.gz && \
+    tar -xzf /tmp/sb.tar.gz -C /tmp && \
+    cp /tmp/sing-box-*/sing-box /out/sing-box && chmod +x /out/sing-box && \
+    /out/sing-box version | head -1
 
 # ========================================================
 # Stage: Builder
