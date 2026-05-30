@@ -56,6 +56,23 @@ export default function Page() {
     if (r.success && r.obj) setStatus(r.obj);
   }, []);
 
+  // Phase 11 — :443 SNI router overview.
+  type SniRoute = { inboundId: number; tag: string; protocol: string; sni: string; dial: string };
+  const [sni, setSni] = useState<{ enabled: boolean; routes: SniRoute[] } | null>(null);
+  const [sniSyncing, setSniSyncing] = useState(false);
+  const loadSni = useCallback(async () => {
+    const r = await getJson<{ enabled: boolean; routes: SniRoute[] }>(panel("cores/sni/routes"));
+    if (r.success && r.obj) setSni(r.obj);
+  }, []);
+  useEffect(() => { void loadSni(); }, [loadSni]);
+  const syncSni = useCallback(async () => {
+    setSniSyncing(true);
+    const r = await postJson(panel("cores/sni/sync"), {}, true);
+    setSniSyncing(false);
+    if (r.success) { toast.success(r.msg || "synced"); void loadSni(); }
+    else toast.error(r.msg || "sync failed");
+  }, [loadSni, toast]);
+
   useEffect(() => {
     void loadStatus();
     const id = setInterval(() => void loadStatus(), 5000);
@@ -269,6 +286,59 @@ export default function Page() {
           t={t}
         />
       </div>
+
+      {/* Phase 11 — :443 SNI router overview */}
+      <Surface padding="md" className="space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="grid size-8 place-items-center rounded-lg bg-[color-mix(in_oklab,var(--accent)_12%,transparent)] text-[var(--accent)]">
+              <Network size={16} />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-[var(--fg)]">
+                {t("pages.cores.sniTitle", { defaultValue: "TLS :443 SNI router" })}
+              </p>
+              <p className="text-[11px] text-[var(--fg-muted)]">
+                {sni?.enabled
+                  ? t("pages.cores.sniEnabled", { defaultValue: "Active — Caddy fronts :443 by SNI" })
+                  : t("pages.cores.sniDisabled", { defaultValue: "Off — enable in Settings (SNI router on :443)" })}
+              </p>
+            </div>
+          </div>
+          <Button variant="secondary" className="!gap-1.5 !text-xs" onClick={syncSni} disabled={sniSyncing}>
+            <RefreshCw size={14} />
+            {t("pages.cores.sniSync", { defaultValue: "Sync to Caddy" })}
+          </Button>
+        </div>
+        {sni && sni.routes.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-[var(--fg-subtle)]">
+                <tr>
+                  <th className="py-1 pr-3">SNI</th>
+                  <th className="py-1 pr-3">{t("pages.cores.sniProto", { defaultValue: "Protocol" })}</th>
+                  <th className="py-1 pr-3">{t("pages.cores.sniBackend", { defaultValue: "Backend" })}</th>
+                  <th className="py-1">Tag</th>
+                </tr>
+              </thead>
+              <tbody className="font-mono">
+                {sni.routes.map((r) => (
+                  <tr key={r.inboundId} className="border-t border-[var(--border)]">
+                    <td className="py-1 pr-3 text-[var(--fg)]">{r.sni}</td>
+                    <td className="py-1 pr-3 text-[var(--fg-muted)]">{r.protocol}</td>
+                    <td className="py-1 pr-3 text-[var(--fg-muted)]">{r.dial}</td>
+                    <td className="py-1 text-[var(--fg-muted)]">{r.tag}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p className="text-[11px] text-[var(--fg-subtle)]">
+            {t("pages.cores.sniEmpty", { defaultValue: "No inbounds share :443 yet. Toggle 'Share TLS :443' on a TCP/TLS inbound." })}
+          </p>
+        )}
+      </Surface>
 
       <Surface padding="md" className="space-y-3">
         <p className="text-xs text-[var(--fg-muted)]">

@@ -112,6 +112,10 @@ func (a *SettingController) updateSetting(c *gin.Context) {
 		return
 	}
 	err = a.settingService.UpdateAllSetting(allSetting)
+	if err == nil {
+		// Phase 11 — re-sync the :443 SNI router in case sniRouting443 toggled.
+		go service.PushLayer4ToCaddy()
+	}
 	jsonMsg(c, I18nWeb(c, "pages.settings.toasts.modifySettings"), err)
 }
 

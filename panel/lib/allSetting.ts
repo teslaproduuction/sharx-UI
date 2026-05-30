@@ -79,6 +79,8 @@ export type AllSetting = {
   multiNodeMode: boolean;
   /** Hybrid: panel host also runs a local node (id=0) while orchestrating workers. */
   panelHostWorkload: boolean;
+  /** Phase 11: Caddy layer4 SNI router fronts :443 for share_tls_443 inbounds. */
+  sniRouting443: boolean;
   enableIPv6: boolean;
   /** Seconds between worker stats polls (multi-node). */
   nodeStatsCollectionIntervalSec: number;
@@ -199,6 +201,7 @@ export function normalizeAllSetting(raw: Record<string, unknown>): AllSetting {
     ldapDefaultLimitIP: toInt(raw.ldapDefaultLimitIP, 0),
     multiNodeMode: toBool(raw.multiNodeMode),
     panelHostWorkload: toBool(raw.panelHostWorkload),
+    sniRouting443: toBool(raw.sniRouting443),
     enableIPv6: toBool(raw.enableIPv6),
     nodeStatsCollectionIntervalSec: toInt(raw.nodeStatsCollectionIntervalSec, 3),
     nodeHealthCheckIntervalSec: toInt(raw.nodeHealthCheckIntervalSec, 15),

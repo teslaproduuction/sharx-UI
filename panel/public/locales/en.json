@@ -2703,13 +2703,18 @@
     },
     "settings": {
       "panelHostWorkload": "Panel host also runs a node",
-      "panelHostWorkloadDesc": "Hybrid mode: the panel host runs its own workload (inbounds/sidecars bound to the panel-host node) in addition to orchestrating workers. Off = pure orchestrator."
+      "panelHostWorkloadDesc": "Hybrid mode: the panel host runs its own workload (inbounds/sidecars bound to the panel-host node) in addition to orchestrating workers. Off = pure orchestrator.",
+      "sniRouting443": "SNI router on :443",
+      "sniRouting443Desc": "Caddy fronts :443 and routes TCP inbounds flagged 'Share TLS :443' by their SNI (HTTP panel/decoy moves to :8443). Lets VLESS/Trojan/AnyTLS share :443; Hysteria2/TUIC use :443/udp. Requires SNI_ROUTING_443=true in the Caddy container env."
     },
     "nodes": {
       "panelHostHybridBadge": "panel host (orchestrator + local node)"
     },
     "inbounds": {
-      "panelHostNodeOption": "panel-host (local node, id: 0)"
+      "panelHostNodeOption": "panel-host (local node, id: 0)",
+      "shareTls443": "Share TLS :443 (SNI router)",
+      "shareTls443Hint": "Reachable on :443 — Caddy routes to this inbound by SNI (needs the :443 SNI router in Settings). TCP/TLS only; Hysteria2/TUIC use :443/udp.",
+      "sniOverride": "SNI (blank = TLS server name)"
     },
     "outboundChains": {
       "guideTitle": "How a cascade works",
@@ -2749,7 +2754,14 @@
       "installing": "Installing…",
       "installed": "Installed {{v}}",
       "installFailed": "Install failed",
-      "versionsFailed": "Failed to fetch versions"
+      "versionsFailed": "Failed to fetch versions",
+      "sniTitle": "TLS :443 SNI router",
+      "sniEnabled": "Active — Caddy fronts :443 by SNI",
+      "sniDisabled": "Off — enable in Settings (SNI router on :443)",
+      "sniSync": "Sync to Caddy",
+      "sniProto": "Protocol",
+      "sniBackend": "Backend",
+      "sniEmpty": "No inbounds share :443 yet. Toggle 'Share TLS :443' on a TCP/TLS inbound."
     },
     "index": {
       "restartTelemt": "Restart Telemt",

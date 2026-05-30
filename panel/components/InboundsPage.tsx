@@ -722,6 +722,9 @@ const defaultForm = () => ({
   streamForm: defaultStreamForm(),
   sniffingForm: defaultSniffingForm(),
   vlessTrojanFallbacks: [] as VlessTrojanFallbackFormRow[],
+  // Phase 11 — front this inbound on the Caddy :443 SNI router.
+  shareTls443: false,
+  sni: "",
 });
 
 export function InboundsPage() {
@@ -963,6 +966,8 @@ export function InboundsPage() {
             : (ib.sniffing || defaultSniffingString()),
         ),
         vlessTrojanFallbacks: parsed.vlessTrojanFallbacks ?? ([] as VlessTrojanFallbackFormRow[]),
+        shareTls443: Boolean((ib as { shareTls443?: boolean }).shareTls443),
+        sni: String((ib as { sni?: string }).sni ?? ""),
       });
       setNodeBindings(inboundBindingsToForm(ib));
     } catch {
@@ -1379,6 +1384,9 @@ export function InboundsPage() {
       trafficReset: form.trafficReset,
       up: editId != null ? preserveTraffic.up : 0,
       down: editId != null ? preserveTraffic.down : 0,
+      // Phase 11 — :443 SNI router opt-in. SNI defaults to the TLS serverName.
+      shareTls443: form.shareTls443,
+      sni: (form.sni.trim() || form.streamForm.tlsServerName.trim()),
     };
     if (editId != null) {
       body.allTime = preserveTraffic.allTime;
@@ -2481,6 +2489,39 @@ export function InboundsPage() {
                 <p className="mt-1 text-xs text-[var(--fg-subtle)]">
                   {t("pages.inbounds.addInboundListenHint")}
                 </p>
+              </div>
+
+              {/* Phase 11 — share :443 via the Caddy SNI router */}
+              <div className="mt-3 rounded-lg border border-[var(--border)] p-3">
+                <label className="flex items-center justify-between gap-2">
+                  <span className="text-xs font-medium text-[var(--fg)]">
+                    {t("pages.inbounds.shareTls443", { defaultValue: "Share TLS :443 (SNI router)" })}
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.shareTls443}
+                    onChange={(e) => setForm((f) => ({ ...f, shareTls443: e.target.checked }))}
+                    className="size-4 accent-[var(--accent)]"
+                  />
+                </label>
+                <p className="mt-1 text-xs text-[var(--fg-subtle)]">
+                  {t("pages.inbounds.shareTls443Hint", {
+                    defaultValue:
+                      "Reachable on :443 — Caddy routes to this inbound by SNI (needs the :443 SNI router in Settings). TCP/TLS only; Hysteria2/TUIC use :443/udp.",
+                  })}
+                </p>
+                {form.shareTls443 ? (
+                  <div className="mt-2">
+                    <label className="mb-1 block text-xs text-[var(--fg-muted)]">
+                      {t("pages.inbounds.sniOverride", { defaultValue: "SNI (blank = TLS server name)" })}
+                    </label>
+                    <Input
+                      value={form.sni}
+                      onChange={(e) => setForm((f) => ({ ...f, sni: e.target.value }))}
+                      placeholder={form.streamForm.tlsServerName || "example.com"}
+                    />
+                  </div>
+                ) : null}
               </div>
 
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
