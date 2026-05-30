@@ -412,11 +412,15 @@ func buildWireGuardClientOutbound(tag string, raw map[string]any) (map[string]an
 	if v, _ := raw["udp_timeout"].(string); strings.TrimSpace(v) != "" {
 		out["udp_timeout"] = v
 	}
-	// Pass amnezia block through verbatim — schema is upstream-controlled and
-	// will likely grow new fields; whitelisting would force a rebuild on every
-	// hiddify bump. We trust the operator to supply valid values.
+	// AmneziaWG obfuscation (jc/jmin/jmax/s1-s4/h1-h4/i1-i5/j1-j3/itime): the
+	// current hiddify-sing-box `extended` build does NOT ship the `amnezia`
+	// endpoint option (the struct field is absent — sing-box rejects the config
+	// with "unknown field amnezia"). Emitting it would break the whole singleton
+	// config, so we DROP it and log once. Plain WireGuard / WARP still works; the
+	// AWG anti-DPI obfuscation just isn't applied. Re-enable when the embedded
+	// sing-box gains amnezia support (see .agent/plans — needs a fork/tag with it).
 	if v, ok := raw["amnezia"].(map[string]any); ok && len(v) > 0 {
-		out["amnezia"] = v
+		logger.Warningf("singbox wireguard %q: dropping amnezia block — this sing-box build has no AmneziaWG support (plain WireGuard applied)", tag)
 	}
 	return out, nil
 }

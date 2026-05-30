@@ -2783,7 +2783,8 @@
       "importBadConf": "Не удалось разобрать WireGuard .conf",
       "importBadUri": "Неподдерживаемый URI (tuic / hysteria2 / anytls; vless/vmess → Outbounds)",
       "importedUri": "Импортирован {{kind}}",
-      "importUnknown": "Вставь URI tuic/hy2/anytls или WireGuard .conf"
+      "importUnknown": "Вставь URI tuic/hy2/anytls или WireGuard .conf",
+      "awgNote": "Обычный WireGuard / WARP работает. AmneziaWG-обфускация (jc/jmin/i1…) парсится, но НЕ применяется — встроенный sing-box пока без AWG, поля отбрасываются."
     }
   }
 }
