@@ -2741,6 +2741,17 @@
       "actionFailed": "Действие не удалось",
       "stopOkToast": "{{core}} остановлен",
       "restartOkToast": "{{core}} перезапущен"
+    },
+    "index": {
+      "singboxStatusStop": "Остановлен",
+      "singboxStatusRunning": "Работает",
+      "singboxStatusError": "Ошибка",
+      "singboxStatusUnknown": "Статус неизвестен",
+      "singboxLocalIdleMulti": "Простаивает (мультинод)",
+      "singboxShort": "Sing-box",
+      "restartTelemt": "Перезапустить Telemt",
+      "stopSingbox": "Остановить Sing-box",
+      "restartSingbox": "Перезапустить Sing-box"
     }
   }
 }

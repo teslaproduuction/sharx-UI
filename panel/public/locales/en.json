@@ -2741,6 +2741,11 @@
       "actionFailed": "Action failed",
       "stopOkToast": "{{core}} stopped",
       "restartOkToast": "{{core}} restarted"
+    },
+    "index": {
+      "restartTelemt": "Restart Telemt",
+      "stopSingbox": "Stop Sing-box",
+      "restartSingbox": "Restart Sing-box"
     }
   }
 }
