@@ -2703,13 +2703,18 @@
     },
     "settings": {
       "panelHostWorkload": "Панель тоже работает как нода",
-      "panelHostWorkloadDesc": "Гибридный режим: хост панели несёт свою нагрузку (inbounds/sidecars, привязанные к ноде panel-host) и при этом управляет воркерами. Выкл = чистый оркестратор."
+      "panelHostWorkloadDesc": "Гибридный режим: хост панели несёт свою нагрузку (inbounds/sidecars, привязанные к ноде panel-host) и при этом управляет воркерами. Выкл = чистый оркестратор.",
+      "sniRouting443": "SNI-роутер на :443",
+      "sniRouting443Desc": "Caddy владеет :443 и роутит TCP-инбаунды с флагом «Share TLS :443» по их SNI (HTTP панель/decoy уезжает на :8443). VLESS/Trojan/AnyTLS делят :443; Hysteria2/TUIC — на :443/udp. Нужен SNI_ROUTING_443=true в env Caddy-контейнера."
     },
     "nodes": {
       "panelHostHybridBadge": "panel host (оркестратор + локальная нода)"
     },
     "inbounds": {
-      "panelHostNodeOption": "panel-host (локальная нода, id: 0)"
+      "panelHostNodeOption": "panel-host (локальная нода, id: 0)",
+      "shareTls443": "Делить TLS :443 (SNI-роутер)",
+      "shareTls443Hint": "Доступен на :443 — Caddy роутит на этот инбаунд по SNI (нужен SNI-роутер в Настройках). Только TCP/TLS; Hysteria2/TUIC — :443/udp.",
+      "sniOverride": "SNI (пусто = TLS server name)"
     },
     "outboundChains": {
       "guideTitle": "Как работает каскад",
@@ -2749,7 +2754,14 @@
       "installing": "Установка…",
       "installed": "Установлен {{v}}",
       "installFailed": "Установка не удалась",
-      "versionsFailed": "Не удалось получить версии"
+      "versionsFailed": "Не удалось получить версии",
+      "sniTitle": "TLS :443 SNI-роутер",
+      "sniEnabled": "Активен — Caddy владеет :443 по SNI",
+      "sniDisabled": "Выкл — включи в Настройках (SNI-роутер на :443)",
+      "sniSync": "Синк в Caddy",
+      "sniProto": "Протокол",
+      "sniBackend": "Бэкенд",
+      "sniEmpty": "Пока ни один инбаунд не делит :443. Включи «Делить TLS :443» на TCP/TLS-инбаунде."
     },
     "index": {
       "singboxStatusStop": "Остановлен",

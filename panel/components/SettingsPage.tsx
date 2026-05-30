@@ -665,6 +665,19 @@ export function SettingsPage() {
                 ariaLabel={t("pages.settings.enableIPv6")}
               />
             </Row>
+            <Row
+              label={t("pages.settings.sniRouting443", { defaultValue: "SNI router on :443" })}
+              hint={t("pages.settings.sniRouting443Desc", {
+                defaultValue:
+                  "Caddy fronts :443 and routes TCP inbounds flagged 'Share TLS :443' by their SNI (the HTTP panel/decoy moves to :8443). Lets VLESS/Trojan/AnyTLS share :443; Hysteria2/TUIC use :443/udp. Requires SNI_ROUTING_443=true in the Caddy container env.",
+              })}
+            >
+              <Switch
+                checked={form.sniRouting443}
+                onChange={(on) => patch("sniRouting443", on)}
+                ariaLabel={t("pages.settings.sniRouting443", { defaultValue: "SNI router on :443" })}
+              />
+            </Row>
             {form.multiNodeMode ? (
               <>
                 <Row
