@@ -2710,6 +2710,21 @@
     },
     "inbounds": {
       "panelHostNodeOption": "panel-host (local node, id: 0)"
+    },
+    "outboundChains": {
+      "guideTitle": "How a cascade works",
+      "guideBody": "A cascade is an Xray load-balancer (routing.balancers). Client traffic enters an inbound, then a routing rule sends it to this balancer by its tag. The balancer forwards to one of the member outbounds — each member is itself a hop (a sidecar bridge, a WARP account, or a native VLESS/Trojan out). The strategy decides which member: leastPing picks the lowest-latency one via observatory probes, random spreads load, priority always prefers the first reachable.",
+      "fieldNameHint": "Reference this tag from a routing rule's target = Balancer.",
+      "strategyHintLeastPing": "Lowest-latency member (needs probes below).",
+      "strategyHintRandom": "Random member each connection — spreads load.",
+      "strategyHintPriority": "Always the first reachable member; others are fallback.",
+      "fieldProbeUrlHint": "Observatory fetches this through each member to measure latency. A 204 endpoint is ideal.",
+      "fieldProbeIntervalHint": "How often to re-measure. 60–300s is typical.",
+      "flowTitle": "Traffic flow",
+      "flowClient": "client",
+      "flowInbound": "inbound + routing rule",
+      "flowNoMembers": "pick members ↓",
+      "flowInternet": "internet"
     }
   }
 }

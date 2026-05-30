@@ -2710,6 +2710,21 @@
     },
     "inbounds": {
       "panelHostNodeOption": "panel-host (локальная нода, id: 0)"
+    },
+    "outboundChains": {
+      "guideTitle": "Как работает каскад",
+      "guideBody": "Каскад — это балансировщик Xray (routing.balancers). Трафик клиента входит в inbound, затем routing-правило направляет его на этот балансировщик по тегу. Балансировщик пересылает на один из member-outbound — каждый member это отдельный хоп (sidecar-мост, аккаунт WARP или нативный VLESS/Trojan). Стратегия выбирает member: leastPing берёт с наименьшей задержкой через observatory-пробы, random распределяет нагрузку, priority всегда предпочитает первый доступный.",
+      "fieldNameHint": "Ссылайтесь на этот тег в routing-правиле через «Куда = Балансировщик».",
+      "strategyHintLeastPing": "Member с наименьшей задержкой (нужны пробы ниже).",
+      "strategyHintRandom": "Случайный member на каждое соединение — распределяет нагрузку.",
+      "strategyHintPriority": "Всегда первый доступный member; остальные — резерв.",
+      "fieldProbeUrlHint": "Observatory запрашивает этот URL через каждый member для замера задержки. Идеален эндпоинт с 204.",
+      "fieldProbeIntervalHint": "Как часто перемерять. Обычно 60–300с.",
+      "flowTitle": "Поток трафика",
+      "flowClient": "клиент",
+      "flowInbound": "inbound + routing-правило",
+      "flowNoMembers": "выберите members ↓",
+      "flowInternet": "интернет"
     }
   }
 }
