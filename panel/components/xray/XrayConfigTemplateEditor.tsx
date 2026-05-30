@@ -100,6 +100,20 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
       }
     }, [template]);
 
+    /** Outbound tags from the template's outbounds[] — feeds the routing target dropdown. */
+    const outboundTags = useMemo(() => {
+      try {
+        const root = JSON.parse(template) as Record<string, unknown>;
+        const obs = root.outbounds;
+        if (!Array.isArray(obs)) return [];
+        return obs
+          .map((o) => (o && typeof o === "object" ? (o as Record<string, unknown>).tag : null))
+          .filter((tag): tag is string => typeof tag === "string" && tag.trim().length > 0);
+      } catch {
+        return [];
+      }
+    }, [template]);
+
     const { steps: xrayStepperItems, grouped: xrayGrouped, otherKeys: xrayOtherKeys } = useMemo(
       () => buildXrayTemplateStepperItems(t, sectionKeys),
       [t, sectionKeys],
@@ -296,6 +310,7 @@ export const XrayConfigTemplateEditor = forwardRef<XrayConfigTemplateEditorHandl
                 readOnly={readOnly}
                 showGeneralUi={showGeneralUi}
                 syncKey={syncKey}
+                outboundTags={outboundTags}
                 t={t}
               />
             </Surface>

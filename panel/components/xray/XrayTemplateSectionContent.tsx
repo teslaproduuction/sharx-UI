@@ -24,6 +24,8 @@ type Props = {
   readOnly: boolean;
   showGeneralUi: boolean;
   syncKey: string | number;
+  /** Outbound tags from the sibling outbounds[] — feeds the routing target dropdown. */
+  outboundTags?: string[];
   t: TFunction;
 };
 
@@ -38,6 +40,7 @@ export function XrayTemplateSectionContent({
   readOnly,
   showGeneralUi,
   syncKey,
+  outboundTags = [],
   t,
 }: Props) {
   const [jsonMode, setJsonMode] = useState<JsonMode>({ outbounds: false, dns: false, routing: false });
@@ -164,6 +167,7 @@ export function XrayTemplateSectionContent({
               readOnly={readOnly}
               t={t}
               syncKey={syncKey}
+              outboundTags={outboundTags}
             />
           </div>
         ) : (
