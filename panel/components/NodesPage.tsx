@@ -368,6 +368,7 @@ export function NodesPage() {
 
   const [metricsNode, setMetricsNode] = useState<{ id: number; name: string } | null>(null);
   const [multiNode, setMultiNode] = useState<boolean | null>(null);
+  const [panelHostWorkload, setPanelHostWorkload] = useState<boolean>(false);
   const [profileList, setProfileList] = useState<XrayProfileRow[]>([]);
   const [profileListLoading, setProfileListLoading] = useState(false);
   const [profileAssignNodeId, setProfileAssignNodeId] = useState<number | null>(null);
@@ -490,6 +491,7 @@ export function NodesPage() {
     const s = await postJson<Record<string, unknown>>(panel("setting/all"));
     if (s.success && s.obj) {
       setMultiNode(Boolean((s.obj as { multiNodeMode?: boolean }).multiNodeMode));
+      setPanelHostWorkload(Boolean((s.obj as { panelHostWorkload?: boolean }).panelHostWorkload));
     }
   }, []);
 
@@ -1188,24 +1190,31 @@ export function NodesPage() {
   // sing-box / telemt) per the user-decision in Phase 9. The row stays so
   // operators understand the topology, but the workload-state badges render
   // as "orchestrator (no workload)" via xrayState="orchestrator".
+  // Panel host runs local workload in single-host mode, or in multi-node mode
+  // when hybrid (panelHostWorkload) is enabled. Pure orchestrator otherwise.
+  const panelHostActive = !multiNode || panelHostWorkload;
   const panelHostRow: NodeRow = {
     id: 0,
     name: "panel-host",
     address: "localhost",
     status: "online",
     enable: true,
-    xrayState: multiNode ? "orchestrator" : "running",
-    telemtState: multiNode ? "orchestrator" : "running",
+    xrayState: panelHostActive ? "running" : "orchestrator",
+    telemtState: panelHostActive ? "running" : "orchestrator",
     lastCheck: Math.floor(Date.now() / 1000),
     responseTime: 0,
   };
 
   const sortedAndFilteredRows = useMemo(() => {
     const q = nameFilter.trim().toLowerCase();
-    const byId = [...rows].sort((a, b) => {
-      if (a.id !== b.id) return a.id - b.id;
-      return a.name.localeCompare(b.name);
-    });
+    // The panel-host is now a real row (id=0) seeded in the DB; drop it from the
+    // API list and render the curated synthetic row (with hybrid-aware badges).
+    const byId = [...rows]
+      .filter((r) => r.id > 0)
+      .sort((a, b) => {
+        if (a.id !== b.id) return a.id - b.id;
+        return a.name.localeCompare(b.name);
+      });
     const withSelf = [panelHostRow, ...byId];
     return withSelf.filter((r) => {
       if (q) {
@@ -1380,9 +1389,11 @@ export function NodesPage() {
                       {r.name}
                       {r.id === 0 ? (
                         <span className="ml-2 rounded-full bg-[var(--accent)]/15 px-2 py-0.5 text-[10px] text-[var(--accent)]">
-                          {multiNode
+                          {multiNode && !panelHostWorkload
                             ? t("pages.nodes.panelHostOrchestratorBadge", { defaultValue: "panel host (orchestrator, no workload)" })
-                            : t("pages.nodes.panelHostBadge", { defaultValue: "panel host" })}
+                            : multiNode && panelHostWorkload
+                              ? t("pages.nodes.panelHostHybridBadge", { defaultValue: "panel host (orchestrator + local node)" })
+                              : t("pages.nodes.panelHostBadge", { defaultValue: "panel host" })}
                         </span>
                       ) : null}
                     </td>

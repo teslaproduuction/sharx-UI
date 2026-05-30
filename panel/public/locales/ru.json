@@ -2700,6 +2700,16 @@
       "routing": {
         "domainStrategy": "Стратегия доменов"
       }
+    },
+    "settings": {
+      "panelHostWorkload": "Панель тоже работает как нода",
+      "panelHostWorkloadDesc": "Гибридный режим: хост панели несёт свою нагрузку (inbounds/sidecars, привязанные к ноде panel-host) и при этом управляет воркерами. Выкл = чистый оркестратор."
+    },
+    "nodes": {
+      "panelHostHybridBadge": "panel host (оркестратор + локальная нода)"
+    },
+    "inbounds": {
+      "panelHostNodeOption": "panel-host (локальная нода, id: 0)"
     }
   }
 }

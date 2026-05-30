@@ -130,6 +130,7 @@ export default function Page() {
   const [previewBusy, setPreviewBusy] = useState(false);
 
   const [multiNode, setMultiNode] = useState(false);
+  const [panelHostWorkload, setPanelHostWorkload] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -139,7 +140,10 @@ export default function Page() {
     setLoading(false);
     if (r.success && Array.isArray(r.obj)) setRows(r.obj);
     if (nr.success && Array.isArray(nr.obj)) setNodes(nr.obj);
-    if (sr.success && sr.obj) setMultiNode(Boolean(sr.obj.multiNodeMode));
+    if (sr.success && sr.obj) {
+      setMultiNode(Boolean(sr.obj.multiNodeMode));
+      setPanelHostWorkload(Boolean(sr.obj.panelHostWorkload));
+    }
   }, []);
 
   useEffect(() => { void load(); }, [load]);
@@ -272,7 +276,9 @@ export default function Page() {
                     {(() => {
                       const ids = (r.nodeIds || []).filter((n) => n !== 0);
                       const hasHub = (r.nodeIds || []).length === 0 || (r.nodeIds || []).includes(0);
-                      if (multiNode && ids.length === 0) {
+                      // Orphan only in pure-orchestrator multi-node: no worker AND
+                      // panel host runs no workload. In hybrid, hub = panel-host node.
+                      if (multiNode && !panelHostWorkload && ids.length === 0) {
                         return (
                           <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] text-amber-300" title="Multi-node mode: assign at least one worker">
                             orphan
@@ -280,7 +286,7 @@ export default function Page() {
                         );
                       }
                       const parts: string[] = [];
-                      if (hasHub) parts.push(multiNode ? "" : "panel-host");
+                      if (hasHub) parts.push(multiNode && !panelHostWorkload ? "" : "panel-host");
                       if (ids.length) parts.push(...ids.map(String));
                       return parts.filter(Boolean).join(",") || "—";
                     })()}
@@ -341,7 +347,7 @@ export default function Page() {
           <div className="rounded-lg border border-[var(--border)] p-3">
             <label className="mb-1 block text-xs text-[var(--fg-muted)]">{t("pages.outboundSidecars.fieldNodes", { defaultValue: "Nodes (multi-select; empty = panel-host hub)" })}</label>
             <div className="flex flex-wrap gap-2">
-              {!multiNode ? (() => {
+              {(!multiNode || panelHostWorkload) ? (() => {
                 const on = nodeIds.length === 0 || nodeIds.includes(0);
                 return (
                   <button

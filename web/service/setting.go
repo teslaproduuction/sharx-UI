@@ -116,7 +116,8 @@ var defaultValueMap = map[string]string{
 	"ldapDefaultExpiryDays": "0",
 	"ldapDefaultLimitIP":    "0",
 	// Multi-node mode
-	"multiNodeMode": "false", // "true" for multi-mode, "false" for single-mode
+	"multiNodeMode":     "false", // "true" for multi-mode, "false" for single-mode
+	"panelHostWorkload": "false", // hybrid: panel host also runs a local node (id=0) when multi-mode is on
 	// Dashboard public IPv6 detection
 	"enableIPv6":                         "false",
 	"nodeStatsCollectionIntervalSec":     "3",
@@ -1054,6 +1055,20 @@ func (s *SettingService) GetMultiNodeMode() (bool, error) {
 // SetMultiNodeMode sets the multi-node mode setting.
 func (s *SettingService) SetMultiNodeMode(enabled bool) error {
 	return s.setBool("multiNodeMode", enabled)
+}
+
+// GetPanelHostWorkload reports whether the panel host also runs a local node
+// (hybrid mode). Only meaningful when multiNodeMode is on: when true the panel
+// host builds + applies its own workload (inbounds/sidecars bound to node id=0)
+// in-process while still orchestrating worker nodes. When false (default) the
+// panel host is a pure orchestrator and runs no local workload.
+func (s *SettingService) GetPanelHostWorkload() (bool, error) {
+	return s.getBool("panelHostWorkload")
+}
+
+// SetPanelHostWorkload toggles hybrid panel-host-as-node mode.
+func (s *SettingService) SetPanelHostWorkload(enabled bool) error {
+	return s.setBool("panelHostWorkload", enabled)
 }
 
 // GetEnableIPv6 returns whether public IPv6 detection is enabled for dashboard status.
