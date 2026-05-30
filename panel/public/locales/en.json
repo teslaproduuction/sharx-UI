@@ -2745,7 +2745,8 @@
     "index": {
       "restartTelemt": "Restart Telemt",
       "stopSingbox": "Stop Sing-box",
-      "restartSingbox": "Restart Sing-box"
+      "restartSingbox": "Restart Sing-box",
+      "versionLabel": "Version"
     }
   }
 }

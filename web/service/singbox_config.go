@@ -677,20 +677,39 @@ func resolveSingboxUsers(inbound *model.Inbound, raw map[string]any, requireFiel
 // missing or has neither cert content nor cert path — caller decides whether
 // to error out (anytls/tuic require TLS) or fall back (naive technically can
 // run plaintext but we treat that as misconfig).
+// panelDefaultCertKeyPaths returns the panel's configured TLS cert/key file
+// paths (the same pair Hysteria2 and the panel HTTPS listener use). TLS-mandatory
+// sing-box protocols (anytls/tuic/naive) fall back to these when the inbound form
+// omits an explicit cert — so the operator does not have to paste a cert per
+// inbound. Empty strings when the panel has no cert configured.
+func panelDefaultCertKeyPaths() (string, string) {
+	ss := SettingService{}
+	c, _ := ss.GetCertFile()
+	k, _ := ss.GetKeyFile()
+	return strings.TrimSpace(c), strings.TrimSpace(k)
+}
+
 func buildInboundTLS(raw map[string]any) (map[string]any, error) {
-	tlsRaw, ok := raw["tls"].(map[string]any)
-	if !ok {
-		return nil, errors.New("missing settings.tls block")
+	tlsRaw, _ := raw["tls"].(map[string]any)
+	if tlsRaw == nil {
+		tlsRaw = map[string]any{}
 	}
 	cert, _ := tlsRaw["certificate"].(string)
 	certPath, _ := tlsRaw["certificate_path"].(string)
 	key, _ := tlsRaw["key"].(string)
 	keyPath, _ := tlsRaw["key_path"].(string)
+	// Fall back to the panel's TLS cert/key when the inbound omits one.
+	if strings.TrimSpace(cert) == "" && strings.TrimSpace(certPath) == "" &&
+		strings.TrimSpace(key) == "" && strings.TrimSpace(keyPath) == "" {
+		if dc, dk := panelDefaultCertKeyPaths(); dc != "" && dk != "" {
+			certPath, keyPath = dc, dk
+		}
+	}
 	if strings.TrimSpace(cert) == "" && strings.TrimSpace(certPath) == "" {
-		return nil, errors.New("settings.tls.certificate or certificate_path is required")
+		return nil, errors.New("TLS certificate required: set a panel TLS cert (Settings) or provide settings.tls.certificate / certificate_path")
 	}
 	if strings.TrimSpace(key) == "" && strings.TrimSpace(keyPath) == "" {
-		return nil, errors.New("settings.tls.key or key_path is required")
+		return nil, errors.New("TLS key required: set a panel TLS key (Settings) or provide settings.tls.key / key_path")
 	}
 	out := map[string]any{"enabled": true}
 	if v, _ := tlsRaw["server_name"].(string); strings.TrimSpace(v) != "" {

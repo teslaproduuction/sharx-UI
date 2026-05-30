@@ -13,6 +13,7 @@
 package singbox
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -40,11 +41,13 @@ type Payload struct {
 
 // Manager owns at most one sing-box child process at a time.
 type Manager struct {
-	mu       sync.Mutex
-	cmd      *exec.Cmd
-	pid      int
-	cfgHash  string
-	workRoot string // /app/singbox by default
+	mu        sync.Mutex
+	cmd       *exec.Cmd
+	pid       int
+	cfgHash   string
+	workRoot  string // /app/singbox by default
+	startedAt time.Time
+	version   string // cached `sing-box version` output (first line)
 
 	// Replay snapshot for /restart-singbox after a successful Apply.
 	replayMu sync.RWMutex
@@ -106,6 +109,48 @@ func findBinary() string {
 		}
 	}
 	return ""
+}
+
+// detectSingboxVersion runs `<bin> version` and returns a short version string
+// (e.g. "1.13.0-hiddify"), or "" on failure. Best-effort; never blocks long.
+func detectSingboxVersion(bin string) string {
+	if bin == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(strings.SplitN(string(out), "\n", 2)[0])
+	// "sing-box version 1.13.0" → "1.13.0"
+	if i := strings.LastIndex(line, " "); i >= 0 && i+1 < len(line) {
+		return strings.TrimSpace(line[i+1:])
+	}
+	return line
+}
+
+// UptimeSeconds returns how long the current sing-box child has been running (0 if stopped).
+func (m *Manager) UptimeSeconds() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.pid == 0 || m.startedAt.IsZero() {
+		return 0
+	}
+	return int64(time.Since(m.startedAt).Seconds())
+}
+
+// Version returns the cached sing-box binary version (detected at startup; falls
+// back to probing the binary on disk when the sidecar is stopped).
+func (m *Manager) Version() string {
+	m.mu.Lock()
+	v := m.version
+	m.mu.Unlock()
+	if v != "" {
+		return v
+	}
+	return detectSingboxVersion(findBinary())
 }
 
 // RunningCount returns 1 if the sidecar is alive, 0 otherwise.
@@ -269,6 +314,10 @@ func (m *Manager) Apply(p Payload) error {
 		m.cmd = cmd
 		m.pid = cmd.Process.Pid
 		m.cfgHash = hhex
+		m.startedAt = time.Now()
+		if m.version == "" {
+			m.version = detectSingboxVersion(bin)
+		}
 		logger.Infof("singbox: started pid=%d cfgHash=%s***", m.pid, hhex[:8])
 		go func(c *exec.Cmd, pid int) {
 			err := c.Wait()
@@ -324,6 +373,10 @@ func (m *Manager) Apply(p Payload) error {
 	m.cmd = cmd
 	m.pid = cmd.Process.Pid
 	m.cfgHash = hhex
+	m.startedAt = time.Now()
+	if m.version == "" {
+		m.version = detectSingboxVersion(bin)
+	}
 	logger.Infof("singbox: restarted pid=%d cfgHash=%s***", m.pid, hhex[:8])
 	go func(c *exec.Cmd, npid int) {
 		err := c.Wait()

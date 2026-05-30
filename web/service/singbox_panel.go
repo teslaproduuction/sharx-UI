@@ -20,6 +20,28 @@ import (
 	"github.com/konstpic/sharx-code/v2/node/singbox"
 )
 
+// LocalSingboxUptimeSeconds returns the panel-host sing-box child uptime (0 if stopped).
+func LocalSingboxUptimeSeconds() int64 {
+	panelSingboxMu.Lock()
+	mgr := panelSingbox
+	panelSingboxMu.Unlock()
+	if mgr == nil {
+		return 0
+	}
+	return mgr.UptimeSeconds()
+}
+
+// LocalSingboxVersion returns the sing-box binary version (best-effort).
+func LocalSingboxVersion() string {
+	panelSingboxMu.Lock()
+	mgr := panelSingbox
+	panelSingboxMu.Unlock()
+	if mgr == nil {
+		return singbox.NewManager().Version()
+	}
+	return mgr.Version()
+}
+
 // LocalSingboxLogs returns up to the last n stdout/stderr lines of the panel-host
 // sing-box child (empty if it has never started).
 func LocalSingboxLogs(n int) []sidecarlog.Line {

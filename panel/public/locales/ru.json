@@ -2751,7 +2751,8 @@
       "singboxShort": "Sing-box",
       "restartTelemt": "Перезапустить Telemt",
       "stopSingbox": "Остановить Sing-box",
-      "restartSingbox": "Перезапустить Sing-box"
+      "restartSingbox": "Перезапустить Sing-box",
+      "versionLabel": "Версия"
     }
   }
 }

@@ -16,9 +16,19 @@ type Tab = "xray" | "singbox" | "telemt";
 type CoreKind = "xray" | "singbox" | "telemt";
 type CoresStatus = {
   xray: { running: boolean };
-  singbox: { running: boolean; configHash: string };
-  telemt: { running: boolean; instanceCount: number };
+  singbox: { running: boolean; configHash: string; uptimeSec?: number; version?: string };
+  telemt: { running: boolean; instanceCount: number; uptimeSec?: number; version?: string };
 };
+
+function fmtUptime(sec?: number): string {
+  if (!sec || sec <= 0) return "";
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
 type LogLine = { tsUnixMs: number; text: string };
 
 export default function Page() {
@@ -188,9 +198,13 @@ export default function Page() {
           title="Sing-box"
           running={status?.singbox.running ?? null}
           meta={
-            status?.singbox.configHash
-              ? `${t("pages.cores.configHash", { defaultValue: "Hash" })}: ${status.singbox.configHash.slice(0, 12)}…`
-              : t("pages.cores.cardSingboxMeta", { defaultValue: "mieru / AnyTLS / TUIC / Naive" })
+            [
+              status?.singbox.version ? `v${status.singbox.version}` : null,
+              fmtUptime(status?.singbox.uptimeSec) ? `↑ ${fmtUptime(status?.singbox.uptimeSec)}` : null,
+              status?.singbox.configHash ? `${status.singbox.configHash.slice(0, 8)}…` : null,
+            ]
+              .filter(Boolean)
+              .join(" · ") || t("pages.cores.cardSingboxMeta", { defaultValue: "mieru / AnyTLS / TUIC / Naive" })
           }
           busy={busyCore === "singbox"}
           onStop={() => void controlCore("singbox", "stop")}
@@ -203,10 +217,18 @@ export default function Page() {
           icon={Server}
           title="Telemt"
           running={status?.telemt.running ?? null}
-          meta={t("pages.cores.cardTelemtMeta", {
-            count: status?.telemt.instanceCount ?? 0,
-            defaultValue: `${status?.telemt.instanceCount ?? 0} instance(s)`,
-          })}
+          meta={
+            [
+              status?.telemt.version ? `v${status.telemt.version}` : null,
+              fmtUptime(status?.telemt.uptimeSec) ? `↑ ${fmtUptime(status?.telemt.uptimeSec)}` : null,
+              t("pages.cores.cardTelemtMeta", {
+                count: status?.telemt.instanceCount ?? 0,
+                defaultValue: `${status?.telemt.instanceCount ?? 0} instance(s)`,
+              }),
+            ]
+              .filter(Boolean)
+              .join(" · ")
+          }
           busy={busyCore === "telemt"}
           onStop={() => void controlCore("telemt", "stop")}
           onRestart={() => void controlCore("telemt", "restart")}

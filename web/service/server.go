@@ -80,9 +80,11 @@ type Status struct {
 	} `json:"xray"`
 	// Telemt is local panel Telemt sidecars (standalone); in multi-node local Telemt is not used.
 	Telemt struct {
-		State    ProcessState `json:"state"`
-		Count    int          `json:"count"`
-		ErrorMsg string       `json:"errorMsg"`
+		State     ProcessState `json:"state"`
+		Count     int          `json:"count"`
+		ErrorMsg  string       `json:"errorMsg"`
+		UptimeSec int64        `json:"uptimeSec"`
+		Version   string       `json:"version"`
 	} `json:"telemt"`
 	// Singbox is the local hiddify-sing-box singleton sidecar (Phase 2). Carries the
 	// aggregated config hash so the dashboard can show "stale config" / "applied X ago".
@@ -90,6 +92,8 @@ type Status struct {
 		State      ProcessState `json:"state"`
 		ConfigHash string       `json:"configHash"`
 		ErrorMsg   string       `json:"errorMsg"`
+		UptimeSec  int64        `json:"uptimeSec"`
+		Version    string       `json:"version"`
 	} `json:"singbox"`
 	// PanelVersion is the SharX panel release (embedded at build from config/version).
 	PanelVersion string `json:"panelVersion"`
@@ -819,6 +823,12 @@ func (s *ServerService) GetStatus(lastStatus *Status) *Status {
 			status.Singbox.State = Stop
 		}
 	}
+	// Uptime + binary version for the dashboard cards / uptime pills (panel-host
+	// sidecars; populated regardless of mode — 0 / probed-binary when stopped).
+	status.Telemt.UptimeSec = LocalTelemtUptimeSeconds()
+	status.Telemt.Version = LocalTelemtVersion()
+	status.Singbox.UptimeSec = LocalSingboxUptimeSeconds()
+	status.Singbox.Version = LocalSingboxVersion()
 
 	// Application stats
 	var rtm runtime.MemStats
