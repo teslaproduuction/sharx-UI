@@ -208,9 +208,9 @@ func (s *SingboxConfigService) buildFromInboundsForNode(inbounds []*model.Inboun
 	// specific outbound + a 127.0.0.1:listen_port mixed bridge + a route rule
 	// pinning bridge → outbound. Collected here so the empty-config check
 	// below considers both inbounds + outbound sidecars.
-	outboundFrags, bridgeFrags, ruleFrags := collectOutboundFragmentsForNode(nodeID)
+	outboundFrags, bridgeFrags, ruleFrags, endpointFrags := collectOutboundFragmentsForNode(nodeID)
 
-	if len(collected) == 0 && len(outboundFrags) == 0 {
+	if len(collected) == 0 && len(outboundFrags) == 0 && len(endpointFrags) == 0 {
 		// Empty payload tells the node manager to stop sing-box.
 		return SingboxNodePayload{}, nil
 	}
@@ -264,6 +264,17 @@ func (s *SingboxConfigService) buildFromInboundsForNode(inbounds []*model.Inboun
 		outboundsList = append(outboundsList, json.RawMessage(ob))
 	}
 	cfg["outbounds"] = outboundsList
+
+	// Endpoints: WireGuard/AmneziaWG cascade members (sing-box 1.11+ moved
+	// WireGuard out of outbounds[] into endpoints[]). Routable by tag exactly like
+	// outbounds, so the per-bridge route rules below are unchanged.
+	if len(endpointFrags) > 0 {
+		endpointsList := make([]any, 0, len(endpointFrags))
+		for _, ep := range endpointFrags {
+			endpointsList = append(endpointsList, json.RawMessage(ep))
+		}
+		cfg["endpoints"] = endpointsList
+	}
 
 	// sing-box 1.13+ rule-actions: enable sniffing + IPv4 resolve globally,
 	// then per-bridge route rules so cascade traffic exits via its sidecar.
