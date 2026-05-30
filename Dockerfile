@@ -56,9 +56,16 @@ ENV CGO_ENABLED=0
 # (mieru/AnyTLS/Naive/TUIC/Hysteria2/Reality + the v2ray gRPC stats API hiddify
 # patched for per-user accounting). with_wireguard pulls psiphon — we only need
 # wireguard outbound for the cascade later, so drop it for the Phase 2 baseline.
-RUN go build -trimpath \
+# Stamp a real version into constant.Version so `sing-box version` / the panel
+# Cores card show something other than "unknown". A shallow branch clone has no
+# tag history, so describe falls back to the short commit sha (e.g.
+# "extended-a1b2c3d"). Override with --build-arg SINGBOX_VERSION=1.12.0-hiddify.
+ARG SINGBOX_VERSION=
+RUN SBVER="${SINGBOX_VERSION:-$(git -C /src describe --tags --exact-match 2>/dev/null || echo ${SINGBOX_REF}-$(git -C /src rev-parse --short HEAD 2>/dev/null || echo unknown))}" && \
+    echo "sing-box version stamp: ${SBVER}" && \
+    go build -trimpath \
       -tags "with_quic,with_v2ray_api,with_clash_api,with_utls,with_acme,with_gvisor,with_dhcp" \
-      -ldflags "-w -s" \
+      -ldflags "-w -s -X github.com/sagernet/sing-box/constant.Version=${SBVER}" \
       -o /out/sing-box ./cmd/sing-box
 # Note: with_naive_outbound is intentionally OFF — naive client embeds cronet-go
 # which requires CGO + Chromium's cronet C library. AnyTLS/TUIC/Mieru/Hy2

@@ -44,6 +44,27 @@ func (c *CoresController) initRouter(g *gin.RouterGroup) {
 	g.POST("/telemt/stop", c.telemtStop)
 	g.POST("/telemt/restart", c.telemtRestart)
 	g.GET("/telemt/logs", c.telemtLogs)
+	// Telemt version switcher (prebuilt release tarballs — hot-swappable).
+	g.GET("/telemt/versions", c.telemtVersions)
+	g.POST("/telemt/install/:version", c.telemtInstall)
+}
+
+func (c *CoresController) telemtVersions(ctx *gin.Context) {
+	vs, err := service.TelemtVersions()
+	if err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "obj": vs})
+}
+
+func (c *CoresController) telemtInstall(ctx *gin.Context) {
+	version := ctx.Param("version")
+	if err := service.InstallTelemtVersion(version); err != nil {
+		ctx.JSON(http.StatusInternalServerError, gin.H{"success": false, "msg": err.Error()})
+		return
+	}
+	ctx.JSON(http.StatusOK, gin.H{"success": true, "msg": "telemt " + version + " installed"})
 }
 
 // status reports liveness of each core for the unified Cores dashboard cards.

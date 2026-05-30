@@ -2740,7 +2740,16 @@
       "logsEmpty": "No log lines captured yet (sidecar may be stopped).",
       "actionFailed": "Action failed",
       "stopOkToast": "{{core}} stopped",
-      "restartOkToast": "{{core}} restarted"
+      "restartOkToast": "{{core}} restarted",
+      "versionButton": "Version",
+      "telemtVersionsTitle": "Telemt versions",
+      "telemtVersionsHint": "Downloads the prebuilt release from telemt/telemt, swaps the binary, and restarts Telemt. Active MTProto sessions reconnect.",
+      "noVersions": "No releases found.",
+      "installButton": "Install",
+      "installing": "Installing…",
+      "installed": "Installed {{v}}",
+      "installFailed": "Install failed",
+      "versionsFailed": "Failed to fetch versions"
     },
     "index": {
       "restartTelemt": "Restart Telemt",

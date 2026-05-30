@@ -1,6 +1,6 @@
 "use client";
 
-import { Boxes, Copy, FileJson, Network, RefreshCw, RotateCw, ScrollText, Server, Square } from "lucide-react";
+import { Boxes, Copy, Download, FileJson, Network, RefreshCw, RotateCw, ScrollText, Server, Square, Wrench } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getJson, postJson } from "@/lib/api";
@@ -114,6 +114,38 @@ export default function Page() {
   const refreshLogs = useCallback(() => {
     if (logsCore) void openLogs(logsCore);
   }, [logsCore, openLogs]);
+
+  // Telemt version switcher.
+  const [verOpen, setVerOpen] = useState(false);
+  const [verList, setVerList] = useState<string[]>([]);
+  const [verLoading, setVerLoading] = useState(false);
+  const [installing, setInstalling] = useState<string | null>(null);
+
+  const openVersions = useCallback(async () => {
+    setVerOpen(true);
+    setVerList([]);
+    setVerLoading(true);
+    const r = await getJson<string[]>(panel("cores/telemt/versions"));
+    setVerLoading(false);
+    if (r.success && Array.isArray(r.obj)) setVerList(r.obj);
+    else toast.error(r.msg || t("pages.cores.versionsFailed", { defaultValue: "Failed to fetch versions" }));
+  }, [t, toast]);
+
+  const installVersion = useCallback(
+    async (v: string) => {
+      setInstalling(v);
+      const r = await postJson(panel(`cores/telemt/install/${encodeURIComponent(v)}`), {}, true);
+      setInstalling(null);
+      if (r.success) {
+        toast.success(r.msg || t("pages.cores.installed", { v, defaultValue: `Installed ${v}` }));
+        setVerOpen(false);
+        void loadStatus();
+      } else {
+        toast.error(r.msg || t("pages.cores.installFailed", { defaultValue: "Install failed" }));
+      }
+    },
+    [loadStatus, t, toast],
+  );
 
   const load = useCallback(async (which: Tab) => {
     setLoading(true);
@@ -233,6 +265,7 @@ export default function Page() {
           onStop={() => void controlCore("telemt", "stop")}
           onRestart={() => void controlCore("telemt", "restart")}
           onLogs={() => void openLogs("telemt")}
+          onVersion={() => void openVersions()}
           t={t}
         />
       </div>
@@ -406,6 +439,45 @@ export default function Page() {
           )}
         </div>
       </Modal>
+
+      <Modal
+        open={verOpen}
+        onClose={() => setVerOpen(false)}
+        title={t("pages.cores.telemtVersionsTitle", { defaultValue: "Telemt versions" })}
+        width={520}
+      >
+        <p className="mb-2 text-[11px] text-[var(--fg-subtle)]">
+          {t("pages.cores.telemtVersionsHint", {
+            defaultValue: "Downloads the prebuilt release from telemt/telemt, swaps the binary, and restarts Telemt. Active MTProto sessions reconnect.",
+          })}
+        </p>
+        {verLoading ? (
+          <div className="grid min-h-32 place-items-center"><Spinner size={28} /></div>
+        ) : verList.length === 0 ? (
+          <p className="py-6 text-center text-sm text-[var(--fg-muted)]">
+            {t("pages.cores.noVersions", { defaultValue: "No releases found." })}
+          </p>
+        ) : (
+          <div className="max-h-[50vh] space-y-1 overflow-auto">
+            {verList.map((v) => (
+              <div key={v} className="flex items-center justify-between rounded-lg border border-[var(--border)] px-3 py-2">
+                <span className="font-mono text-xs text-[var(--fg)]">{v}</span>
+                <Button
+                  variant="secondary"
+                  className="!gap-1.5 !text-xs"
+                  disabled={installing != null}
+                  onClick={() => void installVersion(v)}
+                >
+                  <Download size={14} />
+                  {installing === v
+                    ? t("pages.cores.installing", { defaultValue: "Installing…" })
+                    : t("pages.cores.installButton", { defaultValue: "Install" })}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+      </Modal>
     </PageScaffold>
   );
 }
@@ -419,6 +491,7 @@ function CoreCard({
   onStop,
   onRestart,
   onLogs,
+  onVersion,
   t,
 }: {
   kind: CoreKind;
@@ -430,6 +503,7 @@ function CoreCard({
   onStop: () => void;
   onRestart: () => void;
   onLogs: () => void;
+  onVersion?: () => void;
   t: ReturnType<typeof useTranslation>["t"];
 }) {
   return (
@@ -459,6 +533,12 @@ function CoreCard({
           <ScrollText size={14} />
           {t("pages.cores.logsButton", { defaultValue: "Logs" })}
         </Button>
+        {onVersion ? (
+          <Button variant="ghost" className="!gap-1.5 !text-xs" onClick={onVersion}>
+            <Wrench size={14} />
+            {t("pages.cores.versionButton", { defaultValue: "Version" })}
+          </Button>
+        ) : null}
       </div>
     </Surface>
   );

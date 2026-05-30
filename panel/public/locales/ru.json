@@ -2740,7 +2740,16 @@
       "logsEmpty": "Логов пока нет (сидекар может быть остановлен).",
       "actionFailed": "Действие не удалось",
       "stopOkToast": "{{core}} остановлен",
-      "restartOkToast": "{{core}} перезапущен"
+      "restartOkToast": "{{core}} перезапущен",
+      "versionButton": "Версия",
+      "telemtVersionsTitle": "Версии Telemt",
+      "telemtVersionsHint": "Скачивает prebuilt-релиз из telemt/telemt, заменяет бинарь и перезапускает Telemt. Активные MTProto-сессии переподключатся.",
+      "noVersions": "Релизы не найдены.",
+      "installButton": "Установить",
+      "installing": "Установка…",
+      "installed": "Установлен {{v}}",
+      "installFailed": "Установка не удалась",
+      "versionsFailed": "Не удалось получить версии"
     },
     "index": {
       "singboxStatusStop": "Остановлен",
