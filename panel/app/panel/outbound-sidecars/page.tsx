@@ -110,6 +110,86 @@ function writePath(obj: Record<string, unknown>, path: string, val: string): Rec
   return out;
 }
 
+/**
+ * Parse an AmneziaWG / WireGuard `.conf` (INI-ish) into a wireguard_client sidecar
+ * config. Handles vanilla WG + Amnezia 1.0 (jc/jmin/jmax/s1-s4/h1-h4) + Amnezia 1.5
+ * advanced packets (i1-i5 / j1-j3 / itime). Endpoint host:port → server/server_port.
+ */
+function parseAmneziaConf(text: string): { config: Record<string, unknown>; name: string } | null {
+  const iface: Record<string, string> = {};
+  const peer: Record<string, string> = {};
+  let section = "";
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.trim();
+    if (!line || line.startsWith("#") || line.startsWith(";")) continue;
+    if (/^\[interface\]$/i.test(line)) { section = "i"; continue; }
+    if (/^\[peer\]$/i.test(line)) { section = "p"; continue; }
+    const eq = line.indexOf("=");
+    if (eq < 0) continue;
+    const key = line.slice(0, eq).trim().toLowerCase();
+    const val = line.slice(eq + 1).trim();
+    if (section === "i") iface[key] = val;
+    else if (section === "p") peer[key] = val;
+  }
+  if (!iface.privatekey && !peer.publickey) return null;
+  const ep = (peer.endpoint || "").trim();
+  // host:port, supporting bracketed IPv6.
+  const m = ep.match(/^\[?([^\]]+?)\]?:(\d+)$/);
+  const server = m ? m[1] : ep;
+  const port = m ? parseInt(m[2], 10) : 51820;
+  const amnezia: Record<string, unknown> = {};
+  for (const k of ["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "itime"]) {
+    if (iface[k] !== undefined && iface[k] !== "") amnezia[k] = parseInt(iface[k], 10) || 0;
+  }
+  // Amnezia 1.5 advanced signature packets are opaque strings (e.g. "<b 0x...>").
+  for (const k of ["i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"]) {
+    if (iface[k] !== undefined && iface[k] !== "") amnezia[k] = iface[k];
+  }
+  const addr = (iface.address || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const allowed = (peer.allowedips || "0.0.0.0/0, ::/0").split(",").map((s) => s.trim()).filter(Boolean);
+  const config: Record<string, unknown> = {
+    server,
+    server_port: port,
+    private_key: iface.privatekey || "",
+    peer_public_key: peer.publickey || "",
+    address: addr.length ? addr : ["10.0.0.2/32"],
+    allowed_ips: allowed,
+    mtu: parseInt(iface.mtu || "1408", 10) || 1408,
+  };
+  if (peer.presharedkey) config.preshared_key = peer.presharedkey;
+  if (Object.keys(amnezia).length) config.amnezia = amnezia;
+  return { config, name: server || "awg" };
+}
+
+/**
+ * Parse a sing-box-protocol share URI (tuic / hysteria2 / anytls) into a sidecar
+ * kind + config. VLESS/VMess/Trojan are Xray outbounds → use the Outbounds page.
+ */
+function parseSidecarUri(uri: string): { kind: string; config: Record<string, unknown>; name: string } | null {
+  let u: URL;
+  try { u = new URL(uri.trim()); } catch { return null; }
+  const scheme = u.protocol.replace(":", "").toLowerCase();
+  const host = u.hostname;
+  const port = parseInt(u.port, 10) || 443;
+  const q = u.searchParams;
+  const sni = q.get("sni") || q.get("peer") || host;
+  const cred = decodeURIComponent(u.password || u.username || "");
+  if (scheme === "tuic") {
+    return {
+      kind: "tuic_client",
+      config: { server: host, server_port: port, uuid: decodeURIComponent(u.username), password: decodeURIComponent(u.password), tls: { server_name: sni, alpn: [q.get("alpn") || "h3"] }, congestion_control: q.get("congestion_control") || "bbr" },
+      name: host,
+    };
+  }
+  if (scheme === "hysteria2" || scheme === "hy2") {
+    return { kind: "hy2_client", config: { server: host, server_port: port, password: cred, tls: { server_name: sni } }, name: host };
+  }
+  if (scheme === "anytls") {
+    return { kind: "anytls_client", config: { server: host, server_port: port, password: cred, tls: { server_name: sni, insecure: q.get("insecure") === "1" } }, name: host };
+  }
+  return null;
+}
+
 export default function Page() {
   const { t } = useTranslation();
   const toast = useToast();
@@ -128,6 +208,38 @@ export default function Page() {
   const [previewOpen, setPreviewOpen] = useState(false);
   const [preview, setPreview] = useState<PreviewFragments | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const [importText, setImportText] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+
+  /** Auto-detect AmneziaWG .conf vs a share URI and fill the form. */
+  const applyImport = useCallback(
+    (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+      if (/\[interface\]/i.test(trimmed) || /privatekey\s*=/i.test(trimmed)) {
+        const r = parseAmneziaConf(trimmed);
+        if (!r) { toast.error(t("pages.outboundSidecars.importBadConf", { defaultValue: "Could not parse WireGuard .conf" })); return; }
+        setKind("wireguard_client");
+        setConfig(r.config);
+        if (!name.trim()) setName(`awg-${r.name}`.slice(0, 40));
+        toast.success(t("pages.outboundSidecars.importedAwg", { defaultValue: "Imported AmneziaWG config" }));
+        setImportText("");
+        return;
+      }
+      if (/^[a-z0-9]+:\/\//i.test(trimmed)) {
+        const r = parseSidecarUri(trimmed);
+        if (!r) { toast.error(t("pages.outboundSidecars.importBadUri", { defaultValue: "Unsupported URI (use tuic / hysteria2 / anytls; vless/vmess → Outbounds page)" })); return; }
+        setKind(r.kind);
+        setConfig(r.config);
+        if (!name.trim()) setName(`${r.kind.replace("_client", "")}-${r.name}`.slice(0, 40));
+        toast.success(t("pages.outboundSidecars.importedUri", { kind: r.kind, defaultValue: `Imported ${r.kind}` }));
+        setImportText("");
+        return;
+      }
+      toast.error(t("pages.outboundSidecars.importUnknown", { defaultValue: "Paste a tuic/hy2/anytls URI or a WireGuard .conf" }));
+    },
+    [name, t, toast],
+  );
 
   const [multiNode, setMultiNode] = useState(false);
   const [panelHostWorkload, setPanelHostWorkload] = useState(false);
@@ -329,6 +441,46 @@ export default function Page() {
               <span className="text-xs">{t("pages.outboundSidecars.fieldEnabled", { defaultValue: "Enabled" })}</span>
             </div>
           </div>
+          {/* Import: drag-drop a WireGuard/AmneziaWG .conf, or paste a tuic/hy2/anytls URI */}
+          <div
+            onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+            onDragLeave={() => setDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault();
+              setDragOver(false);
+              const file = e.dataTransfer.files?.[0];
+              if (file) { void file.text().then(applyImport); return; }
+              const txt = e.dataTransfer.getData("text");
+              if (txt) applyImport(txt);
+            }}
+            className={`rounded-lg border border-dashed p-3 transition-colors ${dragOver ? "border-[var(--accent)] bg-[color-mix(in_oklab,var(--accent)_8%,transparent)]" : "border-[var(--border)]"}`}
+          >
+            <p className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
+              {t("pages.outboundSidecars.importSection", { defaultValue: "Import — drop a .conf or paste a URI" })}
+            </p>
+            <p className="mb-2 text-[11px] text-[var(--fg-subtle)]">
+              {t("pages.outboundSidecars.importHint", { defaultValue: "AmneziaWG/WireGuard .conf (drag-drop or paste) · tuic:// · hysteria2:// · anytls://. vless/vmess/trojan → Outbounds page." })}
+            </p>
+            <textarea
+              value={importText}
+              onChange={(e) => setImportText(e.target.value)}
+              onPaste={(e) => {
+                const txt = e.clipboardData.getData("text");
+                if (txt && (/\[interface\]/i.test(txt) || /^[a-z0-9]+:\/\//i.test(txt.trim()))) {
+                  e.preventDefault();
+                  applyImport(txt);
+                }
+              }}
+              placeholder={"[Interface]\nPrivateKey = …\n…\n\n— or —\ntuic://uuid:pass@host:443?sni=…"}
+              className="block min-h-[64px] w-full resize-y rounded-md border border-[var(--border)] bg-[var(--bg)] p-2 font-mono text-[11px]"
+            />
+            <div className="mt-2 flex justify-end">
+              <Button variant="secondary" disabled={!importText.trim()} onClick={() => applyImport(importText)}>
+                {t("pages.outboundSidecars.importButton", { defaultValue: "Parse & fill" })}
+              </Button>
+            </div>
+          </div>
+
           <div className="space-y-2 rounded-lg border border-[var(--border)] p-3">
             <p className="text-[11px] font-semibold uppercase tracking-wide text-[var(--fg-subtle)]">
               {t("pages.outboundSidecars.targetSection", { kind, defaultValue: `Target (${kind})` })}
