@@ -10,6 +10,15 @@
 
 ## چه چیزی جدید است
 
+### v2.0.0 — بک‌اند sing-box + AmneziaWG + مسیریابی SNI روی :443
+- **Sing-box singleton sidecar**: ورودی‌های mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 با آمار صورتحساب per-user (gRPC v2ray_api در puller مربوط به Xray ادغام می‌شود).
+- **AmneziaWG 1.5 واقعی + ورودی سرور mieru در یک sing-box** — ساخته‌شده از `shtorm-7/sing-box-extended` با graft شدن mieru-inbound. مبهم‌سازی ضد-DPI روی WARP کار می‌کند.
+- **مسیریابی SNI روی :443** (پلاگین layer4 در Caddy): VLESS/Trojan/AnyTLS روی `:443` بر اساس SNI به اشتراک گذاشته می‌شوند؛ Hy2/TUIC روی `:443/udp`. لینک‌های سابسکریپشن خودکار `:443` را اعلام می‌کنند (`SNI_ROUTING_443=true`).
+- **صفحهٔ «هسته‌ها»**: Stop / Restart / Logs / نسخه + uptime برای هر هسته (Xray / Sing-box / Telemt)، سوییچر نسخهٔ Telemt، لاگ sidecarها در نمایشگر لاگ یکپارچه.
+- **تست زندهٔ 204 برای outbound** (میلی‌ثانیه یا خطا، از مسیر پراکسی) + **ایمپورت `.conf` AmneziaWG با کشیدن‌ورها‌کردن** + ایمپورت tuic/hy2/anytls از طریق URI.
+- **حالت ترکیبی «پنل به‌عنوان نود»** (ارکستریتور + بار محلی)، **سازندهٔ مسیریابی L7 به‌سبک 3X-UI**، راهنمای ساخت cascade، و **خروجی Cloudflare WARP**.
+- ادغام آپ‌استریم konstpic **v1.4.5**. یادداشت کامل: [`release-notes/v2.0.0.md`](release-notes/v2.0.0.md).
+
 ### حالت نود (۱ پنل – چندین نود)
 
 * **مدیریت متمرکز**: یک پنل چندین worker را مدیریت می‌کند.

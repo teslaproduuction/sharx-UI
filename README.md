@@ -21,6 +21,28 @@ This version brings a modern, Docker-first architecture, **multi-node** workers,
 
 Эта версия даёт современную Docker-сборку, **multi-node** worker-узлы, **визуальный конструктор страницы подписки**, **веб-сессии в зашифрованных cookie** и **опциональную наблюдаемость** (метрики в формате Prometheus, опционально Loki/VictoriaMetrics в настройках, JSON дашборда для Grafana).
 
+## ✨ What's new in v2.0.0
+
+Sing-box backend (mieru / AnyTLS / Naïve / TUIC / Hysteria2) with per-user billing
+stats, multi-node cascades, Cloudflare WARP egress, and the Caddy masking front-door —
+plus the Phase 9–11 additions:
+
+- **Real AmneziaWG 1.5** (WARP anti-DPI obfuscation) **+ mieru server inbound in one
+  sing-box** — built from `shtorm-7/sing-box-extended` with the mieru inbound grafted in.
+- **:443 SNI router** (Caddy layer4): share `:443` across VLESS/Trojan/AnyTLS by SNI;
+  Hy2/TUIC on `:443/udp`. Share links advertise `:443` automatically.
+- **Cores management**: Stop / Restart / Logs / version + uptime per core, Telemt
+  version switcher, sidecar logs in the unified Журнал.
+- **Outbound live 204 test** (latency or error, through the proxy).
+- **AmneziaWG `.conf` drag-drop import** + tuic/hy2/anytls URI import.
+- **Hybrid panel-as-node** (orchestrator + local workload) + **3X-UI-style L7 routing
+  constructor** + cascade builder guide.
+
+Full notes: [`release-notes/v2.0.0.md`](release-notes/v2.0.0.md).
+
+> ⚠️ On Docker Desktop, local `docker compose build` may not retag `:latest` (buildx
+> cache quirk) — build with `docker build -t sharx-ui-sharx:latest …` when deploying locally.
+
 ## Quick Start / Быстрый старт
 
 ### 🚀 Install / Установка 
