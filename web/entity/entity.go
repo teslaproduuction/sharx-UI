@@ -111,6 +111,8 @@ type AllSetting struct {
 	MultiNodeMode bool `json:"multiNodeMode" form:"multiNodeMode"` // Enable multi-node architecture mode
 	// Hybrid: panel host also runs a local node (id=0) when multi-node mode is on
 	PanelHostWorkload bool `json:"panelHostWorkload" form:"panelHostWorkload"`
+	// Phase 11: Caddy layer4 SNI router fronts :443 for share_tls_443 inbounds
+	SniRouting443 bool `json:"sniRouting443" form:"sniRouting443"`
 	// Dashboard public IPv6 detection
 	EnableIPv6 bool `json:"enableIPv6" form:"enableIPv6"` // Enable fetching/storing public IPv6 in dashboard status
 	// Multi-node worker polling (seconds). Adaptive health uses DegradedIntervalSec when status != online.

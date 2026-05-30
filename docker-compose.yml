@@ -115,6 +115,11 @@ services:
       PANEL_BACKEND_HOST: 127.0.0.1
       PANEL_BACKEND_PORT: 2053
       SUB_BACKEND_PORT: 2096
+      # Phase 11 — :443 SNI router. true → panel fronts :443 with a caddy-l4
+      # server (SNI-routes share_tls_443 inbounds); HTTP panel/decoy moves to
+      # CADDY_HTTP_PORT. Keep CADDY_HTTP_PORT in sync with the panel side.
+      SNI_ROUTING_443: ${SNI_ROUTING_443:-false}
+      CADDY_HTTP_PORT: ${CADDY_HTTP_PORT:-8443}
     depends_on:
       - sharx
     restart: unless-stopped

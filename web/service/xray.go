@@ -479,6 +479,10 @@ func (s *XrayService) RestartXray(isForce bool) error {
 	logger.Debug("restart Xray, force:", isForce)
 	isManuallyStopped.Store(false)
 
+	// Phase 11 — re-sync the Caddy :443 SNI router with the current inbound set
+	// (no-op when sniRouting443 is off / Caddy admin unreachable).
+	go PushLayer4ToCaddy()
+
 	// Check if multi-node mode is enabled
 	multiMode, err := s.settingService.GetMultiNodeMode()
 	if err != nil {

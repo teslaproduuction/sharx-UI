@@ -112,6 +112,14 @@ type Inbound struct {
 	StreamSettings string                   `json:"streamSettings" form:"streamSettings"`
 	Tag            string                   `json:"tag" form:"tag" gorm:"unique"`
 	Sniffing       string                   `json:"sniffing" form:"sniffing"`
+	// SNI routing on :443 (Phase 11). When ShareTls443 is true the inbound is
+	// fronted by the Caddy layer4 SNI router: clients connect to :443, Caddy peeks
+	// the TLS ClientHello server_name and forwards (TLS passthrough) to this
+	// inbound's real Listen:Port. Sni is the server_name that selects this inbound
+	// (defaults to the inbound's TLS serverName when empty). Only meaningful for
+	// TCP/TLS protocols (vless/trojan/vmess/anytls); UDP (hy2/tuic) bind :443/udp.
+	ShareTls443 bool   `json:"shareTls443" form:"shareTls443" gorm:"column:share_tls_443;default:false"`
+	Sni         string `json:"sni" form:"sni" gorm:"column:sni;default:''"`
 	NodeId         *int                     `json:"nodeId,omitempty" form:"-" gorm:"-"`       // Node ID (not stored in Inbound table, from mapping) - DEPRECATED: kept only for backward compatibility with old clients, use NodeIds instead
 	NodeIds        []int                    `json:"nodeIds,omitempty" form:"-" gorm:"-"`      // Node IDs array (not stored in Inbound table, from mapping) - use this for multi-node support
 	NodeBindings   []InboundNodeBindingView `json:"nodeBindings,omitempty" form:"-" gorm:"-"` // Subscription-facing node rows (panel only)
