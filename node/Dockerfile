@@ -8,8 +8,7 @@ ARG SINGBOX_REF=a27453e4f7d179585436862d7cadfcef7b518aa6
 RUN apt-get update -qq && apt-get install -y -qq git ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN git config --global url."https://github.com/".insteadOf "git@github.com:" && \
     git clone --filter=blob:none https://github.com/shtorm-7/sing-box-extended.git /src && \
-    git -C /src checkout ${SINGBOX_REF} && \
-    git -C /src submodule update --init --recursive --depth 1
+    git -C /src checkout ${SINGBOX_REF}
 
 WORKDIR /src
 ENV CGO_ENABLED=0
