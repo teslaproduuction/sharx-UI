@@ -1,7 +1,7 @@
 <div align="center">
 
 <!-- SharX Hero Section -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=3XUI%20Fork%20%7C%20Multi-Node%20%7C%20Subscription%20Builder%20%7C%20Observability&descSize=25&descAlignY=60" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=Multi-Node%20%C2%B7%20Multi-Core%20%C2%B7%20Multi-Protocol%20UI%20Panel&descSize=24&descAlignY=60" width="100%"/>
 
 </div>
 
@@ -20,6 +20,33 @@
 This version brings a modern, Docker-first architecture, **multi-node** workers, a **visual subscription page builder**, **encrypted cookie-based web sessions**, and **optional observability** hooks (Prometheus text metrics, optional Loki / VictoriaMetrics in settings, Grafana dashboard JSON export).
 
 Эта версия даёт современную Docker-сборку, **multi-node** worker-узлы, **визуальный конструктор страницы подписки**, **веб-сессии в зашифрованных cookie** и **опциональную наблюдаемость** (метрики в формате Prometheus, опционально Loki/VictoriaMetrics в настройках, JSON дашборда для Grafana).
+
+---
+
+## 🔥 v2.0.0-beta — what's hot in the [`v2.0`](https://github.com/teslaproduuction/sharx-UI/tree/v2.0) branch
+
+> 🇬🇧 The bleeding-edge multi-core release. 🇷🇺 Передовая мульти-кор сборка.
+
+| 🇬🇧 English | 🇷🇺 Русский |
+|------------|------------|
+| **One sing-box, every protocol** — mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 inbounds with **per-user billing stats** | **Один sing-box на все протоколы** — входящие mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 с **поюзерной статистикой** |
+| **Real AmneziaWG 1.5** + **mieru server** in a single sing-box (anti-DPI WARP egress) | **Настоящий AmneziaWG 1.5** + **mieru-сервер** в одном sing-box (anti-DPI WARP) |
+| **:443 SNI router** — VLESS/Trojan/AnyTLS share one port by SNI; Hy2/TUIC on :443/udp | **SNI-роутинг на :443** — VLESS/Trojan/AnyTLS делят порт по SNI; Hy2/TUIC на :443/udp |
+| **Cores page** — Stop/Restart/Logs/version/uptime per core + Telemt version switcher | **Страница «Ядра»** — Стоп/Рестарт/Логи/версия/аптайм + переключатель версий Telemt |
+| **Multi-node cascades** + **Cloudflare WARP egress** + **3X-UI-style L7 routing** | **Мульти-нод каскады** + **Cloudflare WARP** + **L7-маршрутизация в стиле 3X-UI** |
+| **Hybrid panel-as-node** — the panel host can run its own workload | **Гибрид «панель-как-нода»** — хост панели может нести свою нагрузку |
+
+**▶️ Get it:**
+[📦 Packages (GHCR)](https://github.com/teslaproduuction/sharx-UI/pkgs/container/sharx) ·
+[🏷️ Release v2.0.0-beta](https://github.com/teslaproduuction/sharx-UI/releases/tag/v2.0.0-beta) ·
+[🌿 v2.0 branch](https://github.com/teslaproduuction/sharx-UI/tree/v2.0)
+
+```bash
+docker pull ghcr.io/teslaproduuction/sharx:latest-beta
+docker pull ghcr.io/teslaproduuction/sharxnode:latest-beta
+```
+
+---
 
 ## Quick Start / Быстрый старт
 
