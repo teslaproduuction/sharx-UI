@@ -1,0 +1,259 @@
+# Release pipeline — builds the SharX panel + node images, publishes them to
+# GitHub Container Registry (GHCR → the repo "Packages" tab) and cuts a GitHub
+# Release with a ready-to-run docker-compose.yml + checksums attached.
+#
+# Triggered by pushing a version tag:
+#   git tag v2.0.0-beta && git push origin v2.0.0-beta   → pre-release
+#   git tag v2.1.0      && git push origin v2.1.0         → stable release
+#
+# No external secrets required — uses the built-in GITHUB_TOKEN.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+      - "v*.*.*-beta"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re)build, e.g. v2.0.0-beta"
+        required: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+      version_for_file: ${{ steps.v.outputs.version_for_file }}
+      is_beta: ${{ steps.v.outputs.is_beta }}
+      owner: ${{ steps.v.outputs.owner }}
+      latest_tag: ${{ steps.v.outputs.latest_tag }}
+    steps:
+      - name: Resolve version
+        id: v
+        run: |
+          TAG="${{ github.event.inputs.tag }}"
+          [ -n "$TAG" ] || TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          OWNER="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          if [[ "$VERSION" == *-beta ]]; then
+            IS_BETA=true
+            VERSION_FOR_FILE="${VERSION%-beta}"
+            LATEST_TAG="latest-beta"
+          else
+            IS_BETA=false
+            VERSION_FOR_FILE="$VERSION"
+            LATEST_TAG="latest"
+          fi
+          {
+            echo "tag=$TAG"
+            echo "version=$VERSION"
+            echo "version_for_file=$VERSION_FOR_FILE"
+            echo "is_beta=$IS_BETA"
+            echo "owner=$OWNER"
+            echo "latest_tag=$LATEST_TAG"
+          } >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG version=$VERSION beta=$IS_BETA owner=$OWNER"
+
+  telemt-prebuilt:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      TELEMT_VERSION: "3.4.12"
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+      - name: Download Telemt release (linux/amd64)
+        run: |
+          chmod +x scripts/download-telemt.sh
+          ./scripts/download-telemt.sh amd64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: telemt-sharx-linux-amd64
+          path: third_party/telemt-sharx/prebuilt/linux-amd64/telemt
+
+  build:
+    needs: [prepare, telemt-prebuilt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: sharx
+            dockerfile: ./Dockerfile
+            build_args: |
+              NEXT_PUBLIC_BASE_PATH=/
+          - image: sharxnode
+            dockerfile: ./node/Dockerfile
+            build_args: ""
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Restore Telemt prebuilt
+        uses: actions/download-artifact@v4
+        with:
+          name: telemt-sharx-linux-amd64
+          path: third_party/telemt-sharx/prebuilt/linux-amd64/
+
+      - name: Pin config/version
+        run: echo "${{ needs.prepare.outputs.version }}" > config/version
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push ${{ matrix.image }}
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGISTRY }}/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:${{ needs.prepare.outputs.version }}
+            ${{ env.REGISTRY }}/${{ needs.prepare.outputs.owner }}/${{ matrix.image }}:${{ needs.prepare.outputs.latest_tag }}
+          build-args: ${{ matrix.build_args }}
+          cache-from: type=gha,scope=${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.image }}
+          provenance: false
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Assemble release artifacts
+        env:
+          REG: ${{ env.REGISTRY }}
+          OWNER: ${{ needs.prepare.outputs.owner }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          LATEST_TAG: ${{ needs.prepare.outputs.latest_tag }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION_FOR_FILE: ${{ needs.prepare.outputs.version_for_file }}
+          IS_BETA: ${{ needs.prepare.outputs.is_beta }}
+        run: |
+          set -euo pipefail
+          SHARX_IMG="$REG/$OWNER/sharx"
+          NODE_IMG="$REG/$OWNER/sharxnode"
+
+          # --- ready-to-run docker-compose.yml (panel host) ---------------------
+          cat > docker-compose.yml <<YAML
+          # SharX $TAG — pull-and-run compose (images from GHCR).
+          # 1) cp .env.example .env  (or set PANEL_SECRET_PREFIX / PANEL_DOMAIN)
+          # 2) docker compose up -d
+          # Worker nodes use: $NODE_IMG:$LATEST_TAG (add via the panel "Nodes" tab).
+          services:
+            sharx:
+              image: $SHARX_IMG:$VERSION
+              container_name: sharx_app
+              network_mode: host
+              cap_add: [NET_ADMIN]
+              volumes:
+                - \$PWD/db/:/etc/x-ui/
+                - \$PWD/cert/:/root/cert/
+                - \$PWD/data/:/app/data/
+              environment:
+                XUI_DATA_FOLDER: "/app/data"
+                XUI_BIN_FOLDER: "/app/bin"
+                XUI_WEB_BASE_PATH: "/"
+                XUI_WEB_PORT: 2053
+                PANEL_SECRET_PREFIX: \${PANEL_SECRET_PREFIX:-}
+                XUI_DB_HOST: 127.0.0.1
+                XUI_DB_PORT: 5432
+                XUI_DB_USER: xui_user
+                XUI_DB_PASSWORD: \${XUI_DB_PASSWORD:-change_this_password}
+                XUI_DB_NAME: xui_db
+                XUI_DB_SSLMODE: disable
+              depends_on:
+                postgres:
+                  condition: service_healthy
+              restart: unless-stopped
+              tty: true
+
+            postgres:
+              image: postgres:16-alpine
+              container_name: sharx_postgres
+              ports:
+                - "127.0.0.1:5432:5432"
+              environment:
+                POSTGRES_USER: xui_user
+                POSTGRES_PASSWORD: \${XUI_DB_PASSWORD:-change_this_password}
+                POSTGRES_DB: xui_db
+              volumes:
+                - postgres_data:/var/lib/postgresql/data
+              restart: unless-stopped
+              healthcheck:
+                test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U xui_user -d xui_db"]
+                interval: 10s
+                timeout: 5s
+                retries: 5
+                start_period: 10s
+
+          volumes:
+            postgres_data:
+          YAML
+
+          sha256sum docker-compose.yml > checksums.txt
+
+          # --- release body -----------------------------------------------------
+          NOTES="release-notes/$TAG.md"
+          [ -f "$NOTES" ] || NOTES="release-notes/v$VERSION_FOR_FILE.md"
+          {
+            echo "## 🐳 Container images — GitHub Packages (GHCR)"
+            echo
+            echo "| Image | Pull |"
+            echo "|-------|------|"
+            echo "| **panel** | \`docker pull $SHARX_IMG:$VERSION\` · \`$SHARX_IMG:$LATEST_TAG\` |"
+            echo "| **node**  | \`docker pull $NODE_IMG:$VERSION\` · \`$NODE_IMG:$LATEST_TAG\` |"
+            echo
+            echo "### 🚀 Quick start"
+            echo '```bash'
+            echo "curl -LO https://github.com/${{ github.repository }}/releases/download/$TAG/docker-compose.yml"
+            echo "docker compose up -d   # panel → http://<host>:2053"
+            echo '```'
+            echo
+            echo "---"
+            echo
+            if [ -f "$NOTES" ]; then cat "$NOTES"; else echo "_See commit history for detailed changes._"; fi
+          } > body.md
+
+          echo "Built release body from: ${NOTES}"
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: SharX ${{ needs.prepare.outputs.tag }}
+          body_path: body.md
+          prerelease: ${{ needs.prepare.outputs.is_beta == 'true' }}
+          files: |
+            docker-compose.yml
+            checksums.txt
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

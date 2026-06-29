@@ -2,6 +2,8 @@
 
 [English](README_EN.md) | [Русский](README_RU.md) | [فارسی](README_FA.md)
 
+### 🧩 Multi-Node · Multi-Core · Multi-Protocol UI Panel
+
 ## Welcome to SharX
 
 **SharX** is a fork of the original **3XUI** panel with enhanced features and monitoring capabilities.

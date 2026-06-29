@@ -1,12 +1,10 @@
 name: Build and Push to Harbor
 
+# Manual-only: the public release flow lives in release.yml (GHCR + GitHub
+# Releases, no external secrets). This Harbor pipeline needs HARBOR_* secrets,
+# so it is opt-in via the Actions "Run workflow" button to avoid red runs.
 on:
-  push:
-    tags:
-      - "v*.*.*"
-      - "v*.*.*-beta"
-      - "*.*.*"
-      - "*.*.*-beta"
+  workflow_dispatch:
 
 permissions:
   contents: write

@@ -1,13 +1,15 @@
 <div align="center">
 
 <!-- SharX Hero Section -->
-<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=3XUI%20Fork%20%7C%20Multi-Node%20%7C%20Subscription%20Builder%20%7C%20Observability&descSize=25&descAlignY=60" width="100%"/>
+<img src="https://capsule-render.vercel.app/api?type=waving&color=gradient&customColorList=0,2,3,5,30&height=300&section=header&text=SharX&fontSize=70&fontAlignY=40&animation=fadeIn&fontColor=gradient&desc=Multi-Node%20%C2%B7%20Multi-Core%20%C2%B7%20Multi-Protocol%20UI%20Panel&descSize=24&descAlignY=60" width="100%"/>
 
 </div>
 
 <div align="center">
 
 [English](README_EN.md) | [Русский](README_RU.md) | [فارسی](README_FA.md)
+
+### 🧩 Multi-Node · Multi-Core · Multi-Protocol UI Panel<br/>Мульти-нод · Мульти-кор · Мульти-протокол UI-панель
 
 </div>
 
