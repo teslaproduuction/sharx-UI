@@ -203,15 +203,38 @@ sudo ./install.sh
 
 ## Supported Protocols / Поддерживаемые протоколы
 
-- **VMESS**
-- **VLESS**
+SharX runs **three proxy cores** from one panel — every protocol reports per-user traffic into one billing pipeline.<br/>
+SharX управляет **тремя ядрами** из одной панели — каждый протокол отдаёт поюзерный трафик в единый биллинг.
+
+### Inbound (server) / Входящие (сервер)
+
+**Xray core / Ядро Xray**
+- **VLESS** — XTLS-Vision, REALITY, VLESS-Encryption
+- **VMess**
 - **Trojan**
-- **Shadowsocks**
-- **Hysteria / Hysteria2**
-- **Mixed (SOCKS/HTTP)**
+- **Shadowsocks** (+ Shadowsocks-2022)
+- **SOCKS / HTTP** (Mixed)
+- **Dokodemo-door**
 - **WireGuard**
-- **HTTP/Tunnel (for specific transport and routing scenarios)**
-- **Telemt (MTProto sidecar integration for Telegram proxy flows)**
+
+**Sing-box core / Ядро Sing-box** — singleton sidecar / единый сайдкар
+- **Mieru** — anti-DPI
+- **AnyTLS**
+- **Naïve** — Chromium NaïveProxy
+- **TUIC v5**
+- **Hysteria2**
+- **AmneziaWG 1.5 / WireGuard**
+
+**Telemt core / Ядро Telemt**
+- **MTProto** — Telegram, hot-swappable Telemt fork / переключаемый форк Telemt
+
+### Outbound · cascade · egress / Исходящие · каскад · egress
+- Cascade members / Члены каскада (node→node): **Mieru · AnyTLS · TUIC · Hysteria2**
+- **Cloudflare WARP** (WireGuard egress) + **AmneziaWG** outbound — `.conf` drag-drop / URI import
+- Xray **balancer** (leastPing observatory) over cascade members / по членам каскада
+
+### Transports & security / Транспорты и безопасность
+TLS · REALITY · XTLS-Vision · uTLS · WebSocket / gRPC / HTTPUpgrade / XHTTP · **:443 SNI multiplexing** (Caddy `layer4`) · Caddy masking + decoy / маскировка и decoy
 
 ## Subscription Page Builder / Конструктор страницы подписки
 
