@@ -14,12 +14,30 @@
 
 ### v2.0.0 — бэкенд sing-box + AmneziaWG + SNI-роутинг на :443
 - **Sing-box singleton sidecar**: входящие mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 с поюзерной статистикой биллинга (gRPC v2ray_api сливается в puller Xray).
-- **Настоящий AmneziaWG 1.5 + входящий mieru-сервер в одном sing-box** — собран из `shtorm-7/sing-box-extended` с привитым mieru-inbound. Anti-DPI обфускация WARP работает.
+- **Настоящий AmneziaWG 1.5 + нативный входящий mieru-сервер в одном sing-box** — собран из `shtorm-7/sing-box-extended` (пин коммита). Anti-DPI обфускация WARP работает.
 - **SNI-роутинг на :443** (Caddy layer4): VLESS/Trojan/AnyTLS делят `:443` по SNI; Hy2/TUIC на `:443/udp`. Ссылки-подписки сами отдают `:443` (`SNI_ROUTING_443=true`).
 - **Страница «Ядра»**: Стоп / Рестарт / Логи / версия + аптайм по каждому ядру (Xray / Sing-box / Telemt), переключатель версий Telemt, логи сайдкаров в едином Журнале.
 - **Live-тест аутбаунда (204)** (мс или ошибка, через прокси) + **импорт AmneziaWG `.conf` перетаскиванием** + импорт tuic/hy2/anytls по URI.
 - **Гибрид «панель-как-нода»** (оркестратор + локальная нагрузка), **конструктор L7-маршрутизации в стиле 3X-UI**, гид по сборке каскадов, **Cloudflare WARP egress**.
 - Влит апстрим konstpic **v1.4.5**. Полные заметки: [`release-notes/v2.0.0.md`](release-notes/v2.0.0.md).
+
+## 🧬 Поддерживаемые протоколы и ядра
+
+SharX управляет **тремя ядрами** из одной панели; каждый входящий/исходящий сам выбирает ядро и отдаёт **поюзерную статистику** в единый биллинг.
+
+**Входящие (сервер)**
+- **Ядро Xray** — VLESS (XTLS-Vision, REALITY, VLESS-Encryption), VMess, Trojan, Shadowsocks (+ Shadowsocks-2022), SOCKS, HTTP, Dokodemo-door, WireGuard
+- **Ядро Sing-box** (единый сайдкар) — **Mieru**, **AnyTLS**, **Naïve** (Chromium NaïveProxy), **TUIC v5**, **Hysteria2**, **AmneziaWG 1.5 / WireGuard**
+- **Ядро Telemt** — **MTProto** (Telegram), с переключаемым форком Telemt
+
+**Исходящие · каскад · egress**
+- Члены каскада node→node: клиентские аутбаунды **Mieru / AnyTLS / TUIC / Hysteria2**
+- **Cloudflare WARP** (WireGuard egress) + аутбаунд **AmneziaWG** (импорт `.conf` перетаскиванием или по URI)
+- **Балансировщик** Xray (leastPing observatory) по членам каскада
+
+**Транспорты и безопасность:** TLS, REALITY, XTLS-Vision, uTLS-фингерпринты, WebSocket / gRPC / HTTPUpgrade / XHTTP, **мультиплексирование :443 по SNI** (Caddy `layer4`), **маскировка + decoy** реверс-прокси Caddy.
+
+**Управление ядрами:** Xray · Sing-box · Telemt — Старт / Стоп / Рестарт, живые логи, версия + аптайм, переключатель версий Telemt, live-тест аутбаунда (204).
 
 ### Режим узлов (1 панель – несколько узлов)
 - **Централизованное управление**: одна панель управляет несколькими worker-узлами

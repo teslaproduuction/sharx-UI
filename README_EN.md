@@ -14,12 +14,30 @@ This version brings a modern, Docker-first architecture, **multi-node** workers,
 
 ### v2.0.0 — Sing-box backend + AmneziaWG + :443 SNI router
 - **Sing-box singleton sidecar**: mieru / AnyTLS / Naïve / TUIC v5 / Hysteria2 inbounds with per-user billing stats (v2ray_api gRPC merged into the Xray puller).
-- **Real AmneziaWG 1.5 + mieru server inbound in one sing-box** — built from `shtorm-7/sing-box-extended` with the mieru inbound grafted in. WARP anti-DPI obfuscation works.
+- **Real AmneziaWG 1.5 + native mieru server inbound in one sing-box** — built from `shtorm-7/sing-box-extended` (pinned). WARP anti-DPI obfuscation works.
 - **:443 SNI router** (Caddy layer4): share `:443` across VLESS/Trojan/AnyTLS by SNI; Hy2/TUIC on `:443/udp`. Share links advertise `:443` automatically (`SNI_ROUTING_443=true`).
 - **Cores management page**: Stop / Restart / Logs / version + uptime per core (Xray / Sing-box / Telemt), Telemt version switcher, sidecar logs in the unified log viewer.
 - **Outbound live 204 test** (latency or error, through the proxy) + **AmneziaWG `.conf` drag-drop import** + tuic/hy2/anytls URI import.
 - **Hybrid panel-as-node** (orchestrator + local workload), **3X-UI-style L7 routing constructor**, cascade builder guide, **Cloudflare WARP egress**.
 - Merged konstpic **v1.4.5** upstream. Full notes: [`release-notes/v2.0.0.md`](release-notes/v2.0.0.md).
+
+## 🧬 Supported protocols & cores
+
+SharX drives **three proxy cores** from one panel; every inbound/outbound picks its core automatically and reports **per-user traffic stats** into a single billing pipeline.
+
+**Inbound (server) protocols**
+- **Xray core** — VLESS (XTLS-Vision, REALITY, VLESS-Encryption), VMess, Trojan, Shadowsocks (+ Shadowsocks-2022), SOCKS, HTTP, Dokodemo-door, WireGuard
+- **Sing-box core** (singleton sidecar) — **Mieru**, **AnyTLS**, **Naïve** (Chromium NaïveProxy), **TUIC v5**, **Hysteria2**, **AmneziaWG 1.5 / WireGuard**
+- **Telemt core** — **MTProto** (Telegram), with a hot-swappable Telemt fork
+
+**Outbound · cascade · egress**
+- Cascade members chained node→node: **Mieru / AnyTLS / TUIC / Hysteria2** client outbounds
+- **Cloudflare WARP** (WireGuard egress) + **AmneziaWG** outbound (`.conf` drag-drop or URI import)
+- Xray **balancer** (leastPing observatory) across cascade members
+
+**Transports & security:** TLS, REALITY, XTLS-Vision, uTLS fingerprints, WebSocket / gRPC / HTTPUpgrade / XHTTP, **:443 SNI multiplexing** (Caddy `layer4`), Caddy **masking + decoy** reverse-proxy.
+
+**Cores management:** Xray · Sing-box · Telemt — Start / Stop / Restart, live logs, version + uptime, Telemt version switcher, outbound live 204 test.
 
 ### Node Mode (1 panel – multiple nodes)
 - **Centralized management**: one panel manages several worker nodes
