@@ -26,7 +26,7 @@ jobs:
       - name: Build panel image
         run: |
           docker build -t sharx-ui-sharx:test \
-            --build-arg SINGBOX_REF=extended \
+            --build-arg SINGBOX_REF=a27453e4f7d179585436862d7cadfcef7b518aa6 \
             --build-arg NEXT_PUBLIC_BASE_PATH=/testprefix/ \
             .
 
